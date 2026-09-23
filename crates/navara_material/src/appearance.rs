@@ -97,6 +97,48 @@ impl Facing {
     }
 }
 
+/// How a label or sprite is positioned relative to the geometry it was derived
+/// from.
+///
+/// Only meaningful once the appearance opts into line geometry through
+/// `geometry_types`; point geometry always places at the point itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Placement {
+    /// One anchor per source vertex — the historical behaviour.
+    #[default]
+    Point,
+    /// Anchors repeated along the line at `spacing` intervals.
+    Line,
+    /// A single anchor at the line's arc-length midpoint.
+    LineCenter,
+}
+
+impl Placement {
+    /// Parse the JS-facing name (`"point" | "line" | "line-center"`).
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "point" => Some(Self::Point),
+            "line" => Some(Self::Line),
+            "line-center" => Some(Self::LineCenter),
+            _ => None,
+        }
+    }
+
+    /// JS-facing name of this placement mode.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Point => "point",
+            Self::Line => "line",
+            Self::LineCenter => "line-center",
+        }
+    }
+
+    /// Whether this mode resamples the line rather than emitting per vertex.
+    pub fn is_along_line(self) -> bool {
+        matches!(self, Self::Line | Self::LineCenter)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Appearance {
     Point(PointMaterial),
@@ -163,6 +205,16 @@ pub struct PointMaterial {
     /// in degrees, clockwise seen from the front. `center` decides where
     /// inside the quad the pivot sits. Default `0.0`.
     pub rotation: f32,
+    /// How anchors are derived from line geometry. See
+    /// [`TextMaterial::placement`]. Default [`Placement::Point`].
+    pub placement: Placement,
+    /// Distance between repeated anchors along a line, in pixels at the tile's
+    /// own zoom. See [`TextMaterial::spacing`]. Default `250.0`.
+    pub spacing: f32,
+    /// Add the line's tangent bearing at the anchor to `rotation`, so the
+    /// sprite turns with the line it sits on. Only used by
+    /// [`Placement::Line`]/[`Placement::LineCenter`]. Default `true`.
+    pub rotate_to_line: bool,
     pub center: Vec2,
     pub height: f32,
     pub size_in_meters: bool,
@@ -198,6 +250,9 @@ impl Default for PointMaterial {
             point_facing: Facing::Upright,
             rotate_with_camera: true,
             rotation: 0.0,
+            placement: Placement::Point,
+            spacing: 250.0,
+            rotate_to_line: true,
             center: Vec2::new(0.0, 0.),
             clamp_to_ground: true,
             height: 1.,
@@ -240,6 +295,16 @@ pub struct BillboardMaterial {
     /// in degrees, clockwise seen from the front. `center` decides where
     /// inside the sprite the pivot sits. Default `0.0`.
     pub rotation: f32,
+    /// How anchors are derived from line geometry. See
+    /// [`TextMaterial::placement`]. Default [`Placement::Point`].
+    pub placement: Placement,
+    /// Distance between repeated anchors along a line, in pixels at the tile's
+    /// own zoom. See [`TextMaterial::spacing`]. Default `250.0`.
+    pub spacing: f32,
+    /// Add the line's tangent bearing at the anchor to `rotation`, so the
+    /// sprite turns with the line it sits on. Only used by
+    /// [`Placement::Line`]/[`Placement::LineCenter`]. Default `true`.
+    pub rotate_to_line: bool,
     pub center: Vec2,
     pub height: f32,
     pub url: String,
@@ -277,6 +342,9 @@ impl Default for BillboardMaterial {
             billboard_facing: Facing::Upright,
             rotate_with_camera: true,
             rotation: 0.0,
+            placement: Placement::Point,
+            spacing: 250.0,
+            rotate_to_line: true,
             center: Vec2::new(0.0, 0.),
             clamp_to_ground: true,
             height: 1.,
@@ -334,6 +402,28 @@ pub struct TextMaterial {
     /// signboard standing on the surface, [`Facing::Flat`] a north-up
     /// label painted on it.
     pub rotate_with_camera: bool,
+    /// How anchors are derived from line geometry. See [`Placement`]. Requires
+    /// `geometry_types` to include `Line`; ignored otherwise. Default
+    /// [`Placement::Point`].
+    pub placement: Placement,
+    /// Distance between repeated anchors along a line, in pixels at the tile's
+    /// own zoom. Because tiles are re-requested as the camera zooms, a fixed
+    /// value yields more repeats per line the further in you go, at roughly
+    /// constant on-screen spacing. Only used by [`Placement::Line`]. Default
+    /// `250.0`, matching MapLibre's `symbol-spacing`.
+    pub spacing: f32,
+    /// Largest cumulative turn, in degrees, the label may bend through before
+    /// it is dropped as unreadable. Measured over a sliding window along the
+    /// label rather than per glyph, so a long gentle spiral is rejected even
+    /// though no single corner is sharp. Default `45.0`.
+    pub max_angle: f32,
+    /// Flip a label that would otherwise read right-to-left, so street names
+    /// stay legible whichever way the underlying line runs. Default `true`.
+    pub keep_upright: bool,
+    /// Offset perpendicular to the line, in pixels; positive is to the left of
+    /// the direction of travel. Lets a name sit above the road rather than on
+    /// it. Default `0.0`.
+    pub line_offset: f32,
     pub height: f32,
     pub size_in_meters: bool,
     pub clamp_to_ground: bool,
@@ -404,6 +494,11 @@ impl Default for TextMaterial {
             text_facing: Facing::Upright,
             rotate_with_camera: true,
             rotation: 0.0,
+            placement: Placement::Point,
+            spacing: 250.0,
+            max_angle: 45.0,
+            keep_upright: true,
+            line_offset: 0.0,
             clamp_to_ground: true,
             height: 1.,
             size_in_meters: true,

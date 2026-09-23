@@ -12,11 +12,11 @@ use navara_feature_component::{
         AccumulatedGeometry, GeometryAppearanceKind, GeometryGroup, GeometryGroups,
     },
 };
-use navara_material::{Appearance, SourceGeometryType};
+use navara_material::{Appearance, Placement, SourceGeometryType};
 use navara_math::{FloatType, Transform, Vec3};
 use navara_parser::mvt::{
     LayerParseConfig, LayerParseKind, MvtLayerData, ParsedGeometry, ParsedLayerGroup, PointEmitter,
-    parse_mvt_tile,
+    PointPlacement, parse_mvt_tile,
 };
 use navara_tile_component::{OverscaledTileHandle, TileExtent, TileHandle};
 use navara_vector_tile::VectorTileFeatureMarker;
@@ -45,12 +45,22 @@ pub(crate) fn layer_parse_config(matched: &MatchedLayerInfo) -> LayerParseConfig
         _ => false,
     });
 
-    let point_emitter = |kind, height, geometry_types: &[SourceGeometryType]| PointEmitter {
+    let point_emitter = |kind,
+                         height,
+                         geometry_types: &[SourceGeometryType],
+                         placement: Placement,
+                         spacing_px: f32| PointEmitter {
         kind,
         height,
         from_points: geometry_types.contains(&SourceGeometryType::Point),
         from_lines: geometry_types.contains(&SourceGeometryType::Line),
         from_polygons: geometry_types.contains(&SourceGeometryType::Polygon),
+        placement: match placement {
+            Placement::Point => PointPlacement::Point,
+            Placement::Line => PointPlacement::Line,
+            Placement::LineCenter => PointPlacement::LineCenter,
+        },
+        spacing_px,
     };
 
     let mut point_emitters = Vec::new();
@@ -63,16 +73,22 @@ pub(crate) fn layer_parse_config(matched: &MatchedLayerInfo) -> LayerParseConfig
                 LayerParseKind::Point,
                 m.height,
                 &m.geometry_types,
+                m.placement,
+                m.spacing,
             )),
             Appearance::Billboard(m) => point_emitters.push(point_emitter(
                 LayerParseKind::Billboard,
                 m.height,
                 &m.geometry_types,
+                m.placement,
+                m.spacing,
             )),
             Appearance::Text(m) => point_emitters.push(point_emitter(
                 LayerParseKind::Text,
                 m.height,
                 &m.geometry_types,
+                m.placement,
+                m.spacing,
             )),
             Appearance::Polyline(m) => {
                 polyline |= m.geometry_types.contains(&SourceGeometryType::Line);
@@ -245,6 +261,9 @@ pub(crate) fn build_accumulated_geometry(
             coords,
             batch_indices,
             encoded_coords,
+            bearings,
+            path_samples,
+            path_meta,
         } => {
             let batch_ids = global_batch_ids.iter().map(|&id| id as f32).collect();
             AccumulatedGeometry::Points(PointGeometryAccumulator {
@@ -257,6 +276,9 @@ pub(crate) fn build_accumulated_geometry(
                 },
                 batch_ids,
                 transform: Transform::default(),
+                bearings,
+                path_samples,
+                path_meta,
             })
         }
         ParsedGeometry::Polylines {

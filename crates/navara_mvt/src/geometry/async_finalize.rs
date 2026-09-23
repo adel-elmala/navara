@@ -493,6 +493,9 @@ mod test {
                 coords: vec![Vec3::new(1.0, 2.0, 0.0), Vec3::new(3.0, 4.0, 0.0)],
                 batch_indices: vec![0, 1],
                 encoded_coords: vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+                bearings: vec![],
+                path_samples: vec![],
+                path_meta: vec![],
             },
         };
         let packed = pack_parsed_mvt_groups(vec![group]);

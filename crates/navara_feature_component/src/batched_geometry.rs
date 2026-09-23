@@ -90,6 +90,15 @@ pub struct PointGeometryAccumulator {
     pub encoded: EncodedPointPositions,
     pub batch_ids: Vec<f32>,
     pub transform: Transform,
+    /// Tangent bearing at each anchor, in degrees clockwise from north. Empty
+    /// unless the anchors were placed along a line, so this is either empty or
+    /// as long as `coords`.
+    pub bearings: Vec<f32>,
+    /// East/north metre offsets sampling the line around each anchor, at a
+    /// fixed stride per anchor. Empty unless this is along-line text.
+    pub path_samples: Vec<f32>,
+    /// Metres between adjacent `path_samples` entries, one per anchor.
+    pub path_meta: Vec<f32>,
 }
 
 impl PointGeometryAccumulator {
@@ -101,6 +110,9 @@ impl PointGeometryAccumulator {
             encoded: EncodedPointPositions::Empty,
             batch_ids: Vec::new(),
             transform: Transform::default(),
+            bearings: Vec::new(),
+            path_samples: Vec::new(),
+            path_meta: Vec::new(),
         }
     }
 
@@ -109,6 +121,11 @@ impl PointGeometryAccumulator {
         let batch_indices = buf.new_u32(self.batch_indices);
         let batch_ids = buf.new_f32(self.batch_ids);
         let (encoding, encoded_a, encoded_b) = self.encoded.into_handles(buf);
+        // An empty bearing list is the common case (point placement), and a
+        // zero-length buffer would still cost a handle and a GPU attribute.
+        let bearings = (!self.bearings.is_empty()).then(|| buf.new_f32(self.bearings));
+        let path_samples = (!self.path_samples.is_empty()).then(|| buf.new_f32(self.path_samples));
+        let path_meta = (!self.path_meta.is_empty()).then(|| buf.new_f32(self.path_meta));
         BatchedPointGeometry {
             coords: self.coords,
             crs: self.crs,
@@ -118,6 +135,9 @@ impl PointGeometryAccumulator {
             encoding,
             encoded_a,
             encoded_b,
+            bearings,
+            path_samples,
+            path_meta,
         }
     }
 }
@@ -267,6 +287,13 @@ pub struct BatchedPointGeometry {
     pub(crate) encoded_a: Handle,
     /// Rtc: None, Rte: Some(low f32)
     pub(crate) encoded_b: Option<Handle>,
+    /// Per-anchor tangent bearing in degrees clockwise from north; `None`
+    /// unless the anchors were placed along a line.
+    pub(crate) bearings: Option<Handle>,
+    /// Per-anchor east/north path samples; `None` unless along-line text.
+    pub(crate) path_samples: Option<Handle>,
+    /// Per-anchor metres between adjacent path samples.
+    pub(crate) path_meta: Option<Handle>,
 }
 
 impl BatchedPointGeometry {
@@ -282,6 +309,12 @@ impl BatchedPointGeometry {
         buf.remove(&self.encoded_a);
         if let Some(encoded_b) = &self.encoded_b {
             buf.remove(encoded_b);
+        }
+        for handle in [&self.bearings, &self.path_samples, &self.path_meta]
+            .into_iter()
+            .flatten()
+        {
+            buf.remove(handle);
         }
     }
 }

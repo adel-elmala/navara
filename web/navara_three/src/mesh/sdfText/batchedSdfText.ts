@@ -3,6 +3,7 @@ import type {
   TextMaterial as NavaraTextMaterial,
   Transform,
 } from "@navaramap/engine";
+import { lineLabelPlace } from "@navaramap/engine-api";
 import type { FontManager } from "@navaramap/font";
 import { degreeToRadian } from "@navaramap/three-api";
 import {
@@ -51,6 +52,12 @@ import {
   syncAnchorVisibilityState,
 } from "./labelVisibility";
 import { ALIGN_FACTORS, buildLabelLayout, type LayoutOptions } from "./layout";
+import {
+  LINE_LABEL_RESULT_STRIDE,
+  PATH_META_STRIDE,
+  packLineLabels,
+  takeLinePath,
+} from "./linePlacement";
 import { PendingSettlement } from "./pendingSettlement";
 
 /** Reusable scratch to avoid per-frame / per-write allocations. */
@@ -64,6 +71,16 @@ type PositionsInfoBase = {
   positionSize: number;
   batchIDSize: number;
   nPositions: number;
+  /** Per-anchor east/north metre offsets sampling the line the anchor sits on,
+   *  at `pathStride` floats per anchor. Only present under line placement. */
+  pathSamples: Float32Array<ArrayBufferLike> | null;
+  /** Floats per anchor in {@link pathSamples} — twice the sample count. */
+  pathStride: number;
+  /** Per-anchor `(metres between path samples, metres of real line either side
+   *  of the anchor)`. */
+  pathMeta: Float32Array<ArrayBufferLike> | null;
+  /** Per-anchor tangent bearing in degrees clockwise from north. */
+  bearings: Float32Array<ArrayBufferLike> | null;
 };
 
 type PositionsInfo = PositionsInfoBase &
@@ -223,6 +240,35 @@ export class BatchedSdfTextMesh
   private _glyphs: GlyphBuffers;
   private _slots = new GlyphSlotAllocator();
   private _labelData: LabelDataTexture;
+  /** Per-label resampled line, only allocated under along-line placement. Uses
+   *  the same slotted-float-texture machinery as `_labelData`, with its own
+   *  much wider stride: two samples per RGBA texel. */
+  private _pathData: LabelDataTexture | null = null;
+  /**
+   * The resampled line each anchor sits on, held apart from {@link _positions}.
+   *
+   * A geometry update replaces the position info wholesale, and its buffers are
+   * consumed out of the store on extraction — so re-extracting for a terrain
+   * height change can hand back position data with no path attached. The path
+   * itself never changes for a given tile, so it is kept here and only replaced
+   * when an update actually brings a new one. Losing it would leave every label
+   * unvalidated, and therefore culled, for the life of the batch.
+   */
+  private _path: {
+    samples: Float32Array<ArrayBufferLike>;
+    stride: number;
+    meta: Float32Array<ArrayBufferLike> | null;
+    bearings: Float32Array<ArrayBufferLike> | null;
+  } | null = null;
+  /** Per-label screen-space collision box from the last placement pass, four
+   *  values per slot (minX, maxX, minY, maxY). A line label is turned to follow
+   *  its road, so the unrotated block metrics would model a north-south street
+   *  name as a wide horizontal box and let its neighbours sit on top of it. */
+  private _lineBoxes: Float64Array | null = null;
+  /** Per-label rejection from the same pass: the label does not fit its road,
+   *  or the road bends too far under it. Such labels draw nothing, so they must
+   *  not claim declutter space either. */
+  private _lineRejected: Uint8Array | null = null;
 
   /** Layout inputs baked into glyph quads; a change forces a re-layout. */
   private _maxWidth: number;
@@ -275,10 +321,17 @@ export class BatchedSdfTextMesh
     this._declutterPriority = material.declutterPriority ?? 0;
 
     this._positions = this.extractPositions(m);
+    this._path = takeLinePath(this._positions);
     this._rebuildBatchIndexMap(m);
     this._batchLength = m.batch_length;
     this._glyphs = new GlyphBuffers();
     this._labelData = new LabelDataTexture();
+    // The stride comes from the data the engine actually sent, so the GLSL
+    // define and the texture layout are both derived from the Rust constant
+    // rather than restating it.
+    const pathTexels = this._path ? this._path.stride / 4 : 0;
+    this._pathData =
+      pathTexels > 0 ? new LabelDataTexture(16, pathTexels) : null;
 
     this.geometry = this._glyphs.geometry;
     const mat = new ShaderMaterial({
@@ -303,6 +356,7 @@ export class BatchedSdfTextMesh
     this.frustumCulled = false;
 
     this._syncLabelDataUniform();
+    this._syncPathDataUniform();
     this._initLabels();
 
     // When the shared atlas evicts glyphs, a still-in-flight glyph this batch
@@ -335,6 +389,12 @@ export class BatchedSdfTextMesh
       base: {
         useRTE: this._positions?.RTE ?? false,
         useMsdf: this._highQuality,
+        // Driven by the geometry rather than by `material.placement`: the
+        // engine only ships a path when it actually resampled a line, so the
+        // shader branch and the data it reads can never disagree.
+        linePlacement: this._pathData !== null,
+        pathSamples: (this._path?.stride ?? 0) / 2,
+        lineOffset: material.lineOffset ?? 0,
         center: material.center
           ? [material.center.x, material.center.y]
           : undefined,
@@ -410,6 +470,117 @@ export class BatchedSdfTextMesh
     this._enhancer.mutates().setLabelDataTexture(texture, size.x, size.y);
   }
 
+  /**
+   * Re-decide which way each line label reads and whether it still fits.
+   *
+   * Both answers move with the camera — a pixel-sized label grows in world
+   * metres as the camera pulls back — so they are resolved here, at the
+   * placement pass's cadence, rather than baked when the tile was parsed. The
+   * numeric work is the Rust `lineLabelPlace`, which mirrors the vertex
+   * shader's own sizing; see `crates/navara_wasm_api/src/line_label.rs`.
+   */
+  placeLineLabels(
+    camera: PerspectiveCamera,
+    _widthPx: number,
+    heightPx: number,
+  ): void {
+    const line = this._path;
+    if (!this._pathData || !line || this._labels.length === 0) return;
+
+    const state = this._enhancer.states();
+    const packed = packLineLabels(this._labels, line, {
+      sizeInMeters: this._material.sizeInMeters ?? true,
+      maxAngleDeg: this._material.maxAngle ?? 45,
+      keepUpright: this._material.keepUpright ?? true,
+      center: [
+        Math.min(Math.max(state.center[0], -0.5), 0.5),
+        Math.min(Math.max(state.center[1], -0.5), 0.5),
+      ],
+      readFlip: (slot) =>
+        this._labelData.getComponent(slot, LabelRow.PATH, 2) !== 0,
+    });
+
+    camera.updateMatrixWorld();
+    const result = lineLabelPlace(
+      packed.labels,
+      packed.paths,
+      line.stride / 2,
+      new Float64Array(camera.matrixWorldInverse.elements),
+      heightPx,
+      MathUtils.degToRad(camera.fov),
+    );
+
+    const count = this._labels.length;
+    if ((this._lineBoxes?.length ?? 0) < count * 4) {
+      this._lineBoxes = new Float64Array(count * 4);
+      this._lineRejected = new Uint8Array(count);
+    }
+    const boxes = this._lineBoxes;
+    const rejected = this._lineRejected;
+    invariant(boxes && rejected, "line placement buffers");
+
+    for (let i = 0; i < count; i++) {
+      const slot = this._labels[i].slot;
+      const r = i * LINE_LABEL_RESULT_STRIDE;
+      this._labelData.setComponent(slot, LabelRow.PATH, 2, result[r]);
+      this._labelData.setComponent(slot, LabelRow.PATH, 3, result[r + 1]);
+      rejected[slot] = result[r + 1] > 0.5 ? 1 : 0;
+      boxes[slot * 4] = result[r + 2];
+      boxes[slot * 4 + 1] = result[r + 3];
+      boxes[slot * 4 + 2] = result[r + 4];
+      boxes[slot * 4 + 3] = result[r + 5];
+    }
+  }
+
+  /** Same, for the path texture. */
+  private _syncPathDataUniform(): void {
+    if (!this._pathData) return;
+    const { texture, size } = this._pathData;
+    this._enhancer.mutates().setPathDataTexture(texture, size.x, size.y);
+  }
+
+  /**
+   * Copy this anchor's resampled line into the path texture and record where it
+   * landed, so the vertex shader can find it from the label's PATH row.
+   *
+   * Texels per label are fixed, so the label's own slot index addresses its
+   * path run too — no second allocator.
+   */
+  private _writePath(record: LabelRecord): void {
+    const line = this._path;
+    const path = this._pathData;
+    if (!line || !path) return;
+
+    const texelsPerLabel = line.stride / 4;
+    if (path.ensureCapacity(record.slot + 1)) this._syncPathDataUniform();
+
+    const src = record.instanceIndex * line.stride;
+    for (let texel = 0; texel < texelsPerLabel; texel++) {
+      const i = src + texel * 4;
+      path.setRow(
+        record.slot,
+        texel,
+        line.samples[i],
+        line.samples[i + 1],
+        line.samples[i + 2],
+        line.samples[i + 3],
+      );
+    }
+
+    this._labelData.setRow(
+      record.slot,
+      LabelRow.PATH,
+      record.slot * texelsPerLabel,
+      line.meta?.[record.instanceIndex * PATH_META_STRIDE] ?? 0,
+      0, // flip — decided per pass by `placeLineLabels`
+      // Rejected until that pass has judged it. A label drawn before its first
+      // placement runs has no flip yet, so it would appear for a frame or two
+      // reading backwards — and while tiles stream in there is always a fresh
+      // batch in that state.
+      1,
+    );
+  }
+
   // --- Label lifecycle ---
 
   /**
@@ -481,6 +652,7 @@ export class BatchedSdfTextMesh
     this._labelByInstance[instanceIndex] = record;
 
     this._writeAnchor(record);
+    this._writePath(record);
     this._writeStyle(record);
     this._writeFontSize(record);
     this._writeAddHeight(record);
@@ -857,22 +1029,36 @@ export class BatchedSdfTextMesh
     const cx = Math.min(Math.max(state.center[0], -0.5), 0.5);
     const cy = Math.min(Math.max(state.center[1], -0.5), 0.5);
 
+    const boxes = this._lineBoxes;
     for (const record of this._labels) {
       if (!record.show || record.widthEm <= 0) continue;
       const size = record.fontSize;
       if (size <= 0) continue;
+      // A rejected line label draws nothing, so it must not evict a label that
+      // does.
+      if (this._lineRejected?.[record.slot]) continue;
 
       const w = record.widthEm;
       const h = record.heightEm;
+      // Line labels are turned to follow their road, so the placement pass
+      // hands back the box they actually cover; everything else is a
+      // screen-aligned block around its anchor.
+      //
+      // A label created since the last pass has no box yet. Falling back to the
+      // unrotated block matters: reading past the array would put `undefined`
+      // — and then NaN — into the packed candidate, and a NaN box never
+      // registers a collision, so the label would silently overlap everything.
+      const b = record.slot * 4;
+      const hasBox = boxes !== null && b + 3 < boxes.length;
       out.push({
         anchorX: record.anchor[0],
         anchorY: record.anchor[1],
         anchorZ: record.anchor[2],
         addHeight: record.addHeight,
-        minX: (0 - cx * w) * size,
-        maxX: (w - cx * w) * size,
-        minY: (record.minYEm - cy * h) * size,
-        maxY: (record.maxYEm - cy * h) * size,
+        minX: hasBox ? boxes[b] : (0 - cx * w) * size,
+        maxX: hasBox ? boxes[b + 1] : (w - cx * w) * size,
+        minY: hasBox ? boxes[b + 2] : (record.minYEm - cy * h) * size,
+        maxY: hasBox ? boxes[b + 3] : (record.maxYEm - cy * h) * size,
         sizeInMeters: state.sizeInMeters,
         priority: record.priorityOverride ?? this._declutterPriority,
         isShown: record.declutterTarget === 0,
@@ -990,6 +1176,16 @@ export class BatchedSdfTextMesh
     const batchIDs = buf.removeF32(batchIdsData.data);
     const batchIDSize = batchIdsData.size;
 
+    // Present only for along-line placement, where the engine resampled each
+    // anchor's line so the shader can bend glyphs onto it.
+    const pathSamplesData = g.path_samples;
+    const pathSamples = pathSamplesData
+      ? buf.removeF32(pathSamplesData.data)
+      : null;
+    const pathStride = pathSamplesData?.size ?? 0;
+    const pathMeta = g.path_meta ? buf.removeF32(g.path_meta.data) : null;
+    const bearings = g.bearings ? buf.removeF32(g.bearings.data) : null;
+
     const positionData = g.position;
     const position = positionData
       ? buf.removeF32(positionData.data)
@@ -1006,6 +1202,10 @@ export class BatchedSdfTextMesh
         positionSize,
         nPositions,
         RTE: false,
+        pathSamples,
+        pathStride,
+        pathMeta,
+        bearings,
       };
     }
 
@@ -1035,6 +1235,10 @@ export class BatchedSdfTextMesh
         positionSize: positionHighSize,
         nPositions,
         RTE: true,
+        pathSamples,
+        pathStride,
+        pathMeta,
+        bearings,
       };
     }
 
@@ -1081,6 +1285,7 @@ export class BatchedSdfTextMesh
         "Number of positions in the updated geometry must match the initial geometry",
       );
       this._positions = positionInfo;
+      this._path = takeLinePath(positionInfo) ?? this._path;
       this._rebuildBatchIndexMap(m);
       this._enhancer
         .mutates()
@@ -1561,6 +1766,7 @@ export class BatchedSdfTextMesh
     this._instanceBatchIndex = null;
 
     this._labelData.dispose();
+    this._pathData?.dispose();
     this._glyphs.dispose();
     (this.material as ShaderMaterial).dispose();
 

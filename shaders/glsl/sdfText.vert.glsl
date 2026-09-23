@@ -34,6 +34,7 @@ attribute float labelIndex;  // Row block in uLabelData owning this instance
 #define LABEL_ROW_POSITION_LOW 1
 #define LABEL_ROW_BOX 2
 #define LABEL_ROW_STATE 3
+#define LABEL_ROW_PATH 4
 
 // Per-label data texture (RGBA32F, unfiltered).
 uniform sampler2D uLabelData;
@@ -43,6 +44,26 @@ vec4 nvr_readLabel(int slot, int row) {
     int i = slot * LABEL_ROWS + row;
     return texelFetch(uLabelData, ivec2(i % uLabelTexSize.x, i / uLabelTexSize.x), 0);
 }
+
+#ifdef NVR_LINE_PLACEMENT
+// Each label's line, resampled at a uniform arc-length step as east/north
+// metre offsets from its anchor. Uniform spacing is the whole point: a glyph
+// finds its segment with one division instead of walking the path, so bending
+// costs two texel fetches rather than a loop. PATH_SAMPLES is injected as a
+// define from the same Rust constant that produced the data.
+uniform sampler2D uPathData;
+uniform ivec2 uPathTexSize;
+// Perpendicular shift away from the line, in the same units as the font size
+// (pixels or metres, per uSizeInMeters). Positive is left of travel.
+uniform float uLineOffset;
+
+// Two samples per RGBA texel, so a label's run is PATH_SAMPLES/2 texels.
+vec2 nvr_readPath(int base, int k) {
+    int i = base + (k >> 1);
+    vec4 texel = texelFetch(uPathData, ivec2(i % uPathTexSize.x, i / uPathTexSize.x), 0);
+    return (k - ((k >> 1) << 1)) == 0 ? texel.xy : texel.zw;
+}
+#endif
 
 // Uniforms — batch-wide only.
 #ifdef USE_RTE
@@ -186,8 +207,74 @@ void main() {
         scaleFactor = nvr_pxToWorld(fontSize, uFovRad, uScreenHeightPx, vec3(0.0, 0.0, mvPosition.z), vec3(0.0, 0.0, 0.0));
     }
 
+    vec2 center = clamp(uCenter, vec2(-0.5), vec2(0.5)); // Ensure center is within the bounds of the sprite
+
     vec3 axisRight;
     vec3 axisUp;
+#ifdef NVR_LINE_PLACEMENT
+    // A curved label's background would have to be a bent ribbon, which one
+    // quad cannot express, so line placement draws glyphs only.
+    if (isBackground) {
+        gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+        return;
+    }
+
+    vec4 pathRow = nvr_readLabel(slot, LABEL_ROW_PATH);
+    // The placement pass rejected this label: it is longer than the road it
+    // sits on, or the road bends too sharply under it to stay readable. Culled
+    // rather than faded, because unlike a declutter loss this is not a
+    // competition the label could win back by a pixel of camera drift.
+    if (pathRow.w > 0.5) {
+        gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+        return;
+    }
+
+    int pathBase = int(pathRow.x);
+    float stepMeters = pathRow.y;
+    // keepUpright walks the path backwards, so a label never reads
+    // right-to-left. Reversing the tangent with it keeps the glyph frame
+    // self-consistent: the text's own "up" stays on its own up side.
+    float dir = pathRow.z > 0.5 ? -1.0 : 1.0;
+
+    // Place the glyph rigidly at its own centre rather than bending each of its
+    // six vertices onto the curve, which would shear the quad on tight bends.
+    // Every reference implementation makes the same choice.
+    float glyphCenterEm = glyphOffset.x + glyphSize.x * 0.5 - center.x * textWidth;
+    float sMeters = glyphCenterEm * scaleFactor * dir;
+
+    float halfSpan = 0.5 * float(PATH_SAMPLES - 1) * stepMeters;
+    float t = (sMeters + halfSpan) / max(stepMeters, 1e-6);
+    int seg = int(clamp(floor(t), 0.0, float(PATH_SAMPLES - 2)));
+    vec2 pa = nvr_readPath(pathBase, seg);
+    vec2 pb = nvr_readPath(pathBase, seg + 1);
+    vec2 pathPos = mix(pa, pb, clamp(t - float(seg), 0.0, 1.0));
+
+    vec2 tangent = pb - pa;
+    float tangentLen = length(tangent);
+    // A doubled-back hairpin can put two samples on the same point; east keeps
+    // the glyph readable rather than letting a normalize() produce NaN.
+    tangent = (tangentLen > 1e-6 ? tangent / tangentLen : vec2(1.0, 0.0)) * dir;
+    vec2 normal = vec2(-tangent.y, tangent.x);
+
+    // `scaleFactor` is metres per em, so dividing by the font size recovers
+    // metres per style unit — which is what lineOffset is expressed in.
+    pathPos += normal * (uLineOffset * (scaleFactor / max(fontSize, 1e-6)));
+
+    vec3 eastWorld, northWorld, normalWorld;
+    nvr_enuBasis(absTransformed, eastWorld, northWorld, normalWorld);
+    vec3 eastView = (viewMatrix * vec4(eastWorld, 0.0)).xyz;
+    vec3 northView = (viewMatrix * vec4(northWorld, 0.0)).xyz;
+
+    // The walk decides where in the tangent plane the glyph sits; facing still
+    // decides which plane its quad stands in.
+    axisRight = tangent.x * eastView + tangent.y * northView;
+    axisUp = nvr_batchFlatFacing
+        ? normal.x * eastView + normal.y * northView
+        : (viewMatrix * vec4(normalWorld, 0.0)).xyz;
+
+    // Path offsets are already metres, so they bypass the em scaling below.
+    mvPosition.xyz += pathPos.x * eastView + pathPos.y * northView;
+#else
     nvr_quadBasis(
         absTransformed,
         nvr_batchFlatFacing,
@@ -196,8 +283,7 @@ void main() {
         axisRight,
         axisUp
     );
-
-    vec2 center = clamp(uCenter, vec2(-0.5), vec2(0.5)); // Ensure center is within the bounds of the sprite
+#endif
 
     vIsColor = glyphKind == GLYPH_KIND_COLOR ? 1 : 0;
 
@@ -227,6 +313,13 @@ void main() {
         // Apply centering: shift entire text block by anchor point
         localPos.x -= center.x * textWidth;
         localPos.y -= center.y * textHeight;
+
+#ifdef NVR_LINE_PLACEMENT
+        // The walk already placed this glyph's centre on the curve, so what is
+        // left is the quad corner relative to that centre. Only x needs
+        // rebasing: y is still the baseline-relative height the layout gave it.
+        localPos.x -= glyphCenterEm;
+#endif
 
         // Lay the glyph out in the label's basis (see nvr_quadBasis), scaled.
         vec4 delta = vec4((localPos.x * axisRight + localPos.y * axisUp) * scaleFactor, 0.0);

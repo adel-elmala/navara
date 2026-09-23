@@ -68,6 +68,9 @@ type PositionsInfo = {
   batchIDSize: number;
   nPositions: number;
   RTE: boolean;
+  /** Per-anchor tangent bearing in degrees clockwise from north, present only
+   *  when the engine placed these anchors along a line. */
+  bearings: Float32Array<ArrayBufferLike> | null;
 };
 
 /** Reusable Vector2 to avoid per-frame allocations in onBeforeRender. */
@@ -558,6 +561,20 @@ export class InstancedSpriteMesh
         positionsInfo.batchIDSize,
       ),
     );
+    // Along-line anchors carry their line's tangent. The shader adds it to the
+    // rotation the batch texture resolves, so it must be per instance: one
+    // feature owns many anchors with different bearings, while the batch
+    // texture is keyed per feature.
+    if (positionsInfo.bearings && (m.material.rotateToLine ?? true)) {
+      const radians = new Float32Array(positionsInfo.bearings.length);
+      for (let i = 0; i < radians.length; i++) {
+        radians[i] = positionsInfo.bearings[i] * MathUtils.DEG2RAD;
+      }
+      instancedGeometry.setAttribute(
+        "instanceBearing",
+        new InstancedBufferAttribute(radians, 1),
+      );
+    }
 
     return instancedGeometry;
   }
@@ -584,6 +601,11 @@ export class InstancedSpriteMesh
       base: {
         useRTE: positionsInfo.RTE,
         billboard: isBillboard,
+        // Must agree with `_initGeometry`'s decision to upload the attribute:
+        // the define is what declares it, and an undeclared attribute reads 0.
+        instanceBearing: Boolean(
+          positionsInfo.bearings && (m.material.rotateToLine ?? true),
+        ),
         scale: m.material.size ?? 100.0,
         center: [m.material.center?.x ?? 0.0, m.material.center?.y ?? 0.0],
         flatFacing:
@@ -683,6 +705,10 @@ export class InstancedSpriteMesh
     const batchIDs = buf.removeF32(batchIdsData.data);
     const batchIDSize = batchIdsData.size;
 
+    // Only present for along-line placement, where the engine resampled the
+    // line and knows each anchor's tangent.
+    const bearings = g.bearings ? buf.removeF32(g.bearings.data) : null;
+
     const positionData = g.position;
     const position = positionData
       ? buf.removeF32(positionData.data)
@@ -699,6 +725,7 @@ export class InstancedSpriteMesh
         positionSize,
         nPositions,
         RTE: false,
+        bearings,
       };
     }
 
@@ -728,6 +755,7 @@ export class InstancedSpriteMesh
         positionSize: positionHighSize,
         nPositions,
         RTE: true,
+        bearings,
       };
     }
 

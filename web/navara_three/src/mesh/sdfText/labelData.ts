@@ -25,8 +25,8 @@ const TEXTURE_WIDTH = 64;
 const INITIAL_CAPACITY = 16;
 
 /** Floats needed to hold `capacity` labels, padded out to whole texture rows. */
-function floatsFor(capacity: number): number {
-  const rows = Math.ceil((capacity * LABEL_ROWS) / TEXTURE_WIDTH);
+function floatsFor(capacity: number, texelsPerSlot: number): number {
+  const rows = Math.ceil((capacity * texelsPerSlot) / TEXTURE_WIDTH);
   return rows * TEXTURE_WIDTH * 4;
 }
 
@@ -36,8 +36,8 @@ function floatsFor(capacity: number): number {
  * from the requested count is what stops `ensureCapacity` from growing while
  * there are still free slots inside the current allocation.
  */
-function labelsIn(floats: number): number {
-  return Math.max(1, Math.floor(floats / 4 / LABEL_ROWS));
+function labelsIn(floats: number, texelsPerSlot: number): number {
+  return Math.max(1, Math.floor(floats / 4 / texelsPerSlot));
 }
 
 /**
@@ -64,9 +64,19 @@ export class LabelDataTexture {
   private _texture: DataTexture;
   private readonly _size = new Vector2();
 
-  constructor(initialCapacity = INITIAL_CAPACITY) {
-    this._data = new Float32Array(floatsFor(Math.max(1, initialCapacity)));
-    this._capacity = labelsIn(this._data.length);
+  /**
+   * @param texelsPerSlot Texels each slot occupies. Defaults to
+   *   {@link LABEL_ROWS} for the per-label state texture; the path texture
+   *   (`uPathData`) uses the same machinery with its own, much wider stride.
+   */
+  constructor(
+    initialCapacity = INITIAL_CAPACITY,
+    private readonly _texelsPerSlot: number = LABEL_ROWS,
+  ) {
+    this._data = new Float32Array(
+      floatsFor(Math.max(1, initialCapacity), _texelsPerSlot),
+    );
+    this._capacity = labelsIn(this._data.length, _texelsPerSlot);
     this._texture = this._createTexture();
   }
 
@@ -102,11 +112,11 @@ export class LabelDataTexture {
     let target = this._capacity;
     while (target < slotCount) target *= 2;
 
-    const data = new Float32Array(floatsFor(target));
+    const data = new Float32Array(floatsFor(target, this._texelsPerSlot));
     data.set(this._data);
 
     this._data = data;
-    this._capacity = labelsIn(data.length);
+    this._capacity = labelsIn(data.length, this._texelsPerSlot);
     this._texture.dispose();
     this._texture = this._createTexture();
     return true;
@@ -121,7 +131,7 @@ export class LabelDataTexture {
     z: number,
     w: number,
   ): void {
-    const i = (slot * LABEL_ROWS + row) * 4;
+    const i = (slot * this._texelsPerSlot + row) * 4;
     const data = this._data;
     data[i] = x;
     data[i + 1] = y;
@@ -137,19 +147,19 @@ export class LabelDataTexture {
     component: number,
     value: number,
   ): void {
-    this._data[(slot * LABEL_ROWS + row) * 4 + component] = value;
+    this._data[(slot * this._texelsPerSlot + row) * 4 + component] = value;
     this._texture.needsUpdate = true;
   }
 
   /** Read one channel back — used by the declutter fade's read/modify/write. */
   getComponent(slot: number, row: number, component: number): number {
-    return this._data[(slot * LABEL_ROWS + row) * 4 + component];
+    return this._data[(slot * this._texelsPerSlot + row) * 4 + component];
   }
 
   /** Zero a label's rows so a recycled slot can't inherit stale state. */
   clearSlot(slot: number): void {
-    const start = slot * LABEL_ROWS * 4;
-    this._data.fill(0, start, start + LABEL_ROWS * 4);
+    const start = slot * this._texelsPerSlot * 4;
+    this._data.fill(0, start, start + this._texelsPerSlot * 4);
     this._texture.needsUpdate = true;
   }
 

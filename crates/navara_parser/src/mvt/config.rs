@@ -42,6 +42,28 @@ impl LayerParseKind {
     }
 }
 
+/// How an emitter derives anchors from line geometry.
+///
+/// Mirrors `navara_material::Placement` but is ECS-free, for the same reason
+/// [`LayerParseKind`] mirrors `GeometryAppearanceKind`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum PointPlacement {
+    /// One anchor per source vertex.
+    #[default]
+    Point,
+    /// Anchors repeated along the line at `spacing_px` intervals.
+    Line,
+    /// A single anchor at the line's arc-length midpoint.
+    LineCenter,
+}
+
+impl PointPlacement {
+    /// Whether this mode resamples the line rather than emitting per vertex.
+    pub fn is_along_line(self) -> bool {
+        matches!(self, Self::Line | Self::LineCenter)
+    }
+}
+
 /// A point-like emitter derived from a `Point`/`Billboard`/`Text` appearance.
 ///
 /// Each coordinate of a point/multipoint geometry is emitted once per enabled
@@ -64,10 +86,21 @@ pub struct PointEmitter {
     /// Also emit one point per polygon-ring vertex (closing duplicate skipped).
     #[serde(default)]
     pub from_polygons: bool,
+    /// How anchors are derived from line geometry once `from_lines` is set.
+    #[serde(default)]
+    pub placement: PointPlacement,
+    /// Anchor spacing along a line in pixels at this tile's own zoom. Only used
+    /// by [`PointPlacement::Line`].
+    #[serde(default = "default_spacing")]
+    pub spacing_px: f32,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_spacing() -> f32 {
+    250.0
 }
 
 /// Instructions for parsing the features of a single matched target layer.

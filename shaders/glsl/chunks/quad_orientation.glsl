@@ -19,6 +19,25 @@
  * `worldPos` is the anchor in ECEF meters; its normalized direction is the
  * surface normal, matching mvr_getMvHeightOffset's spherical approximation.
  */
+/**
+ * The anchor's local east-north-up frame, in WORLD space.
+ *
+ * `cross(polar axis, normal)` vanishes at the poles, where every tangent
+ * direction is an equally valid "east"; ECEF +x is the fallback there.
+ *
+ * The surface normal is the normalized anchor direction — the same spherical
+ * approximation mvr_getMvHeightOffset uses, so height offsets and quad bases
+ * cannot disagree about which way is up.
+ */
+void nvr_enuBasis(vec3 worldPos, out vec3 east, out vec3 north, out vec3 up) {
+    vec3 nWorld = normalize(worldPos);
+    vec3 e = vec3(-nWorld.y, nWorld.x, 0.0);
+    float eLen = length(e);
+    east = eLen > 1e-6 ? e / eLen : vec3(1.0, 0.0, 0.0);
+    north = cross(nWorld, east);
+    up = nWorld;
+}
+
 void nvr_quadOrientation(
     vec3 worldPos,
     bool flatFacing,
@@ -50,15 +69,12 @@ void nvr_quadOrientation(
 
     // Both no-rotate modes are pinned to the anchor's east-north-up frame, so
     // the basis depends only on the anchor and the camera cannot disturb it.
-    // cross(polar axis, nWorld) vanishes at the poles, where every tangent
-    // direction is an equally valid "east"; fall back to ECEF +x there.
-    vec3 eastWorld = vec3(-nWorld.y, nWorld.x, 0.0);
-    float eastLen = length(eastWorld);
-    eastWorld = eastLen > 1e-6 ? eastWorld / eastLen : vec3(1.0, 0.0, 0.0);
+    vec3 eastWorld, northWorld, normalWorld;
+    nvr_enuBasis(worldPos, eastWorld, northWorld, normalWorld);
     // Flat lies in the tangent plane with up = north. Upright stands the quad
     // on the surface with up = the surface normal, a signboard whose face
     // points south — readable from a camera looking northward.
-    vec3 upWorld = flatFacing ? cross(nWorld, eastWorld) : nWorld;
+    vec3 upWorld = flatFacing ? northWorld : normalWorld;
     right = (viewMatrix * vec4(eastWorld, 0.0)).xyz;
     up = (viewMatrix * vec4(upWorld, 0.0)).xyz;
 }
