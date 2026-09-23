@@ -92,10 +92,15 @@ const ANGLE_WINDOW_EMS: f64 = 1.5;
 /// being a meaningful test of whether it reads forwards.
 const VERTICAL_BAND: f64 = 0.15;
 
-/// Hysteresis on the flip decision. A label sitting exactly on the boundary
-/// would otherwise flip back and forth frame to frame as the camera drifts —
-/// the same failure `HYSTERESIS_PX` guards against in the declutter pass.
-const FLIP_HYSTERESIS: f64 = 0.03;
+/// Hysteresis on the flip decision, as a deadband on [`should_flip`]'s score.
+///
+/// The score is a unit-length projection, so this reads as an angle: 0.08 is
+/// about 4.6° either side of the boundary that a label may drift through
+/// before it turns. Small enough to be invisible — a name reading 4° past
+/// upright is not something a reader notices — and large enough to cover the
+/// camera movement between two placement passes, which is what decides whether
+/// a label on the boundary turns once or oscillates.
+const FLIP_HYSTERESIS: f64 = 0.08;
 
 /// Place text labels along their lines.
 ///
@@ -345,18 +350,28 @@ fn screen_direction(
 /// the camera drifts — the same failure `HYSTERESIS_PX` guards against in the
 /// declutter pass.
 fn should_flip(sx: f64, sy: f64, currently_flipped: bool) -> bool {
-    // The hysteresis belongs on the *band*, not on the score. Inside either
-    // branch the score is far from zero — a label steep enough to be judged
-    // horizontally has |sx| > VERTICAL_BAND, and one judged vertically has
-    // |sy| close to 1 — so the only place the answer can chatter is where the
-    // two rules hand over to each other.
-    let band = if currently_flipped {
-        VERTICAL_BAND - FLIP_HYSTERESIS
+    // "Reads left to right, and bottom to top when it is too steep for that to
+    // mean anything" is a single half-plane test, not two rules with a handover
+    // between them: it keeps the label whenever its direction lies on the
+    // positive side of a line tilted `asin(VERTICAL_BAND)` off vertical.
+    //
+    // Writing it as the branch it looks like is what caused labels near
+    // vertical to flicker. That form picks *which component to test* from the
+    // current flip, so in the strip where the two branches disagree an
+    // unflipped label reads its neighbour's rule, flips, then reads its own
+    // rule and flips straight back. It happened to be stable in one pair of
+    // quadrants, which is why it survived earlier testing.
+    //
+    // As one continuous score the hysteresis is an ordinary deadband, and both
+    // states are self-confirming inside it.
+    let normal_x = (1.0 - VERTICAL_BAND * VERTICAL_BAND).sqrt();
+    let score = sx * normal_x + sy * VERTICAL_BAND;
+    let threshold = if currently_flipped {
+        FLIP_HYSTERESIS
     } else {
-        VERTICAL_BAND + FLIP_HYSTERESIS
+        -FLIP_HYSTERESIS
     };
-    let score = if sx.abs() > band { sx } else { sy };
-    score < 0.0
+    score < threshold
 }
 
 /// Screen-space AABB of the label's box once turned to run along `(dx, dy)`.
@@ -810,6 +825,58 @@ mod tests {
         for &distance in &[10.0, 500.0, 1_000_000.0] {
             let out = line_label_fit(&l, &top_down_view(distance), 1000.0, 1.0);
             assert_eq!(out[0], 1, "distance {distance}: metric label still fits");
+        }
+    }
+
+    #[test]
+    fn no_direction_makes_the_flip_oscillate() {
+        // The defect this guards: feed `should_flip` its own previous answer
+        // and it must settle. A direction where flipping makes the next pass
+        // un-flip, and vice versa, is a label that flickers between the two
+        // upright orientations for as long as the camera holds still.
+        //
+        // Swept over the whole circle rather than at a chosen direction,
+        // because the broken version was stable in half the quadrants — a
+        // single sample passed it for months.
+        let steps = 2000;
+        for i in 0..steps {
+            let theta = (i as f64 / steps as f64) * std::f64::consts::TAU;
+            let (sx, sy) = (theta.cos(), theta.sin());
+
+            // Iterate the decision from both starting states. Either it
+            // reaches a fixed point, or the two states disagree forever —
+            // which is the oscillation.
+            for start in [false, true] {
+                let once = should_flip(sx, sy, start);
+                let twice = should_flip(sx, sy, once);
+                assert_eq!(
+                    once,
+                    twice,
+                    "direction ({sx:.4}, {sy:.4}) at {:.1}° oscillates from {start}",
+                    theta.to_degrees(),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_flip_boundary_sits_just_off_vertical() {
+        // The deadband must not be so wide that it swallows the decision: a
+        // label pointing clearly backwards still has to turn, whatever it did
+        // last pass.
+        for &(sx, sy, expected) in &[
+            (1.0, 0.0, false), // reads left to right
+            (-1.0, 0.0, true), // reads right to left
+            (0.0, 1.0, false), // straight up: bottom-to-top is the convention
+            (0.0, -1.0, true), // straight down
+        ] {
+            for start in [false, true] {
+                assert_eq!(
+                    should_flip(sx, sy, start),
+                    expected,
+                    "({sx}, {sy}) from {start} must not be held by hysteresis",
+                );
+            }
         }
     }
 

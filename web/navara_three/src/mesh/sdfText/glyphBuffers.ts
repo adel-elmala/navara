@@ -37,6 +37,7 @@ const INSTANCE_ATTRIBUTES = [
   ["glyphUvRect", 4],
   ["glyphKind", 1],
   ["labelIndex", 1],
+  ["glyphWordCenter", 1],
 ] as const;
 
 /** The backing arrays, one per instance attribute. */
@@ -46,6 +47,7 @@ type InstanceArrays = {
   glyphUvRect: Float32Array;
   glyphKind: Float32Array;
   labelIndex: Float32Array;
+  glyphWordCenter: Float32Array;
 };
 
 export class GlyphBuffers {
@@ -135,6 +137,7 @@ export class GlyphBuffers {
       glyphUvRect,
       glyphKind,
       labelIndex: label,
+      glyphWordCenter,
     } = this._arrays;
 
     // The background occupies the run's first slot so it is drawn before the
@@ -163,6 +166,7 @@ export class GlyphBuffers {
       glyphUvRect[slot * 4 + 1] = q.uvT;
       glyphUvRect[slot * 4 + 2] = q.uvR;
       glyphUvRect[slot * 4 + 3] = q.uvB;
+      glyphWordCenter[slot] = q.wordCenterEmX;
       slot++;
     }
 

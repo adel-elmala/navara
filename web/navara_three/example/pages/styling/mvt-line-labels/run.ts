@@ -4,6 +4,7 @@ import ThreeView, {
   type Layer,
 } from "@navaramap/three";
 import { DefaultPlugin } from "@navaramap/three-default-plugin";
+import { TileJsonPlugin } from "@navaramap/three-plugins";
 import { Pane } from "tweakpane";
 
 import { VECTOR_DATASETS, TILE_DATASETS } from "../../../helpers/constants";
@@ -61,18 +62,21 @@ const LABEL_WIDTH = 87.5;
 const params = {
   placement: "line" as "point" | "line" | "line-center",
   spacing: 250,
-  maxAngle: 45,
+  maxAngle: 20,
   keepUpright: true,
   lineOffset: 0,
-  size: 9,
+  size: 15,
   sizeInMeters: false,
-  outlineWidth: 2,
+  outlineWidth: 6,
   declutter: true,
 };
 
 export const run = async (view: ThreeView) => {
   const defaultPlugin = new DefaultPlugin();
   view.addPlugin(defaultPlugin);
+
+  const tileset = new TileJsonPlugin();
+  view.addPlugin(tileset);
 
   await view.init();
 
@@ -110,10 +114,10 @@ export const run = async (view: ThreeView) => {
   // string as the template itself and request that one URL as an image for every
   // tile. The plugin fetches the document, derives the tile URL and zoom range
   // from it, and registers the document's `attribution` with the credit UI.
-  const basemap = await view.addSource({
+  const basemap = await tileset.addSource({
     type: "raster-tile",
-    // url: "https://papers.reearth.land/styles/papers-dark/tilejson.json",
-    url: TILE_DATASETS.eox.url,
+    url: "https://papers.reearth.land/styles/papers-dark/tilejson.json",
+    // url: TILE_DATASETS.eox.url,
   });
   view.addLayer({ type: "raster", source: basemap });
 
@@ -124,27 +128,27 @@ export const run = async (view: ThreeView) => {
   });
 
   // Road geometry, for the labels to sit on.
-  // const roads = view.addLayer({
-  //   type: "vector",
-  //   source: planet,
-  //   sourceLayers: ["transportation"],
-  //   polyline: {
-  //     color: new Color().setStyle("#ffb454"),
-  //     width: 4,
-  //     clampToGround: true,
-  //     geometryTypes: ["line"],
-  //   },
-  // });
+  const roads = view.addLayer({
+    type: "vector",
+    source: planet,
+    sourceLayers: ["transportation"],
+    polyline: {
+      color: new Color().setStyle("#a8e8a6"),
+      width: 4,
+      clampToGround: true,
+      geometryTypes: ["line"],
+    },
+  });
 
-  // roads.on("featureUpdated", ({ evaluator }) => {
-  //   evaluator.evaluate(
-  //     ({ properties }) => {
-  //       const width = ROAD_WIDTH[properties?.["class"] as string];
-  //       return width === undefined ? { show: false } : { width };
-  //     },
-  //     { filters: ["class"] },
-  //   );
-  // });
+  roads.on("featureUpdated", ({ evaluator }) => {
+    evaluator.evaluate(
+      ({ properties }) => {
+        const width = ROAD_WIDTH[properties?.["class"] as string];
+        return width === undefined ? { show: false } : { width };
+      },
+      { filters: ["class"] },
+    );
+  });
 
   // The labels themselves. `geometryTypes: ["line"]` opts the text appearance
   // into line geometry; `placement` then decides whether that means one label

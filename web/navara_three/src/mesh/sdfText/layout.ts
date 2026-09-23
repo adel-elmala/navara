@@ -165,6 +165,18 @@ export type GlyphQuad = {
   uvB: number;
   /** Sample the COLRv1 colour atlas rather than the SDF atlas. */
   isColor: boolean;
+  /**
+   * Centre, along x in em, of the word this glyph belongs to — the same value
+   * for every glyph in the word.
+   *
+   * Line placement puts each *word* on the curve as one rigid piece and lays
+   * its glyphs out along that word's tangent, rather than giving every glyph
+   * its own tangent. Per-glyph following makes the letters of a single word
+   * splay apart on a tight bend, which reads as broken text; a word is short
+   * enough that keeping it straight costs nothing. Unused when the label is
+   * placed at a point.
+   */
+  wordCenterEmX: number;
 };
 
 /** A laid-out label: its glyph quads plus the block metrics the shader and the
@@ -199,6 +211,26 @@ const EMPTY_LAYOUT: LabelLayout = {
   minYEm: 0,
   maxYEm: 1,
 };
+
+/**
+ * Give every quad from `start` to the end of `quads` the centre of the word
+ * they form, measured across the glyphs' own bounding boxes.
+ *
+ * Taken from the drawn extent rather than the advance width so the word sits on
+ * the curve where it looks centred, not where its trailing side bearing would
+ * put it.
+ */
+function assignWordCenter(quads: GlyphQuad[], start: number): void {
+  if (quads.length <= start) return;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  for (let i = start; i < quads.length; i++) {
+    minX = Math.min(minX, quads[i].offsetEmX);
+    maxX = Math.max(maxX, quads[i].offsetEmX + quads[i].sizeEmX);
+  }
+  const center = (minX + maxX) * 0.5;
+  for (let i = start; i < quads.length; i++) quads[i].wordCenterEmX = center;
+}
 
 /**
  * Turn a shaping result into positioned glyph quads.
@@ -250,6 +282,10 @@ export function buildLabelLayout(
   for (let li = 0; li < lines.length; li++) {
     let cursorX = (blockWidthFu - widths[li]) * options.textAlign;
     let cursorY = -li * lineHeightFu;
+    // Start of the word being laid out, as an index into `quads`. A word is a
+    // run of drawn glyphs; anything that draws nothing — a space, in every case
+    // that reaches here — closes it, as does the end of a line.
+    let wordStart = quads.length;
 
     for (const glyph of lines[li]) {
       const m = metricsMap.get(glyph.compositeKey);
@@ -276,11 +312,17 @@ export function buildLabelLayout(
           uvR: m.atlasX + m.atlasW,
           uvB: m.atlasY + m.atlasH,
           isColor: m.isColor,
+          // Filled in once the word is complete.
+          wordCenterEmX: 0,
         });
+      } else {
+        assignWordCenter(quads, wordStart);
+        wordStart = quads.length;
       }
       cursorX += glyph.xAdvance;
       cursorY += glyph.yAdvance;
     }
+    assignWordCenter(quads, wordStart);
   }
 
   if (quads.length === 0) {

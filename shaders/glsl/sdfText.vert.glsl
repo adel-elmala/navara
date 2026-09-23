@@ -22,6 +22,12 @@ attribute vec2 glyphSize;    // Glyph quad dimensions in normalized text space
 attribute vec4 glyphUvRect;  // Atlas sub-rect in PIXEL space: (x0, y0, x1, y1)
 attribute float glyphKind;   // See GLYPH_KIND_* below
 attribute float labelIndex;  // Row block in uLabelData owning this instance
+#ifdef NVR_LINE_PLACEMENT
+// Centre in x, in ems, of the word this glyph belongs to — shared by every
+// glyph in that word. A curved label follows its line word by word, not letter
+// by letter; see the walk below.
+attribute float glyphWordCenter;
+#endif
 
 #define GLYPH_KIND_SDF        0.0
 #define GLYPH_KIND_COLOR      1.0
@@ -236,11 +242,15 @@ void main() {
     // self-consistent: the text's own "up" stays on its own up side.
     float dir = pathRow.z > 0.5 ? -1.0 : 1.0;
 
-    // Place the glyph rigidly at its own centre rather than bending each of its
-    // six vertices onto the curve, which would shear the quad on tight bends.
-    // Every reference implementation makes the same choice.
-    float glyphCenterEm = glyphOffset.x + glyphSize.x * 0.5 - center.x * textWidth;
-    float sMeters = glyphCenterEm * scaleFactor * dir;
+    // Follow the line a WORD at a time. The word is placed rigidly at its own
+    // centre and its glyphs are laid along that one tangent, so the letters of
+    // a name stay square to each other however the road bends under them —
+    // per-glyph tangents splay them apart on a tight curve and the word stops
+    // reading as a word. Only the joins between words take up the curvature.
+    //
+    // Quads are never bent vertex by vertex either way: that would shear them.
+    float wordCenterEm = glyphWordCenter - center.x * textWidth;
+    float sMeters = wordCenterEm * scaleFactor * dir;
 
     float halfSpan = 0.5 * float(PATH_SAMPLES - 1) * stepMeters;
     float t = (sMeters + halfSpan) / max(stepMeters, 1e-6);
@@ -254,6 +264,19 @@ void main() {
     // A doubled-back hairpin can put two samples on the same point; east keeps
     // the glyph readable rather than letting a normalize() produce NaN.
     tangent = (tangentLen > 1e-6 ? tangent / tangentLen : vec2(1.0, 0.0)) * dir;
+
+    // Samples are evenly spaced in ARC length but joined by straight chords, so
+    // a segment containing a bend covers less ground than the arc it stands
+    // for, and `mix` advances more slowly than the label's own em ruler.
+    //
+    // Placing every glyph individually hid this: all of them shrank by the same
+    // factor, so the label just came out slightly short. A rigid word does not
+    // shrink, so the whole of the discrepancy is taken out of the gaps between
+    // words instead — which is where the spaces went. Put the glyphs on the
+    // path's ruler too, and words and gaps shrink together again.
+    //
+    // Chord never exceeds arc, so the clamp only guards f32 noise.
+    float pathScale = min(tangentLen / max(stepMeters, 1e-6), 1.0);
     vec2 normal = vec2(-tangent.y, tangent.x);
 
     // `scaleFactor` is metres per em, so dividing by the font size recovers
@@ -315,10 +338,17 @@ void main() {
         localPos.y -= center.y * textHeight;
 
 #ifdef NVR_LINE_PLACEMENT
-        // The walk already placed this glyph's centre on the curve, so what is
-        // left is the quad corner relative to that centre. Only x needs
-        // rebasing: y is still the baseline-relative height the layout gave it.
-        localPos.x -= glyphCenterEm;
+        // The walk placed this glyph's WORD on the curve, so what is left is
+        // the offset from the word's centre, laid along the word's single
+        // tangent. Only x needs rebasing: y is still the baseline-relative
+        // height the layout gave it.
+        //
+        // Split in two so `pathScale` reaches the spacing but not the
+        // letterforms: where the glyph sits inside its word rides the path's
+        // ruler, while the quad's own corners keep the glyph's true shape.
+        float glyphCenterEm = glyphOffset.x + glyphSize.x * 0.5 - center.x * textWidth;
+        localPos.x =
+            (glyphCenterEm - wordCenterEm) * pathScale + (localPos.x - glyphCenterEm);
 #endif
 
         // Lay the glyph out in the label's basis (see nvr_quadBasis), scaled.
