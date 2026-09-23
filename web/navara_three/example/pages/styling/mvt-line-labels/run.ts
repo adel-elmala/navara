@@ -1,12 +1,17 @@
-import ThreeView, { Color, type Layer } from "@navaramap/three";
+import ThreeView, {
+  Color,
+  fetchFontFamilyFromCss,
+  type Layer,
+} from "@navaramap/three";
 import { DefaultPlugin } from "@navaramap/three-default-plugin";
 import { Pane } from "tweakpane";
 
+import { VECTOR_DATASETS, TILE_DATASETS } from "../../../helpers/constants";
 import {
-  FONT_DATASETS,
-  TILE_DATASETS,
-  VECTOR_DATASETS,
-} from "../../../helpers/constants";
+  googleFontsCssUrl,
+  NOTO_SANS_ATTRIBUTION,
+  notoSansStack,
+} from "../../../helpers/fonts";
 
 /**
  * Street-name labels repeated along road centerlines, bending with the road.
@@ -39,6 +44,20 @@ const LABEL_PRIORITY: Record<string, number> = {
   tertiary: 1,
 };
 
+/**
+ * Family name the label faces are registered under. A Navara font family maps
+ * codepoints to faces by unicode range, so one registration covers every script
+ * a worldwide road name can be written in.
+ *
+ * Same stack as the `pmtiles-overture` example's admin labels: Noto Sans at
+ * `wdth` 87.5 (the "SemiCondensed" design) in Bold, plus per-script Noto faces.
+ * SemiCondensed suits line placement — a narrower name fits on more roads before
+ * it would overrun them and get dropped.
+ */
+const LABEL_FONT = "RoadLabels";
+const LABEL_WEIGHT = 700;
+const LABEL_WIDTH = 87.5;
+
 const params = {
   placement: "line" as "point" | "line" | "line-center",
   spacing: 250,
@@ -57,6 +76,18 @@ export const run = async (view: ThreeView) => {
 
   await view.init();
 
+  // The Google Fonts CSS API orders @font-face blocks alphabetically, so pass
+  // the stack as a fontFamily array to restore the intended priority (e.g. JP
+  // before SC/KR for codepoints shared across CJK subsets). Face files are
+  // fetched lazily per unicode range, so a stack this wide costs one CSS request
+  // plus only the faces the visible labels actually need.
+  const fontStack = notoSansStack(LABEL_WEIGHT, LABEL_WIDTH);
+  view.addFontFamily(
+    await fetchFontFamilyFromCss(LABEL_FONT, googleFontsCssUrl(fontStack), {
+      fontFamily: fontStack.map((family) => family.split(":")[0]),
+    }),
+  );
+
   // Central London: dense named streets that actually curve, which is what
   // `maxAngle` and the curved layout are there to handle. Close enough that a
   // street is many times longer on screen than its name:
@@ -71,13 +102,18 @@ export const run = async (view: ThreeView) => {
     roll: 0,
   });
 
-  // Satellite imagery rather than a street map: draped geometry needs a surface
-  // to composite onto, and a basemap with its own baked-in street names would
-  // make it impossible to tell which labels this layer drew.
-  const basemap = view.addSource({
+  // A dark basemap: draped geometry needs a surface to composite onto, and the
+  // white labels need something low-contrast to sit on.
+  //
+  // The URL is a TileJSON *document*, not a `{z}/{x}/{y}` tile template, so it
+  // goes through `TileJsonPlugin.addSource` — `view.addSource` would take the
+  // string as the template itself and request that one URL as an image for every
+  // tile. The plugin fetches the document, derives the tile URL and zoom range
+  // from it, and registers the document's `attribution` with the credit UI.
+  const basemap = await view.addSource({
     type: "raster-tile",
+    // url: "https://papers.reearth.land/styles/papers-dark/tilejson.json",
     url: TILE_DATASETS.eox.url,
-    maxZoom: 16,
   });
   view.addLayer({ type: "raster", source: basemap });
 
@@ -88,27 +124,27 @@ export const run = async (view: ThreeView) => {
   });
 
   // Road geometry, for the labels to sit on.
-  const roads = view.addLayer({
-    type: "vector",
-    source: planet,
-    sourceLayers: ["transportation"],
-    polyline: {
-      color: new Color().setStyle("#ffb454"),
-      width: 4,
-      clampToGround: true,
-      geometryTypes: ["line"],
-    },
-  });
+  // const roads = view.addLayer({
+  //   type: "vector",
+  //   source: planet,
+  //   sourceLayers: ["transportation"],
+  //   polyline: {
+  //     color: new Color().setStyle("#ffb454"),
+  //     width: 4,
+  //     clampToGround: true,
+  //     geometryTypes: ["line"],
+  //   },
+  // });
 
-  roads.on("featureUpdated", ({ evaluator }) => {
-    evaluator.evaluate(
-      ({ properties }) => {
-        const width = ROAD_WIDTH[properties?.["class"] as string];
-        return width === undefined ? { show: false } : { width };
-      },
-      { filters: ["class"] },
-    );
-  });
+  // roads.on("featureUpdated", ({ evaluator }) => {
+  //   evaluator.evaluate(
+  //     ({ properties }) => {
+  //       const width = ROAD_WIDTH[properties?.["class"] as string];
+  //       return width === undefined ? { show: false } : { width };
+  //     },
+  //     { filters: ["class"] },
+  //   );
+  // });
 
   // The labels themselves. `geometryTypes: ["line"]` opts the text appearance
   // into line geometry; `placement` then decides whether that means one label
@@ -118,7 +154,7 @@ export const run = async (view: ThreeView) => {
     source: planet,
     sourceLayers: ["transportation_name"],
     text: {
-      font: FONT_DATASETS.Roboto.url,
+      font: LABEL_FONT,
       geometryTypes: ["line"],
       placement: params.placement,
       spacing: params.spacing,
@@ -156,10 +192,11 @@ export const run = async (view: ThreeView) => {
 
   addControls(view, labels);
 
+  // The basemap credit is registered by TileJsonPlugin from the document, so
+  // only the sources added by hand are listed here.
   view.attribution?.add([
-    TILE_DATASETS.eox,
     VECTOR_DATASETS.openFreeMapPlanet,
-    FONT_DATASETS.Roboto,
+    NOTO_SANS_ATTRIBUTION,
   ]);
 };
 
