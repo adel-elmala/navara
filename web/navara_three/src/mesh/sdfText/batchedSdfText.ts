@@ -3,7 +3,7 @@ import type {
   TextMaterial as NavaraTextMaterial,
   Transform,
 } from "@navaramap/engine";
-import { lineLabelPlace } from "@navaramap/engine-api";
+import { lineLabelFit, lineLabelPlace } from "@navaramap/engine-api";
 import type { FontManager } from "@navaramap/font";
 import { degreeToRadian } from "@navaramap/three-api";
 import {
@@ -55,6 +55,7 @@ import { ALIGN_FACTORS, buildLabelLayout, type LayoutOptions } from "./layout";
 import {
   LINE_LABEL_RESULT_STRIDE,
   PATH_META_STRIDE,
+  packLineLabelFits,
   packLineLabels,
   takeLinePath,
 } from "./linePlacement";
@@ -269,6 +270,16 @@ export class BatchedSdfTextMesh
    *  or the road bends too far under it. Such labels draw nothing, so they must
    *  not claim declutter space either. */
   private _lineRejected: Uint8Array | null = null;
+  /** Reused gather buffer for the labels a placement pass actually has to
+   *  judge, so the filter below costs no allocation per pass. */
+  private _linePlaceable: LabelRecord[] = [];
+  /** The subset of those that passed the fit phase and so need their path sent
+   *  to the full placement. */
+  private _linePlaceSurvivors: LabelRecord[] = [];
+  /** The view matrix both kernel phases read. Held here because the pass runs
+   *  once per batch and `Matrix4.elements` is a plain array — copying it into a
+   *  fresh `Float64Array` each time was hundreds of allocations per pass. */
+  private _lineViewMatrix = new Float64Array(16);
 
   /** Layout inputs baked into glyph quads; a change forces a re-layout. */
   private _maxWidth: number;
@@ -478,6 +489,22 @@ export class BatchedSdfTextMesh
    * placement pass's cadence, rather than baked when the tile was parsed. The
    * numeric work is the Rust `lineLabelPlace`, which mirrors the vertex
    * shader's own sizing; see `crates/navara_wasm_api/src/line_label.rs`.
+   *
+   * Only labels that could become declutter candidates are judged, under the
+   * same two conditions {@link collectDeclutterCandidates} applies — an
+   * invisible batch, and a label with no shaped text, are both dropped there a
+   * moment later, so placing them is pure waste. Measured on a dense London
+   * view that waste was most of the pass: ~28% of batches were not visible and
+   * only ~7k of ~24k labels per pass were shown. Whatever marks those
+   * conditions dirty already has to mark the declutter pass dirty for
+   * collection to be correct, so this filter inherits that guarantee — keep
+   * the two predicates identical.
+   *
+   * What survives that filter then goes through the kernel in two phases. The
+   * fit test needs no path samples, and on a dense view rejects roughly four
+   * labels in five, so it runs first over a compact array; only survivors have
+   * their 32 path points gathered and sent. See the "Two phases" section of
+   * `line_label.rs`.
    */
   placeLineLabels(
     camera: PerspectiveCamera,
@@ -485,11 +512,64 @@ export class BatchedSdfTextMesh
     heightPx: number,
   ): void {
     const line = this._path;
+    if (!this.visible) return;
     if (!this._pathData || !line || this._labels.length === 0) return;
 
+    const placeable = this._linePlaceable;
+    placeable.length = 0;
+    for (const record of this._labels) {
+      if (!record.show || record.widthEm <= 0 || record.fontSize <= 0) continue;
+      placeable.push(record);
+    }
+    if (placeable.length === 0) return;
+
+    // Sized by the label count, not the placed count: both arrays are addressed
+    // by slot, and the labels skipped above still occupy slots between the ones
+    // that were placed.
+    const slotCount = this._labels.length;
+    if ((this._lineBoxes?.length ?? 0) < slotCount * 4) {
+      this._lineBoxes = new Float64Array(slotCount * 4);
+      this._lineRejected = new Uint8Array(slotCount);
+    }
+    const boxes = this._lineBoxes;
+    const rejected = this._lineRejected;
+    invariant(boxes && rejected, "line placement buffers");
+
+    const sizeInMeters = this._material.sizeInMeters ?? true;
+    const fovRad = MathUtils.degToRad(camera.fov);
+    camera.updateMatrixWorld();
+    const view = this._lineViewMatrix;
+    view.set(camera.matrixWorldInverse.elements);
+
+    // Phase one: which labels are short enough to sit on their line at all.
+    const fits = lineLabelFit(
+      packLineLabelFits(placeable, line, sizeInMeters),
+      view,
+      heightPx,
+      fovRad,
+    );
+
+    const survivors = this._linePlaceSurvivors;
+    survivors.length = 0;
+    for (let i = 0; i < placeable.length; i++) {
+      const slot = placeable[i].slot;
+      if (fits[i] !== 0) {
+        survivors.push(placeable[i]);
+        continue;
+      }
+      // Rejected here, so it never reaches phase two. Its box is left alone:
+      // `collectDeclutterCandidates` skips rejected labels, and the shader
+      // culls them, so nothing reads it.
+      this._labelData.setComponent(slot, LabelRow.PATH, 3, 1);
+      rejected[slot] = 1;
+    }
+    if (survivors.length === 0) return;
+
+    // Phase two: reading direction, curvature and the collision box — all of
+    // which need the path.
     const state = this._enhancer.states();
-    const packed = packLineLabels(this._labels, line, {
-      sizeInMeters: this._material.sizeInMeters ?? true,
+    const packed = packLineLabels(survivors, line, {
+      sizeInMeters,
       maxAngleDeg: this._material.maxAngle ?? 45,
       keepUpright: this._material.keepUpright ?? true,
       center: [
@@ -500,27 +580,17 @@ export class BatchedSdfTextMesh
         this._labelData.getComponent(slot, LabelRow.PATH, 2) !== 0,
     });
 
-    camera.updateMatrixWorld();
     const result = lineLabelPlace(
       packed.labels,
       packed.paths,
       line.stride / 2,
-      new Float64Array(camera.matrixWorldInverse.elements),
+      view,
       heightPx,
-      MathUtils.degToRad(camera.fov),
+      fovRad,
     );
 
-    const count = this._labels.length;
-    if ((this._lineBoxes?.length ?? 0) < count * 4) {
-      this._lineBoxes = new Float64Array(count * 4);
-      this._lineRejected = new Uint8Array(count);
-    }
-    const boxes = this._lineBoxes;
-    const rejected = this._lineRejected;
-    invariant(boxes && rejected, "line placement buffers");
-
-    for (let i = 0; i < count; i++) {
-      const slot = this._labels[i].slot;
+    for (let i = 0; i < survivors.length; i++) {
+      const slot = survivors[i].slot;
       const r = i * LINE_LABEL_RESULT_STRIDE;
       this._labelData.setComponent(slot, LabelRow.PATH, 2, result[r]);
       this._labelData.setComponent(slot, LabelRow.PATH, 3, result[r + 1]);

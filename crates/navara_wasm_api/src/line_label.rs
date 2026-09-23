@@ -45,11 +45,38 @@
 //! | 0      | flip — walk the path backwards |
 //! | 1      | rejected — does not fit, or bends too far |
 //! | 2,3,4,5| minX/maxX/minY/maxY of the *rotated* box, +Y up |
+//!
+//! ## Two phases
+//!
+//! The fit test needs no path samples at all — only the anchor, the label's
+//! width and the length of line under it — while the samples are by far the
+//! largest thing crossing the boundary (32 points per label against 17
+//! scalars). On a dense city view roughly four labels in five are rejected for
+//! fit, so sending every label's path and then discarding most of the work is
+//! the wrong order.
+//!
+//! [`line_label_fit`] therefore runs that test alone over a compact input, and
+//! the caller packs paths only for the labels that survive it. Both phases go
+//! through the same [`em_to_meters`], so they cannot disagree about how long a
+//! label is; [`line_label_place`] repeats the test rather than trusting its
+//! caller, which keeps it correct on its own and lets it be called with every
+//! label when the split is not worth it.
 
 use wasm_bindgen::prelude::*;
 
 /// Number of `f64` values per label in the packed input slice.
 pub const LINE_LABEL_STRIDE: usize = 17;
+
+/// Number of `f64` values per label in [`line_label_fit`]'s packed input.
+///
+/// | offset | field |
+/// |--------|-------|
+/// | 0,1,2  | anchorX/Y/Z — ECEF metres, before the height offset |
+/// | 3      | widthEm — the text block's width, in ems |
+/// | 4      | fontSize — px or metres, per `sizeInMeters` |
+/// | 5      | sizeInMeters — `0.0` = px, non-zero = metres |
+/// | 6      | halfExtentMeters — real line either side of the anchor |
+pub const LINE_LABEL_FIT_STRIDE: usize = 7;
 
 /// Number of `f64` values per label in the packed output slice.
 pub const LINE_LABEL_RESULT_STRIDE: usize = 6;
@@ -89,6 +116,11 @@ pub fn line_label_place(
     height_px: f64,
     fov_rad: f64,
 ) -> Vec<f64> {
+    let cam = CameraView {
+        view,
+        height_px,
+        fov_rad,
+    };
     let n = labels.len() / LINE_LABEL_STRIDE;
     let mut out = vec![0.0; n * LINE_LABEL_RESULT_STRIDE];
     if samples_per_label < 2 {
@@ -99,8 +131,8 @@ pub fn line_label_place(
         let l = &labels[i * LINE_LABEL_STRIDE..(i + 1) * LINE_LABEL_STRIDE];
         let path = &paths[i * samples_per_label * 2..(i + 1) * samples_per_label * 2];
 
-        let meters_per_em = em_to_meters(l, view, height_px, fov_rad);
-        let half_len = l[4] * meters_per_em * 0.5;
+        let (half_len, half_extent, meters_per_em) =
+            fit_lengths((l[0], l[1], l[2]), l[4], l[5], l[6] != 0.0, l[10], &cam);
 
         // Which way the label runs on screen. Taken across the label's whole
         // extent rather than from the tangent at its anchor: on a curving road
@@ -114,8 +146,11 @@ pub fn line_label_place(
             sy = -sy;
         }
 
+        // The fit test is repeated here rather than trusted from phase one, so
+        // this stays correct when called with labels that never went through
+        // it.
         let rejected = half_len <= 0.0
-            || half_len > l[10]
+            || half_len > half_extent
             || exceeds_max_angle(path, samples_per_label, l[9], half_len, meters_per_em, l[7]);
 
         let o = i * LINE_LABEL_RESULT_STRIDE;
@@ -137,18 +172,75 @@ pub fn line_label_place(
 /// size is metric, otherwise `nvr_pxToWorld` at the anchor's view depth —
 /// including its `|viewZ|` approximation of distance, so the CPU and the shader
 /// cannot disagree about how long a label is.
-fn em_to_meters(l: &[f64], view: &[f64], height_px: f64, fov_rad: f64) -> f64 {
-    let font_size = l[5];
-    if l[6] != 0.0 {
+/// The camera terms the sizing arithmetic needs. Grouped because they always
+/// travel together and are identical for every label in a pass.
+struct CameraView<'a> {
+    /// Column-major 4x4 view matrix.
+    view: &'a [f64],
+    height_px: f64,
+    fov_rad: f64,
+}
+
+/// Takes the anchor and sizing explicitly rather than a packed row, because the
+/// two phases pack them at different offsets and this is the one piece of
+/// arithmetic they must agree on exactly.
+fn em_to_meters(
+    anchor: (f64, f64, f64),
+    font_size: f64,
+    size_in_meters: bool,
+    cam: &CameraView<'_>,
+) -> f64 {
+    if size_in_meters {
         return font_size;
     }
-    let vz = view[2] * l[0] + view[6] * l[1] + view[10] * l[2] + view[14];
+    let v = cam.view;
+    let vz = v[2] * anchor.0 + v[6] * anchor.1 + v[10] * anchor.2 + v[14];
     if vz >= 0.0 {
         // Behind the camera: nothing sensible to scale by, and the declutter
         // pass will drop the label anyway.
         return 0.0;
     }
-    font_size * (2.0 * (fov_rad / 2.0).tan() * -vz) / height_px
+    font_size * (2.0 * (cam.fov_rad / 2.0).tan() * -vz) / cam.height_px
+}
+
+/// Half the length of line a label needs, and half the length it has.
+///
+/// The single place the fit test is defined, so [`line_label_fit`] and
+/// [`line_label_place`] cannot drift apart. Returns `(half_len, half_extent)`;
+/// the label fits when `0 < half_len <= half_extent`.
+fn fit_lengths(
+    anchor: (f64, f64, f64),
+    width_em: f64,
+    font_size: f64,
+    size_in_meters: bool,
+    half_extent: f64,
+    cam: &CameraView<'_>,
+) -> (f64, f64, f64) {
+    let meters_per_em = em_to_meters(anchor, font_size, size_in_meters, cam);
+    (width_em * meters_per_em * 0.5, half_extent, meters_per_em)
+}
+
+/// Whether a label is short enough to sit on its line, using nothing but the
+/// anchor, the label's width and the line's extent.
+///
+/// Returns one byte per label: `1` fits, `0` does not. See the module docs for
+/// why this is worth a phase of its own.
+#[wasm_bindgen(js_name = lineLabelFit)]
+pub fn line_label_fit(labels: &[f64], view: &[f64], height_px: f64, fov_rad: f64) -> Vec<u8> {
+    let cam = CameraView {
+        view,
+        height_px,
+        fov_rad,
+    };
+    let n = labels.len() / LINE_LABEL_FIT_STRIDE;
+    let mut out = vec![0u8; n];
+    for i in 0..n {
+        let l = &labels[i * LINE_LABEL_FIT_STRIDE..(i + 1) * LINE_LABEL_FIT_STRIDE];
+        let (half_len, half_extent, _) =
+            fit_lengths((l[0], l[1], l[2]), l[3], l[4], l[5] != 0.0, l[6], &cam);
+        out[i] = u8::from(half_len > 0.0 && half_len <= half_extent);
+    }
+    out
 }
 
 /// The anchor's east and north directions, projected into view space and kept
@@ -643,5 +735,91 @@ mod tests {
         let far = line_label_place(&l, &path, 32, &far_view, 1000.0, 1.0);
         assert_eq!(near[1], 0.0, "close camera: label fits");
         assert_eq!(far[1], 1.0, "far camera: label overruns the road");
+    }
+
+    /// The projection the caller performs to build phase one's input. Kept here
+    /// so the two strides are pinned against each other by a test rather than
+    /// by comment alone.
+    fn fit_row(l: &[f64]) -> [f64; LINE_LABEL_FIT_STRIDE] {
+        [l[0], l[1], l[2], l[4], l[5], l[6], l[10]]
+    }
+
+    #[test]
+    fn the_fit_phase_agrees_with_the_full_placement() {
+        // The whole point of the split is that phase one can reject a label
+        // without its path. That is only safe while the two phases decide
+        // identically, so sweep the axes the test depends on — label width,
+        // road length, camera distance and metric-vs-pixel sizing — against a
+        // straight path, which can never be rejected for angle.
+        let path = straight_path(32, 10.0);
+        for &width_em in &[0.0, 1.0, 4.0, 40.0, 400.0] {
+            for &half_extent in &[0.0, 5.0, 60.0, 1000.0] {
+                for &distance in &[500.0, 20_000.0] {
+                    for &metric in &[0.0, 1.0] {
+                        let mut l = label(std::f64::consts::FRAC_PI_2, true, false);
+                        l[4] = width_em;
+                        l[6] = metric;
+                        l[10] = half_extent;
+                        let view = top_down_view(distance);
+
+                        let placed = line_label_place(&l, &path, 32, &view, 1000.0, 1.0);
+                        let fits = line_label_fit(&fit_row(&l), &view, 1000.0, 1.0);
+
+                        assert_eq!(
+                            fits[0] == 0,
+                            placed[1] == 1.0,
+                            "width {width_em}, extent {half_extent}, distance {distance}, \
+                             metric {metric}: phases disagree",
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_fit_phase_judges_each_label_independently() {
+        // Results come back in input order, one byte each — a caller maps them
+        // back onto a sparse label list by index, so a shifted or shared result
+        // would silently cull the wrong labels.
+        let mut fits_row = fit_row(&label(0.0, true, false));
+        fits_row[6] = 1000.0; // plenty of road
+        let mut overruns_row = fit_row(&label(0.0, true, false));
+        overruns_row[6] = 1.0; // almost none
+
+        let packed: Vec<f64> = fits_row
+            .iter()
+            .chain(overruns_row.iter())
+            .chain(fits_row.iter())
+            .copied()
+            .collect();
+
+        let out = line_label_fit(&packed, &view(), 1000.0, 1.0);
+        assert_eq!(out, vec![1, 0, 1]);
+    }
+
+    #[test]
+    fn a_metric_label_is_judged_without_the_camera() {
+        // `sizeInMeters` labels have a fixed ground length, so phase one must
+        // reach the same verdict however far away the camera is — otherwise
+        // pulling back would drop labels that are still exactly as long.
+        let mut l = fit_row(&label(0.0, true, false));
+        l[5] = 1.0; // sizeInMeters
+        l[6] = 100.0; // 100 m of road either side; the label needs 4 * 10 / 2 = 20 m
+
+        for &distance in &[10.0, 500.0, 1_000_000.0] {
+            let out = line_label_fit(&l, &top_down_view(distance), 1000.0, 1.0);
+            assert_eq!(out[0], 1, "distance {distance}: metric label still fits");
+        }
+    }
+
+    #[test]
+    fn a_label_with_no_width_is_rejected_rather_than_placed() {
+        // A label whose text has not been shaped yet has zero width. It must
+        // not slip through phase one as "fits trivially" — it draws nothing,
+        // and letting it through would have it claim declutter space.
+        let mut l = fit_row(&label(0.0, true, false));
+        l[3] = 0.0;
+        assert_eq!(line_label_fit(&l, &view(), 1000.0, 1.0)[0], 0);
     }
 }

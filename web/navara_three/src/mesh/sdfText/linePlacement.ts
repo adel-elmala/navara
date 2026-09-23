@@ -15,6 +15,9 @@ export const LINE_LABEL_STRIDE = 17;
  *  the rotated box as minX/maxX/minY/maxY. */
 export const LINE_LABEL_RESULT_STRIDE = 6;
 
+/** `f64` values per label in the `lineLabelFit` pre-pass's packed input. */
+export const LINE_LABEL_FIT_STRIDE = 7;
+
 /** Scalars the engine sends per anchor alongside its path samples. */
 export const PATH_META_STRIDE = 2;
 
@@ -53,6 +56,40 @@ export type LinePlacementOptions = {
    *  flip hysteresis. */
   readFlip: (slot: number) => boolean;
 };
+
+/**
+ * Flatten labels into the fit pre-pass's compact input.
+ *
+ * Deliberately carries no path samples: whether a label is short enough to sit
+ * on its line depends only on the anchor, the label's width and the length of
+ * line under it. Those are 7 scalars against the 32 path points the full pass
+ * needs, and on a dense view most labels fail this test — so running it first,
+ * over this array, keeps the large payload off the boundary for the labels that
+ * were never going to be placed.
+ *
+ * Field order must match `LINE_LABEL_FIT_STRIDE`'s table in `line_label.rs`.
+ */
+export function packLineLabelFits(
+  labels: readonly PackableLabel[],
+  path: LinePath,
+  sizeInMeters: boolean,
+): Float64Array {
+  const out = new Float64Array(labels.length * LINE_LABEL_FIT_STRIDE);
+  const meta = path.meta;
+  const metric = sizeInMeters ? 1 : 0;
+  for (let i = 0; i < labels.length; i++) {
+    const label = labels[i];
+    const o = i * LINE_LABEL_FIT_STRIDE;
+    out[o] = label.anchor[0];
+    out[o + 1] = label.anchor[1];
+    out[o + 2] = label.anchor[2];
+    out[o + 3] = label.widthEm;
+    out[o + 4] = label.fontSize;
+    out[o + 5] = metric;
+    out[o + 6] = meta?.[label.instanceIndex * PATH_META_STRIDE + 1] ?? 0;
+  }
+  return out;
+}
 
 /**
  * Flatten labels and their path samples into the kernel's two input arrays.
