@@ -1,5 +1,6 @@
 import ThreeView, {
   Color,
+  type Facing,
   fetchFontFamilyFromCss,
   type Layer,
 } from "@navaramap/three";
@@ -15,7 +16,9 @@ import {
 } from "../../../helpers/fonts";
 
 /**
- * Street-name labels repeated along road centerlines, bending with the road.
+ * Street-name labels repeated along road centerlines, bending with the road,
+ * and direction arrows (sprites) spaced along the same roads, turned to their
+ * tangent.
  *
  * The data is OpenMapTiles-schema: `transportation` carries road geometry and
  * `transportation_name` carries `name`/`class` on linestrings merged by name.
@@ -59,8 +62,20 @@ const LABEL_FONT = "RoadLabels";
 const LABEL_WEIGHT = 700;
 const LABEL_WIDTH = 87.5;
 
+/** An arrow pointing up, i.e. north once laid flat and turned to the line. */
+const ARROW =
+  "data:image/svg+xml;utf8," +
+  encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+       <polygon points="32,4 58,58 32,44 6,58" fill="#ffd166" stroke="#111318" stroke-width="5"/>
+     </svg>`,
+  );
+
+type Placement = "point" | "line" | "line-center";
+
 const params = {
-  placement: "line" as "point" | "line" | "line-center",
+  showLabels: true,
+  placement: "line" as Placement,
   spacing: 250,
   maxAngle: 20,
   keepUpright: true,
@@ -68,6 +83,22 @@ const params = {
   size: 15,
   sizeInMeters: false,
   outlineWidth: 6,
+  declutter: true,
+};
+
+const spriteParams = {
+  showSprites: true,
+  placement: "line" as Placement,
+  spacing: 150,
+  rotateToLine: true,
+  // Laid flat and frozen in the anchor's east-north-up frame, `rotation` is a
+  // compass bearing — which is what the line's tangent is added to.
+  facing: "flat" as Facing,
+  rotateWithCamera: false,
+  rotation: 0,
+  size: 18,
+  sizeInMeters: false,
+  oneWayOnly: false,
   declutter: true,
 };
 
@@ -150,7 +181,11 @@ export const run = async (view: ThreeView) => {
     );
   });
 
-  addControls(view, labelsLayerFactory(view, planet));
+  addControls(
+    view,
+    labelsLayerFactory(view, planet),
+    spritesLayerFactory(view, planet),
+  );
 
   // The basemap credit is registered by TileJsonPlugin from the document, so
   // only the sources added by hand are listed here.
@@ -218,14 +253,77 @@ const labelsLayerFactory =
     return labels;
   };
 
-const addControls = (view: ThreeView, addLabels: () => Layer) => {
-  const pane = new Pane({ title: "Line Labels" });
-  let labels = addLabels();
+/**
+ * Build the sprite layer from the current `spriteParams`.
+ *
+ * Sprites sit on the road geometry itself (`transportation`), not on the
+ * merged name lines, so every road segment gets its own run of arrows.
+ * `rotateToLine` adds each anchor's tangent bearing to `rotation`; it decides
+ * whether the geometry carries a per-anchor bearing at all, so like
+ * `placement` and `spacing` it only takes effect on a rebuild.
+ */
+const spritesLayerFactory =
+  (view: ThreeView, source: ReturnType<ThreeView["addSource"]>) =>
+  (): Layer => {
+    const sprites = view.addLayer({
+      type: "vector",
+      source,
+      sourceLayers: ["transportation"],
+      billboard: {
+        url: ARROW,
+        geometryTypes: ["line"],
+        placement: spriteParams.placement,
+        spacing: spriteParams.spacing,
+        rotateToLine: spriteParams.rotateToLine,
+        billboardFacing: spriteParams.facing,
+        rotateWithCamera: spriteParams.rotateWithCamera,
+        rotation: spriteParams.rotation,
+        size: spriteParams.size,
+        sizeInMeters: spriteParams.sizeInMeters,
+        clampToGround: true,
+        transparent: true,
+        declutter: spriteParams.declutter,
+      },
+    });
+
+    sprites.on("featureUpdated", ({ evaluator }) => {
+      evaluator.evaluate(
+        ({ properties }) => {
+          const drawn =
+            ROAD_WIDTH[properties?.["class"] as string] !== undefined;
+          // OpenMapTiles marks a one-way road `1` when traffic follows the
+          // line's direction and `-1` when it runs against it.
+          const oneway = properties?.["oneway"] as number | undefined;
+          const show = drawn && (!spriteParams.oneWayOnly || !!oneway);
+          return {
+            show,
+            // Returned every time: a per-feature value persists until
+            // overwritten, so this is also what carries a slider change.
+            rotation: spriteParams.rotation + (oneway === -1 ? 180 : 0),
+          };
+        },
+        { filters: ["class", "oneway"] },
+      );
+    });
+
+    return sprites;
+  };
+
+const addControls = (
+  view: ThreeView,
+  addLabels: () => Layer,
+  addSprites: () => Layer,
+) => {
+  const pane = new Pane({ title: "Line Labels & Sprites" });
+  let labels: Layer | undefined = params.showLabels ? addLabels() : undefined;
+  let sprites: Layer | undefined = spriteParams.showSprites
+    ? addSprites()
+    : undefined;
 
   // Style the labels already on screen. Everything bound to this takes effect
   // on the next frame.
   const restyle = () => {
-    labels.update({
+    labels?.update({
       text: {
         maxAngle: params.maxAngle,
         keepUpright: params.keepUpright,
@@ -248,12 +346,15 @@ const addControls = (view: ThreeView, addLabels: () => Layer) => {
   // not: both are re-decided every placement pass, because they depend on the
   // camera. They stay on `restyle`.
   const rebuild = () => {
-    view.deleteLayerById(labels.id);
-    labels = addLabels();
+    if (labels) view.deleteLayerById(labels.id);
+    labels = params.showLabels ? addLabels() : undefined;
     view.forceUpdate();
   };
 
-  const placement = pane.addFolder({ title: "Placement" });
+  const labelsFolder = pane.addFolder({ title: "Labels" });
+  labelsFolder.addBinding(params, "showLabels").on("change", rebuild);
+
+  const placement = labelsFolder.addFolder({ title: "Placement" });
   placement
     .addBinding(params, "placement", {
       options: {
@@ -274,7 +375,7 @@ const addControls = (view: ThreeView, addLabels: () => Layer) => {
     .addBinding(params, "lineOffset", { min: -30, max: 30, step: 1 })
     .on("change", restyle);
 
-  const style = pane.addFolder({ title: "Style" });
+  const style = labelsFolder.addFolder({ title: "Style" });
   style
     .addBinding(params, "size", { min: 6, max: 48, step: 1 })
     .on("change", restyle);
@@ -283,4 +384,70 @@ const addControls = (view: ThreeView, addLabels: () => Layer) => {
     .addBinding(params, "outlineWidth", { min: 0, max: 6, step: 0.5 })
     .on("change", restyle);
   style.addBinding(params, "declutter").on("change", restyle);
+
+  // Same split as the labels: anchor positions and bearings are baked into the
+  // tile geometry, everything else is material state.
+  // `rotation` is left to the evaluator, which `update` re-runs: it is per
+  // feature here (one-way roads drawn against their line flip by 180°).
+  const restyleSprites = () => {
+    sprites?.update({
+      billboard: {
+        billboardFacing: spriteParams.facing,
+        rotateWithCamera: spriteParams.rotateWithCamera,
+        size: spriteParams.size,
+        sizeInMeters: spriteParams.sizeInMeters,
+        declutter: spriteParams.declutter,
+      },
+    });
+    view.forceUpdate();
+  };
+
+  const rebuildSprites = () => {
+    if (sprites) view.deleteLayerById(sprites.id);
+    sprites = spriteParams.showSprites ? addSprites() : undefined;
+    view.forceUpdate();
+  };
+
+  const spritesFolder = pane.addFolder({ title: "Sprites" });
+  spritesFolder
+    .addBinding(spriteParams, "showSprites")
+    .on("change", rebuildSprites);
+  spritesFolder
+    .addBinding(spriteParams, "placement", {
+      options: {
+        "along the line": "line",
+        "line midpoint": "line-center",
+        "per vertex": "point",
+      },
+    })
+    .on("change", rebuildSprites);
+  spritesFolder
+    .addBinding(spriteParams, "spacing", { min: 30, max: 800, step: 10 })
+    .on("change", rebuildSprites);
+  spritesFolder
+    .addBinding(spriteParams, "rotateToLine")
+    .on("change", rebuildSprites);
+  spritesFolder
+    .addBinding(spriteParams, "oneWayOnly")
+    .on("change", rebuildSprites);
+  spritesFolder
+    .addBinding(spriteParams, "facing", {
+      options: { upright: "upright", flat: "flat" },
+    })
+    .on("change", restyleSprites);
+  spritesFolder
+    .addBinding(spriteParams, "rotateWithCamera")
+    .on("change", restyleSprites);
+  spritesFolder
+    .addBinding(spriteParams, "rotation", { min: -180, max: 180, step: 1 })
+    .on("change", restyleSprites);
+  spritesFolder
+    .addBinding(spriteParams, "size", { min: 6, max: 64, step: 1 })
+    .on("change", restyleSprites);
+  spritesFolder
+    .addBinding(spriteParams, "sizeInMeters")
+    .on("change", restyleSprites);
+  spritesFolder
+    .addBinding(spriteParams, "declutter")
+    .on("change", restyleSprites);
 };
