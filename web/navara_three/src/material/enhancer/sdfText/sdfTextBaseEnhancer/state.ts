@@ -36,6 +36,7 @@ export const DEFAULT_BASE_PROPS: Required<
   emissiveColor: 0,
   emissiveIntensity: 0,
   depthTest: true,
+  backfaceCulling: false,
   transparent: true,
 };
 
@@ -65,6 +66,7 @@ export const DEFAULT_BASE_STATE: SdfTextBaseState = {
   emissiveColor: DEFAULT_BASE_PROPS.emissiveColor,
   emissiveIntensity: DEFAULT_BASE_PROPS.emissiveIntensity,
   depthTest: DEFAULT_BASE_PROPS.depthTest,
+  backfaceCulling: DEFAULT_BASE_PROPS.backfaceCulling,
   transparent: DEFAULT_BASE_PROPS.transparent,
 };
 
@@ -120,6 +122,7 @@ export const updateState = (
     emissiveIntensity:
       props.emissiveIntensity ?? currentState.emissiveIntensity,
     depthTest: props.depthTest ?? currentState.depthTest,
+    backfaceCulling: props.backfaceCulling ?? currentState.backfaceCulling,
     transparent: props.transparent ?? currentState.transparent,
   };
 };
