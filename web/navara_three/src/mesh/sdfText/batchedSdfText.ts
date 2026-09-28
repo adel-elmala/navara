@@ -1461,6 +1461,13 @@ export class BatchedSdfTextMesh
 
     this._enhancer.update({
       base: {
+        // `useRTE` / `useMsdf` / `linePlacement` / `pathSamples` are absent on
+        // purpose: they pick the shader program and are driven by the geometry,
+        // so they are settled at mount and on re-init, not by a style update.
+        // Everything else the material owns belongs here — a field left out
+        // keeps its mounted value forever, since the state merge reads
+        // `props.x ?? currentState.x`.
+        lineOffset: material.lineOffset ?? 0,
         center: material.center
           ? [material.center.x, material.center.y]
           : [0.5, 0.0],

@@ -7,7 +7,7 @@ import { DefaultPlugin } from "@navaramap/three-default-plugin";
 import { TileJsonPlugin } from "@navaramap/three-plugins";
 import { Pane } from "tweakpane";
 
-import { VECTOR_DATASETS, TILE_DATASETS } from "../../../helpers/constants";
+import { VECTOR_DATASETS } from "../../../helpers/constants";
 import {
   googleFontsCssUrl,
   NOTO_SANS_ATTRIBUTION,
@@ -150,51 +150,7 @@ export const run = async (view: ThreeView) => {
     );
   });
 
-  // The labels themselves. `geometryTypes: ["line"]` opts the text appearance
-  // into line geometry; `placement` then decides whether that means one label
-  // per vertex (the historical behaviour) or labels spaced along the line.
-  const labels = view.addLayer({
-    type: "vector",
-    source: planet,
-    sourceLayers: ["transportation_name"],
-    text: {
-      font: LABEL_FONT,
-      geometryTypes: ["line"],
-      placement: params.placement,
-      spacing: params.spacing,
-      maxAngle: params.maxAngle,
-      keepUpright: params.keepUpright,
-      lineOffset: params.lineOffset,
-      // Line placement always lays the label in the ground plane and takes its
-      // direction from the line, so `rotateWithCamera` has no effect here.
-      textFacing: "flat",
-      size: params.size,
-      sizeInMeters: params.sizeInMeters,
-      clampToGround: true,
-      color: new Color().setStyle("#ffffff"),
-      outlineColor: new Color().setStyle("#111318"),
-      outlineWidth: params.outlineWidth,
-      declutter: params.declutter,
-    },
-  });
-
-  labels.on("featureUpdated", ({ evaluator }) => {
-    evaluator.evaluate(
-      ({ properties }) => {
-        const name = properties?.["name"] as string | undefined;
-        if (!name) return { show: false, text: "" };
-        return {
-          text: name,
-          show: true,
-          declutterPriority:
-            LABEL_PRIORITY[properties?.["class"] as string] ?? 0,
-        };
-      },
-      { filters: ["name", "class"] },
-    );
-  });
-
-  addControls(view, labels);
+  addControls(view, labelsLayerFactory(view, planet));
 
   // The basemap credit is registered by TileJsonPlugin from the document, so
   // only the sources added by hand are listed here.
@@ -204,14 +160,73 @@ export const run = async (view: ThreeView) => {
   ]);
 };
 
-const addControls = (view: ThreeView, labels: Layer) => {
-  const pane = new Pane({ title: "Line Labels" });
-
-  const update = () => {
-    labels.update({
+/**
+ * Build the label layer from the current `params`.
+ *
+ * `geometryTypes: ["line"]` opts the text appearance into line geometry;
+ * `placement` then decides whether that means one label per vertex (the
+ * historical behaviour) or labels spaced along the line.
+ *
+ * Returned as a factory rather than a layer so the panel can rebuild it: the
+ * options that decide where the anchors go are read when a tile is parsed, and
+ * re-parsing is what a rebuild buys.
+ */
+const labelsLayerFactory =
+  (view: ThreeView, source: ReturnType<ThreeView["addSource"]>) =>
+  (): Layer => {
+    const labels = view.addLayer({
+      type: "vector",
+      source,
+      sourceLayers: ["transportation_name"],
       text: {
+        font: LABEL_FONT,
+        geometryTypes: ["line"],
         placement: params.placement,
         spacing: params.spacing,
+        maxAngle: params.maxAngle,
+        keepUpright: params.keepUpright,
+        lineOffset: params.lineOffset,
+        // Line placement always lays the label in the ground plane and takes its
+        // direction from the line, so `rotateWithCamera` has no effect here.
+        textFacing: "flat",
+        size: params.size,
+        sizeInMeters: params.sizeInMeters,
+        clampToGround: true,
+        color: new Color().setStyle("#ffffff"),
+        outlineColor: new Color().setStyle("#111318"),
+        outlineWidth: params.outlineWidth,
+        declutter: params.declutter,
+      },
+    });
+
+    labels.on("featureUpdated", ({ evaluator }) => {
+      evaluator.evaluate(
+        ({ properties }) => {
+          const name = properties?.["name"] as string | undefined;
+          if (!name) return { show: false, text: "" };
+          return {
+            text: name,
+            show: true,
+            declutterPriority:
+              LABEL_PRIORITY[properties?.["class"] as string] ?? 0,
+          };
+        },
+        { filters: ["name", "class"] },
+      );
+    });
+
+    return labels;
+  };
+
+const addControls = (view: ThreeView, addLabels: () => Layer) => {
+  const pane = new Pane({ title: "Line Labels" });
+  let labels = addLabels();
+
+  // Style the labels already on screen. Everything bound to this takes effect
+  // on the next frame.
+  const restyle = () => {
+    labels.update({
+      text: {
         maxAngle: params.maxAngle,
         keepUpright: params.keepUpright,
         lineOffset: params.lineOffset,
@@ -224,6 +239,20 @@ const addControls = (view: ThreeView, labels: Layer) => {
     view.forceUpdate();
   };
 
+  // `placement` and `spacing` decide *where the anchors are*, which is resolved
+  // once when a tile is parsed and then baked into its geometry — a style
+  // update cannot move them, and the tiles already on screen keep the anchors
+  // they were built with. Rebuilding the layer is what re-parses them.
+  //
+  // `maxAngle` and `keepUpright` look like they belong in this group but do
+  // not: both are re-decided every placement pass, because they depend on the
+  // camera. They stay on `restyle`.
+  const rebuild = () => {
+    view.deleteLayerById(labels.id);
+    labels = addLabels();
+    view.forceUpdate();
+  };
+
   const placement = pane.addFolder({ title: "Placement" });
   placement
     .addBinding(params, "placement", {
@@ -233,27 +262,25 @@ const addControls = (view: ThreeView, labels: Layer) => {
         "per vertex": "point",
       },
     })
-    .on("change", update);
-  // Spacing and maxAngle are resolved when a tile is parsed, so changing them
-  // only affects tiles fetched afterwards.
+    .on("change", rebuild);
   placement
-    .addBinding(params, "spacing", { min: 60, max: 800, step: 10 })
-    .on("change", update);
+    .addBinding(params, "spacing", { min: 30, max: 800, step: 10 })
+    .on("change", rebuild);
   placement
     .addBinding(params, "maxAngle", { min: 5, max: 180, step: 5 })
-    .on("change", update);
-  placement.addBinding(params, "keepUpright").on("change", update);
+    .on("change", restyle);
+  placement.addBinding(params, "keepUpright").on("change", restyle);
   placement
     .addBinding(params, "lineOffset", { min: -30, max: 30, step: 1 })
-    .on("change", update);
+    .on("change", restyle);
 
   const style = pane.addFolder({ title: "Style" });
   style
     .addBinding(params, "size", { min: 6, max: 48, step: 1 })
-    .on("change", update);
-  style.addBinding(params, "sizeInMeters").on("change", update);
+    .on("change", restyle);
+  style.addBinding(params, "sizeInMeters").on("change", restyle);
   style
     .addBinding(params, "outlineWidth", { min: 0, max: 6, step: 0.5 })
-    .on("change", update);
-  style.addBinding(params, "declutter").on("change", update);
+    .on("change", restyle);
+  style.addBinding(params, "declutter").on("change", restyle);
 };

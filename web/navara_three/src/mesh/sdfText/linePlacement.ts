@@ -21,6 +21,37 @@ export const LINE_LABEL_FIT_STRIDE = 7;
 /** Scalars the engine sends per anchor alongside its path samples. */
 export const PATH_META_STRIDE = 2;
 
+/**
+ * How much line a label may occupy either side of its anchor, in metres.
+ *
+ * The smaller of two limits, and both matter:
+ *
+ * - the **real line** left before its end, which is what "the label would
+ *   overrun its road" means; and
+ * - the **span the engine actually sampled** for this anchor, which is
+ *   `spacing` either side — `parse.rs` samples `PATH_SPAN_SPACINGS * spacing`
+ *   of line across `PATH_SAMPLES` points.
+ *
+ * Only the first used to be checked. A label longer than the sampled span
+ * still draws: the vertex shader clamps its path lookup to the last sample, so
+ * everything past the span piles onto that one point and the far words land on
+ * top of the near ones. It shows up as soon as `spacing` is small enough that
+ * the span is shorter than a label — on straight roads as much as curved ones,
+ * which is what distinguishes it from a curvature problem.
+ *
+ * Rejecting instead is also the right cartography: a label longer than the gap
+ * to its own next repeat would collide with it anyway.
+ */
+function usableHalfExtentMeters(path: LinePath, instanceIndex: number): number {
+  const meta = path.meta;
+  const o = instanceIndex * PATH_META_STRIDE;
+  const stepMeters = meta?.[o] ?? 0;
+  const realLine = meta?.[o + 1] ?? 0;
+  // Mirrors `halfSpan` in sdfText.vert.glsl; the two must move together.
+  const sampledSpan = 0.5 * (path.stride / 2 - 1) * stepMeters;
+  return Math.min(realLine, sampledSpan);
+}
+
 /** The subset of a label record this packing reads. */
 export type PackableLabel = {
   slot: number;
@@ -75,7 +106,6 @@ export function packLineLabelFits(
   sizeInMeters: boolean,
 ): Float64Array {
   const out = new Float64Array(labels.length * LINE_LABEL_FIT_STRIDE);
-  const meta = path.meta;
   const metric = sizeInMeters ? 1 : 0;
   for (let i = 0; i < labels.length; i++) {
     const label = labels[i];
@@ -86,7 +116,7 @@ export function packLineLabelFits(
     out[o + 3] = label.widthEm;
     out[o + 4] = label.fontSize;
     out[o + 5] = metric;
-    out[o + 6] = meta?.[label.instanceIndex * PATH_META_STRIDE + 1] ?? 0;
+    out[o + 6] = usableHalfExtentMeters(path, label.instanceIndex);
   }
   return out;
 }
@@ -123,7 +153,7 @@ export function packLineLabels(
     out[o + 7] = maxAngleRad;
     out[o + 8] = options.keepUpright ? 1 : 0;
     out[o + 9] = meta?.[label.instanceIndex * PATH_META_STRIDE] ?? 0;
-    out[o + 10] = meta?.[label.instanceIndex * PATH_META_STRIDE + 1] ?? 0;
+    out[o + 10] = usableHalfExtentMeters(path, label.instanceIndex);
     out[o + 11] = MathUtils.degToRad(bearings?.[label.instanceIndex] ?? 0);
     out[o + 12] = options.readFlip(label.slot) ? 1 : 0;
 
