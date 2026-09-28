@@ -5,13 +5,18 @@ import {
   type EffectOptions,
 } from "@navaramap/three";
 import {
-  AerialPerspectiveEffect,
   type AtmosphereOverlay,
   type AtmosphereShadow,
   type AtmosphereShadowLength,
   type PrecomputedTextures,
 } from "@takram/three-atmosphere";
 import { type PerspectiveCamera, Texture } from "three";
+
+import {
+  AerialPerspectiveLightingEffect,
+  DEFAULT_AERIAL_PERSPECTIVE_LIGHTING_OPTIONS,
+  type AerialPerspectiveLightingOptions,
+} from "./lightingTerms";
 
 export type AerialPerspectiveOptions = {
   inscatter?: boolean;
@@ -26,7 +31,8 @@ export type AerialPerspectiveOptions = {
   moon?: boolean;
   albedoScale?: number;
   useNormalBuffer?: boolean;
-} & EffectOptions;
+} & AerialPerspectiveLightingOptions &
+  EffectOptions;
 
 export const DEFAULT_AERIAL_PERSPECTIVE_OPTIONS: Required<AerialPerspectiveOptions> =
   {
@@ -39,11 +45,12 @@ export const DEFAULT_AERIAL_PERSPECTIVE_OPTIONS: Required<AerialPerspectiveOptio
     moon: true,
     useNormalBuffer: true,
     albedoScale: 2 / Math.PI,
+    ...DEFAULT_AERIAL_PERSPECTIVE_LIGHTING_OPTIONS,
   };
 
 export class AerialPerspective extends Pass<
   CustomEffectPass,
-  AerialPerspectiveEffect,
+  AerialPerspectiveLightingEffect,
   AerialPerspectiveOptions
 > {
   atmosphere: Atmosphere;
@@ -57,11 +64,13 @@ export class AerialPerspective extends Pass<
     normalBuffer: Texture | null,
     _options: AerialPerspectiveOptions = {},
   ) {
-    const effect = new AerialPerspectiveEffect(camera, {
-      octEncodedNormal: true,
-    });
-    const pass = new CustomEffectPass(camera, effect);
     const options = { ...DEFAULT_AERIAL_PERSPECTIVE_OPTIONS, ..._options };
+    const effect = new AerialPerspectiveLightingEffect(
+      camera,
+      { octEncodedNormal: true },
+      options,
+    );
+    const pass = new CustomEffectPass(camera, effect);
     super(pass, effect, options);
 
     this.atmosphere = atmosphere;

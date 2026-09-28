@@ -15,6 +15,8 @@
  * existing `createReplacer` machinery in mesh/tile.ts.
  */
 
+import { GBUFFER_PHONG_ROUGHNESS } from "../gbufferLayout";
+
 export type TileShaderFeatures = {
   /** Atlas has a hillshade normal that should override the default normal. */
   hasHillshade: boolean;
@@ -27,8 +29,15 @@ export type TileShaderFeatures = {
   hasWatermask: boolean;
 };
 
+/** Water's reflectance at normal incidence, i.e. `IorToFresnel0(1.333)`. */
 export const WATERMASK_OCEAN_REFLECTIVITY = 0.02;
-export const WATERMASK_OCEAN_ROUGHNESS = 0.2;
+
+/**
+ * Carries the wave slopes, since nothing puts waves in the watermask normal:
+ * Cox-Munk mean square slope for a gentle breeze, `roughness = mss^(1/4)`.
+ * ref: https://oceanopticsbook.info/view/surfaces/cox-munk-sea-surface-slope-statistics
+ */
+export const WATERMASK_OCEAN_ROUGHNESS = 0.4;
 
 /**
  * Goes after `#include <common>` in the fragment shader. Declares the three
@@ -89,8 +98,8 @@ export function generateTileMapFragment(
   // Watermask ocean pixels: `useWater` fired from the tile-wide watermask but
   // the winning slot (raster imagery, or none on open ocean) carries zeroed
   // reflectivity/roughness – override them with the default ocean appearance
-  // so SSR and envmap reflections apply to the sea automatically. Mirrors the
-  // shininess/specularStrength fallback above. A texturized winner keeps its
+  // so the deferred specular term, SSR and the envmap apply to the sea. Mirrors
+  // the shininess/specularStrength fallback above. A texturized winner keeps its
   // own params: a vector layer drawn over water should not turn reflective.
   const watermaskReflectivityFallback = features.hasWatermask
     ? `
@@ -155,7 +164,7 @@ export function generateTileMapFragment(
   // arrays is well-defined in GLSL ES 3.00. Fallbacks keep the default
   // lighting reasonable for fully-transparent pixels.
   float tileReflectivity      = hasWinner ? uReflectivities[winIdx]      : 0.0;
-  float tileRoughness         = hasWinner ? uRoughnesses[winIdx]         : 0.0;
+  float tileRoughness         = hasWinner ? uRoughnesses[winIdx]         : ${GBUFFER_PHONG_ROUGHNESS.toFixed(4)};
 
   // TODO: Support water material
   float waterScaleNormal      = hasWinner ? uWaterScaleNormals[winIdx]   : 0.0;

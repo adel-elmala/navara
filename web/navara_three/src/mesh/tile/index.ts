@@ -44,6 +44,7 @@ import type { EventContext, TileHandler } from "../../event/context";
 import {
   GBUFFER_EFFECT_WRITE_BUILTIN,
   GBUFFER_NORMAL_WRITE_BASIC,
+  GBUFFER_PHONG_ROUGHNESS,
   generateTileCommonInjection,
   generateTileMapFragment,
   generateTileNormalFragmentMaps,
@@ -1106,7 +1107,7 @@ ${generateTileCommonInjection(maxTextures)}
     }
     if (!m.userData.roughnesses) {
       m.userData.roughnesses = {
-        value: [...new Array(maxTextures)].fill(0),
+        value: [...new Array(maxTextures)].fill(GBUFFER_PHONG_ROUGHNESS),
       };
     }
     if (!m.userData.waters) {
