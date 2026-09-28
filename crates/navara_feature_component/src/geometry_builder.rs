@@ -7,6 +7,7 @@ use navara_geometry::{Hierarchy, WindingOrder};
 use navara_layer::LayerId;
 use navara_material::Appearance;
 use navara_math::{Transform, Vec3};
+use navara_parser::line_placement::AnchorPath;
 
 use crate::{
     BatchedFeatureMarker,
@@ -99,7 +100,7 @@ pub struct GeometryGroup {
 ///
 /// // Per feature:
 /// groups.begin_feature();
-/// groups.track_point_rte(kind, coords, crs, high, low, global_batch_id);
+/// groups.track_point_rte(kind, coords, crs, high, low, global_batch_id, None, None);
 ///
 /// // After all features:
 /// let entities = groups.finalize(commands, buf, appearances, layer_id, true);
@@ -169,7 +170,10 @@ impl GeometryGroups {
 
     /// Accumulate a point with RTE-encoded position.
     /// `high`/`low`: pre-computed `EncodedVec3` f32 triplets.
+    /// `bearing` and `path` are set only for anchors placed along a line; a
+    /// group takes them for every point or for none.
     /// Returns `(batch_index, commit_batch_id)`.
+    #[allow(clippy::too_many_arguments)]
     pub fn track_point_rte(
         &mut self,
         kind: GeometryAppearanceKind,
@@ -178,6 +182,8 @@ impl GeometryGroups {
         high: [f32; 3],
         low: [f32; 3],
         global_batch_id: u32,
+        bearing: Option<f32>,
+        path: Option<AnchorPath>,
     ) -> (u32, Option<u32>) {
         let group = self.groups.iter_mut().find(|g| g.kind == kind).unwrap();
         let (batch_index, commit_batch_id) = Self::advance_feature(group, global_batch_id);
@@ -190,6 +196,13 @@ impl GeometryGroups {
         geom.batch_indices.push(batch_index);
         geom.batch_ids.push(global_batch_id as f32);
         geom.encoded.push_rte(high, low);
+        if let Some(bearing) = bearing {
+            geom.bearings.push(bearing);
+        }
+        if let Some(path) = path {
+            geom.path_samples.extend_from_slice(&path.samples);
+            geom.path_meta.extend_from_slice(&path.meta);
+        }
         (batch_index, commit_batch_id)
     }
 
@@ -569,6 +582,8 @@ mod test {
             [0.; 3],
             [0.; 3],
             100,
+            None,
+            None,
         );
         assert_eq!(idx0, 0);
         assert_eq!(commit0, Some(42));
@@ -581,6 +596,8 @@ mod test {
             [0.; 3],
             [0.; 3],
             101,
+            None,
+            None,
         );
         assert_eq!(idx1, 1);
         assert_eq!(commit1, Some(42));
@@ -613,6 +630,8 @@ mod test {
             [0.; 3],
             [0.; 3],
             10,
+            None,
+            None,
         );
         assert_eq!(idx0, 0);
         assert_eq!(commit0, Some(1));
@@ -624,6 +643,8 @@ mod test {
             [0.; 3],
             [0.; 3],
             11,
+            None,
+            None,
         );
         assert_eq!(idx0b, 0); // same batch index for same feature
         assert!(commit0b.is_none());
@@ -637,6 +658,8 @@ mod test {
             [0.; 3],
             [0.; 3],
             12,
+            None,
+            None,
         );
         assert_eq!(idx1, 1);
 
@@ -705,6 +728,8 @@ mod test {
             [1.0, 2.0, 3.0],
             [0.1, 0.2, 0.3],
             100,
+            None,
+            None,
         );
 
         match &groups.groups[0].accumulated {
@@ -845,6 +870,8 @@ mod test {
                     [0.; 3],
                     [0.; 3],
                     100,
+                    None,
+                    None,
                 );
 
                 groups.begin_feature();
@@ -855,6 +882,8 @@ mod test {
                     [0.; 3],
                     [0.; 3],
                     101,
+                    None,
+                    None,
                 );
 
                 let appearances = vec![Appearance::Point(PointMaterial::default())];
@@ -904,6 +933,8 @@ mod test {
                         [0.; 3],
                         [0.; 3],
                         id,
+                        None,
+                        None,
                     );
                 }
                 groups.begin_feature();
@@ -914,6 +945,8 @@ mod test {
                     [0.; 3],
                     [0.; 3],
                     102,
+                    None,
+                    None,
                 );
 
                 let appearances = vec![Appearance::Point(PointMaterial::default())];
@@ -962,6 +995,8 @@ mod test {
                         [0.; 3],
                         [0.; 3],
                         id,
+                        None,
+                        None,
                     );
                 }
                 let appearances = vec![Appearance::Point(PointMaterial::default())];

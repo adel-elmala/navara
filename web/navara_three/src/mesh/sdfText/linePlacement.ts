@@ -29,7 +29,7 @@ export const PATH_META_STRIDE = 2;
  * - the **real line** left before its end, which is what "the label would
  *   overrun its road" means; and
  * - the **span the engine actually sampled** for this anchor, which is
- *   `spacing` either side — `parse.rs` samples `PATH_SPAN_SPACINGS * spacing`
+ *   `spacing` either side — `line_placement.rs` samples `PATH_SPAN_SPACINGS * spacing`
  *   of line across `PATH_SAMPLES` points.
  *
  * Only the first used to be checked. A label longer than the sampled span

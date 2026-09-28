@@ -42,27 +42,7 @@ impl LayerParseKind {
     }
 }
 
-/// How an emitter derives anchors from line geometry.
-///
-/// Mirrors `navara_material::Placement` but is ECS-free, for the same reason
-/// [`LayerParseKind`] mirrors `GeometryAppearanceKind`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum PointPlacement {
-    /// One anchor per source vertex.
-    #[default]
-    Point,
-    /// Anchors repeated along the line at `spacing_px` intervals.
-    Line,
-    /// A single anchor at the line's arc-length midpoint.
-    LineCenter,
-}
-
-impl PointPlacement {
-    /// Whether this mode resamples the line rather than emitting per vertex.
-    pub fn is_along_line(self) -> bool {
-        matches!(self, Self::Line | Self::LineCenter)
-    }
-}
+pub use crate::line_placement::PointPlacement;
 
 /// A point-like emitter derived from a `Point`/`Billboard`/`Text` appearance.
 ///

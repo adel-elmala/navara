@@ -208,8 +208,9 @@ pub struct PointMaterial {
     /// How anchors are derived from line geometry. See
     /// [`TextMaterial::placement`]. Default [`Placement::Point`].
     pub placement: Placement,
-    /// Distance between repeated anchors along a line, in pixels at the tile's
-    /// own zoom. See [`TextMaterial::spacing`]. Default `250.0`.
+    /// Distance between repeated anchors along a line: pixels at the tile's
+    /// own zoom for vector tiles, metres for GeoJSON. See
+    /// [`TextMaterial::spacing`]. Default `250.0`.
     pub spacing: f32,
     /// Add the line's tangent bearing at the anchor to `rotation`, so the
     /// sprite turns with the line it sits on. Only used by
@@ -303,8 +304,9 @@ pub struct BillboardMaterial {
     /// How anchors are derived from line geometry. See
     /// [`TextMaterial::placement`]. Default [`Placement::Point`].
     pub placement: Placement,
-    /// Distance between repeated anchors along a line, in pixels at the tile's
-    /// own zoom. See [`TextMaterial::spacing`]. Default `250.0`.
+    /// Distance between repeated anchors along a line: pixels at the tile's
+    /// own zoom for vector tiles, metres for GeoJSON. See
+    /// [`TextMaterial::spacing`]. Default `250.0`.
     pub spacing: f32,
     /// Add the line's tangent bearing at the anchor to `rotation`, so the
     /// sprite turns with the line it sits on. Only used by
@@ -419,8 +421,11 @@ pub struct TextMaterial {
     /// Distance between repeated anchors along a line, in pixels at the tile's
     /// own zoom. Because tiles are re-requested as the camera zooms, a fixed
     /// value yields more repeats per line the further in you go, at roughly
-    /// constant on-screen spacing. Only used by [`Placement::Line`]. Default
-    /// `250.0`, matching MapLibre's `symbol-spacing`.
+    /// constant on-screen spacing. An untiled GeoJSON source has no zoom, so
+    /// there it is metres along the ground and the anchors stay put. Also sets
+    /// the length of line sampled under each label (twice the spacing), so a
+    /// label longer than that is dropped. Only used by [`Placement::Line`].
+    /// Default `250.0`, matching MapLibre's `symbol-spacing`.
     pub spacing: f32,
     /// Largest cumulative turn, in degrees, the label may bend through before
     /// it is dropped as unreadable. Measured over a sliding window along the

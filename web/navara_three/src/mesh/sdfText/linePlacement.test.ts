@@ -11,7 +11,7 @@ import {
   takeLinePath,
 } from "./linePlacement";
 
-/** 32 samples per anchor, matching `PATH_SAMPLES` in parse.rs. */
+/** 32 samples per anchor, matching `PATH_SAMPLES` in line_placement.rs. */
 const SAMPLES = 32;
 
 /**

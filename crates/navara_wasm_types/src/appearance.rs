@@ -91,13 +91,15 @@ pub struct PointMaterial {
     pub rotation: Option<f32>,
     /// How anchors are derived from line geometry: `"point"` (the default) puts
     /// one at every vertex, `"line"` repeats them along the line every
-    /// `spacing` pixels, `"line-center"` places a single one at the line's
+    /// `spacing`, `"line-center"` places a single one at the line's
     /// midpoint. Requires `geometryTypes` to include `"line"`.
     #[wasm_bindgen(getter_with_clone)]
     pub placement: Option<String>,
-    /// Distance between repeated anchors along a line, in pixels at the tile's
-    /// own zoom, so the on-screen spacing stays roughly constant as you zoom.
-    /// Only used by `placement: "line"`. Defaults to `250.0`.
+    /// Distance between repeated anchors along a line. For `vector-tile`
+    /// sources it is in pixels at the tile's own zoom, so the on-screen spacing
+    /// stays roughly constant as you zoom; a `geojson` source has no zoom, so
+    /// there it is in metres along the ground. Only used by
+    /// `placement: "line"`. Defaults to `250.0`.
     pub spacing: Option<f32>,
     /// Add the line's tangent bearing at the anchor to `rotation`, so the
     /// sprite turns with the line it sits on. Defaults to `true`.
@@ -290,13 +292,15 @@ pub struct BillboardMaterial {
     pub rotation: Option<f32>,
     /// How anchors are derived from line geometry: `"point"` (the default) puts
     /// one at every vertex, `"line"` repeats them along the line every
-    /// `spacing` pixels, `"line-center"` places a single one at the line's
+    /// `spacing`, `"line-center"` places a single one at the line's
     /// midpoint. Requires `geometryTypes` to include `"line"`.
     #[wasm_bindgen(getter_with_clone)]
     pub placement: Option<String>,
-    /// Distance between repeated anchors along a line, in pixels at the tile's
-    /// own zoom, so the on-screen spacing stays roughly constant as you zoom.
-    /// Only used by `placement: "line"`. Defaults to `250.0`.
+    /// Distance between repeated anchors along a line. For `vector-tile`
+    /// sources it is in pixels at the tile's own zoom, so the on-screen spacing
+    /// stays roughly constant as you zoom; a `geojson` source has no zoom, so
+    /// there it is in metres along the ground. Only used by
+    /// `placement: "line"`. Defaults to `250.0`.
     pub spacing: Option<f32>,
     /// Add the line's tangent bearing at the anchor to `rotation`, so the
     /// sprite turns with the line it sits on. Defaults to `true`.
@@ -502,14 +506,17 @@ pub struct TextMaterial {
     pub rotate_with_camera: Option<bool>,
     /// How anchors are derived from line geometry: `"point"` (the default) puts
     /// a label at every vertex, `"line"` repeats labels along the line every
-    /// `spacing` pixels with the glyphs bending to follow it, `"line-center"`
+    /// `spacing` with the glyphs bending to follow it, `"line-center"`
     /// places a single label at the line's midpoint. Requires `geometryTypes`
     /// to include `"line"`.
     #[wasm_bindgen(getter_with_clone)]
     pub placement: Option<String>,
-    /// Distance between repeated labels along a line, in pixels at the tile's
-    /// own zoom, so the on-screen spacing stays roughly constant as you zoom.
-    /// Only used by `placement: "line"`. Defaults to `250.0`.
+    /// Distance between repeated labels along a line. For `vector-tile`
+    /// sources it is in pixels at the tile's own zoom, so the on-screen spacing
+    /// stays roughly constant as you zoom; a `geojson` source has no zoom, so
+    /// there it is in metres along the ground. A label longer than twice the
+    /// spacing is dropped. Only used by `placement: "line"`. Defaults to
+    /// `250.0`.
     pub spacing: Option<f32>,
     /// Largest cumulative turn, in degrees, a label may bend through before it
     /// is dropped as unreadable. Measured over a sliding window along the

@@ -16,8 +16,9 @@ use navara_geometry::{
 };
 use navara_math::{FloatType, Vec3};
 
-use super::config::{LayerParseConfig, LayerParseKind, PointEmitter, PointPlacement};
+use super::config::{LayerParseConfig, LayerParseKind, PointEmitter};
 use super::pos_converter::PosConverter;
+use crate::line_placement::{AnchorPath, LinePath, tangent_to_bearing};
 
 // ============================================================================
 // Output types
@@ -356,125 +357,6 @@ fn projection_of(config: &LayerParseConfig) -> usize {
 /// zoom spaces its anchors further apart on screen than nominal.
 const TILE_SIZE_PX: f64 = 512.0;
 
-/// Path samples stored per along-line text anchor.
-///
-/// The samples are uniform in arc length, which is the whole point: the vertex
-/// shader finds the segment containing a glyph with `floor(s / step)` instead
-/// of walking the path, so bending a glyph costs two texel fetches rather than
-/// a loop.
-pub const PATH_SAMPLES: usize = 32;
-
-// The transfer attribute's `size` is a u8 holding the two-floats-per-sample
-// stride, so the count cannot exceed 127.
-const _: () = assert!(PATH_SAMPLES * 2 <= u8::MAX as usize);
-
-/// Arc length a label's sampled path covers, as a multiple of the anchor
-/// spacing. Repeated labels are spaced by `spacing`, so a label that needs more
-/// than this would collide with its own neighbours anyway; it is rejected
-/// instead of being given a longer path.
-const PATH_SPAN_SPACINGS: f64 = 2.0;
-
-/// Scalars stored per anchor alongside its path samples: the metre step between
-/// samples, then the arc length of *real* line either side of the anchor.
-///
-/// The second matters because samples past a line's end are extrapolated (so
-/// the tangent never degenerates), which leaves the renderer unable to tell
-/// where the road actually stopped. Without it a name would happily run along
-/// 200 m of imaginary straight road off the end of a 30 m stub.
-pub const PATH_META_STRIDE: usize = 2;
-
-/// Prefix sums of segment lengths along `verts`, in the caller's units.
-///
-/// Returns `None` when the whole path has no length, which would make every
-/// arc-length query degenerate.
-fn cumulative_lengths(verts: &[(f64, f64)]) -> Option<Vec<f64>> {
-    let mut cum = Vec::with_capacity(verts.len());
-    cum.push(0.0);
-    let mut total = 0.0;
-    for w in verts.windows(2) {
-        total += (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1);
-        cum.push(total);
-    }
-    (total > 0.0).then_some(cum)
-}
-
-/// Position and unit tangent at arc length `s` along `verts`.
-///
-/// `cum` must be the matching output of [`cumulative_lengths`]. Past either end
-/// the path is **extrapolated** along that end's tangent rather than clamped:
-/// a label longer than the line it sits on then runs straight off the end,
-/// which reads correctly and — unlike a clamped, zero-length end segment —
-/// never yields a degenerate tangent for the shader to normalize.
-fn sample_polyline(verts: &[(f64, f64)], cum: &[f64], s: f64) -> ((f64, f64), (f64, f64)) {
-    let total = cum[cum.len() - 1];
-    let clamped = s.clamp(0.0, total);
-    // The first segment whose end is at or past `clamped` contains it.
-    let seg = cum[1..]
-        .iter()
-        .position(|&c| c >= clamped)
-        .unwrap_or(verts.len() - 2);
-    let (a, b) = (verts[seg], verts[seg + 1]);
-    let len = cum[seg + 1] - cum[seg];
-    // Zero-length segments survive in MVT data as repeated vertices; they can
-    // never contain `clamped` strictly, but the clamp can still land on one.
-    let t = if len > 0.0 {
-        (clamped - cum[seg]) / len
-    } else {
-        0.0
-    };
-    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-    let norm = dx.hypot(dy);
-    let tangent = if norm > 0.0 {
-        (dx / norm, dy / norm)
-    } else {
-        (1.0, 0.0)
-    };
-    // Zero whenever `s` is on the path, so this is a no-op for anchor queries.
-    let overshoot = s - clamped;
-    (
-        (
-            a.0 + dx * t + tangent.0 * overshoot,
-            a.1 + dy * t + tangent.1 * overshoot,
-        ),
-        tangent,
-    )
-}
-
-/// [`PATH_SAMPLES`] points along `verts`, centred on arc length `s` and spaced
-/// `step_tile` apart, as east/north metre offsets from the anchor at `origin`.
-///
-/// Metres rather than tile units because glyph sizes are metric downstream, and
-/// relative to the anchor so the values stay small enough for `f32` — a few
-/// hundred metres, against the ~6.4e6 of an absolute ECEF coordinate.
-fn sample_anchor_path(
-    verts: &[(f64, f64)],
-    cum: &[f64],
-    s: f64,
-    step_tile: f64,
-    origin: (f64, f64),
-    meters_per_unit: f64,
-) -> Vec<f32> {
-    let half_span = step_tile * (PATH_SAMPLES - 1) as f64 * 0.5;
-    let mut out = Vec::with_capacity(PATH_SAMPLES * 2);
-    for k in 0..PATH_SAMPLES {
-        let (p, _) = sample_polyline(verts, cum, s - half_span + step_tile * k as f64);
-        // Tile y grows southward, so north is the negated delta.
-        out.push(((p.0 - origin.0) * meters_per_unit) as f32);
-        out.push(((origin.1 - p.1) * meters_per_unit) as f32);
-    }
-    out
-}
-
-/// Convert a tile-space tangent to a compass bearing in degrees.
-///
-/// Web Mercator is conformal, so a direction in tile space maps to the same
-/// direction on the ground up to the tile's downward-growing y axis: east is
-/// `+x`, north is `-y`. Clockwise-from-north matches the `rotation` field's
-/// sense.
-fn tile_tangent_to_bearing(tangent: (f64, f64)) -> f32 {
-    tangent.0.atan2(-tangent.1).to_degrees() as f32
-}
-
 /// Vertex buffers for a single projection mode, shared by every layer using it.
 #[derive(Default)]
 struct RingBufs {
@@ -640,7 +522,7 @@ impl<'a> MvtFeatureProcessor<'a> {
         coords: Vec3,
         world_pos: Vec3,
         bearing: Option<f32>,
-        path: Option<(Vec<f32>, [f32; PATH_META_STRIDE])>,
+        path: Option<AnchorPath>,
     ) {
         let rtc = [
             (world_pos.x - self.rtc_center.x) as f32,
@@ -663,9 +545,9 @@ impl<'a> MvtFeatureProcessor<'a> {
             if let Some(bearing) = bearing {
                 bearings.push(bearing);
             }
-            if let Some((samples, meta)) = path {
-                path_samples.extend_from_slice(&samples);
-                path_meta.extend_from_slice(&meta);
+            if let Some(path) = path {
+                path_samples.extend_from_slice(&path.samples);
+                path_meta.extend_from_slice(&path.meta);
             }
         }
     }
@@ -758,13 +640,9 @@ impl<'a> MvtFeatureProcessor<'a> {
     /// The cumulative arc length is built once and shared across emitters;
     /// emitters differing only in `spacing_px` then cost one walk each.
     fn emit_line_placed_points(&mut self, verts: &[(f64, f64)]) {
-        if verts.len() < 2 {
-            return;
-        }
-        let Some(cum) = cumulative_lengths(verts) else {
-            return; // Degenerate: every vertex coincides.
+        let Some(path) = LinePath::new(verts) else {
+            return; // Degenerate: fewer than two vertices, or all coincide.
         };
-        let total = cum[cum.len() - 1];
 
         // `spacing` is in pixels at this tile's own zoom, so it converts to tile
         // units by the same ratio MapLibre calls `tilePixelRatio`.
@@ -775,54 +653,22 @@ impl<'a> MvtFeatureProcessor<'a> {
             if !emitter.from_lines || !emitter.placement.is_along_line() {
                 continue;
             }
-            let spacing = (emitter.spacing_px as f64 * tile_px_ratio).max(f64::EPSILON);
-
-            // A line shorter than one interval — and every `LineCenter` line —
-            // still deserves its one label, at the midpoint. Starting the
-            // repeating pattern at half an interval centres it on the line, so
-            // a label never lands right on an endpoint.
-            let mut s = if emitter.placement == PointPlacement::LineCenter || total < spacing {
-                total * 0.5
-            } else {
-                spacing * 0.5
-            };
-            let step = if emitter.placement == PointPlacement::LineCenter {
-                f64::INFINITY
-            } else {
-                spacing
-            };
-
-            // Stop half an interval before the end, mirroring the half-interval
-            // the pattern starts with. Without it the last anchor of a line
-            // measuring a whole number of intervals lands *on* the endpoint,
-            // where a label has no road left to sit on — the renderer then
-            // rejects it and the repeat silently goes missing instead of being
-            // spaced evenly.
-            let last = if emitter.placement == PointPlacement::LineCenter || total < spacing {
-                total
-            } else {
-                total - spacing * 0.5
-            };
-
+            let spacing = emitter.spacing_px as f64 * tile_px_ratio;
             // Only text bends its glyphs along the line; a sprite is one quad
             // at the anchor and needs nothing but the tangent bearing.
             let wants_path = emitter.kind == LayerParseKind::Text;
-            let path_step_tile = spacing * PATH_SPAN_SPACINGS / (PATH_SAMPLES - 1) as f64;
 
-            while s <= last {
-                let (pos, tangent) = sample_polyline(verts, &cum, s);
+            for s in path.anchors(emitter.placement, spacing) {
+                let (pos, tangent) = path.sample(s);
                 let (px, py) = self.converter.project_point(pos.0, pos.1);
                 let coords = Vec3::new(px, py, 0.0 as FloatType);
                 let world_pos = CRS::Geographic.to_vec3(WGS84_64, coords, emitter.height);
 
-                let path = wants_path.then(|| {
-                    // Mercator's scale distortion is latitude-dependent, so the
-                    // conversion uses this anchor's own latitude rather than
-                    // the tile's — a tile spans several degrees at low zoom.
-                    let mpu = self.converter.ground_meters_per_unit(coords.y);
-                    let samples = sample_anchor_path(verts, &cum, s, path_step_tile, pos, mpu);
-                    let half_extent = s.min(total - s) * mpu;
-                    (samples, [(path_step_tile * mpu) as f32, half_extent as f32])
+                // Mercator's scale distortion is latitude-dependent, so the
+                // conversion uses this anchor's own latitude rather than the
+                // tile's — a tile spans several degrees at low zoom.
+                let anchor_path = wants_path.then(|| {
+                    path.anchor_path(s, spacing, self.converter.ground_meters_per_unit(coords.y))
                 });
 
                 self.push_point(
@@ -830,10 +676,9 @@ impl<'a> MvtFeatureProcessor<'a> {
                     emitter.kind,
                     coords,
                     world_pos,
-                    Some(tile_tangent_to_bearing(tangent)),
-                    path,
+                    Some(tangent_to_bearing(tangent)),
+                    anchor_path,
                 );
-                s += step;
             }
         }
     }
@@ -1251,6 +1096,7 @@ fn parse_layer(
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::line_placement::{PATH_META_STRIDE, PATH_SAMPLES, PointPlacement};
 
     /// Encode a zigzag integer (MVT spec parameter encoding).
     fn zigzag(n: i32) -> u32 {

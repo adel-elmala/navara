@@ -741,11 +741,11 @@ impl From<&crate::batched_geometry::BatchedPointGeometry> for TransferablePointG
         let path_samples = geom.path_samples.map(|data| TransferableFloatAttribute {
             data,
             // `size` is a u8, so the sample count can never exceed 127.
-            size: (navara_parser::mvt::PATH_SAMPLES * 2) as u8,
+            size: (navara_parser::line_placement::PATH_SAMPLES * 2) as u8,
         });
         let path_meta = geom.path_meta.map(|data| TransferableFloatAttribute {
             data,
-            size: navara_parser::mvt::PATH_META_STRIDE as u8,
+            size: navara_parser::line_placement::PATH_META_STRIDE as u8,
         });
         match geom.encoding {
             PointEncoding::Rtc => Self {
