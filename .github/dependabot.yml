@@ -31,7 +31,7 @@ updates:
       day: monday
     cooldown:
       default-days: 5
-    versioning-strategy: increase
+    versioning-strategy: auto
     commit-message:
       prefix: chore
     groups:
