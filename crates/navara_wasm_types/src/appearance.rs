@@ -515,12 +515,14 @@ pub struct TextMaterial {
     /// sources it is in pixels at the tile's own zoom, so the on-screen spacing
     /// stays roughly constant as you zoom; a `geojson` source has no zoom, so
     /// there it is in metres along the ground. A label longer than twice the
-    /// spacing is dropped. Only used by `placement: "line"`. Defaults to
-    /// `250.0`.
+    /// spacing is dropped, with `placement: "line-center"` too, where the
+    /// spacing bounds the length of line sampled under the label but not
+    /// where it sits. Defaults to `250.0`.
     pub spacing: Option<f32>,
-    /// Largest cumulative turn, in degrees, a label may bend through before it
-    /// is dropped as unreadable. Measured over a sliding window along the
-    /// label rather than per glyph. Defaults to `45.0`.
+    /// Largest turn, in degrees, the line may make under a label within a
+    /// window of about one and a half ems before the label is dropped as
+    /// unreadable. The window slides along the label, so a long gentle curve
+    /// is accepted however far it turns in total. Defaults to `45.0`.
     #[wasm_bindgen(js_name = maxAngle)]
     #[serde(rename = "maxAngle")]
     pub max_angle: Option<f32>,
@@ -529,9 +531,10 @@ pub struct TextMaterial {
     #[wasm_bindgen(js_name = keepUpright)]
     #[serde(rename = "keepUpright")]
     pub keep_upright: Option<bool>,
-    /// Offset perpendicular to the line, in pixels; positive is to the left of
-    /// the direction of travel, which puts the name above the line. Defaults
-    /// to `0.0`.
+    /// Offset perpendicular to the line, in the same units as the font size:
+    /// pixels when `sizeInMeters` is false, metres when it is true. Positive is
+    /// to the left of the direction of travel, which puts the name above the
+    /// line. Defaults to `0.0`.
     #[wasm_bindgen(js_name = lineOffset)]
     #[serde(rename = "lineOffset")]
     pub line_offset: Option<f32>,

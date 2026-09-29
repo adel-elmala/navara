@@ -48,6 +48,12 @@ const _: () = assert!(PATH_SAMPLES * 2 <= u8::MAX as usize);
 /// instead of being given a longer path.
 const PATH_SPAN_SPACINGS: f64 = 2.0;
 
+/// Most anchors one line may receive. `spacing` comes straight from the style,
+/// so a vanishingly small value would otherwise ask for an unbounded number of
+/// them; flooring the spacing instead of truncating the count keeps the anchors
+/// spread along the whole line.
+const MAX_ANCHORS_PER_LINE: f64 = 10_000.0;
+
 /// Scalars stored per anchor alongside its path samples: the metre step between
 /// samples, then the arc length of *real* line either side of the anchor.
 ///
@@ -100,13 +106,15 @@ impl<'a> LinePath<'a> {
     pub fn segment_at(&self, s: f64) -> (usize, f64) {
         let clamped = s.clamp(0.0, self.length());
         // The first segment whose end is at or past `clamped` contains it.
-        let seg = self.cum[1..]
-            .iter()
-            .position(|&c| c >= clamped)
+        // Zero-length segments (repeated vertices) are skipped: a line opening
+        // with a duplicate would otherwise hand every query at its start that
+        // segment, whose tangent is undefined, and the extrapolation before the
+        // first anchor would run off in an arbitrary direction. The line has
+        // positive length, so some segment always qualifies.
+        let seg = (0..self.verts.len() - 1)
+            .find(|&i| self.cum[i + 1] >= clamped && self.cum[i + 1] > self.cum[i])
             .unwrap_or(self.verts.len() - 2);
         let len = self.cum[seg + 1] - self.cum[seg];
-        // Zero-length segments survive as repeated vertices; they can never
-        // contain `clamped` strictly, but the clamp can still land on one.
         let t = if len > 0.0 {
             (clamped - self.cum[seg]) / len
         } else {
@@ -155,7 +163,7 @@ impl<'a> LinePath<'a> {
     pub fn anchors(&self, placement: PointPlacement, spacing: f64) -> impl Iterator<Item = f64> {
         debug_assert!(placement.is_along_line());
         let total = self.length();
-        let spacing = spacing.max(f64::EPSILON);
+        let spacing = self.resolve_spacing(spacing);
         let single = placement == PointPlacement::LineCenter || total < spacing;
         let count = if single {
             1
@@ -174,9 +182,26 @@ impl<'a> LinePath<'a> {
         })
     }
 
+    /// The spacing the resampler actually uses, given the style's.
+    ///
+    /// A zero, negative or non-finite value has no meaningful interval, so it
+    /// falls back to the whole line — one anchor, at the midpoint — rather than
+    /// being divided by. A valid one is floored at [`MAX_ANCHORS_PER_LINE`].
+    fn resolve_spacing(&self, spacing: f64) -> f64 {
+        let total = self.length();
+        if spacing.is_finite() && spacing > 0.0 {
+            spacing.max(total / MAX_ANCHORS_PER_LINE)
+        } else {
+            total
+        }
+    }
+
     /// [`PATH_SAMPLES`] points centred on the anchor at arc length `s`, as
     /// east/north metre offsets from it, for a pattern `spacing` frame units
-    /// apart.
+    /// apart. `spacing` also bounds the sampled span for
+    /// [`PointPlacement::LineCenter`], whose single anchor otherwise ignores it:
+    /// the sample count is fixed, so sampling a long line whole would coarsen
+    /// the path under a short label to a few straight chords.
     ///
     /// Metres rather than frame units because glyph sizes are metric
     /// downstream, and relative to the anchor so the values stay small enough
@@ -184,6 +209,7 @@ impl<'a> LinePath<'a> {
     /// ECEF coordinate. `meters_per_unit` is the frame's ground scale at the
     /// anchor.
     pub fn anchor_path(&self, s: f64, spacing: f64, meters_per_unit: f64) -> AnchorPath {
+        let spacing = self.resolve_spacing(spacing);
         let step = spacing * PATH_SPAN_SPACINGS / (PATH_SAMPLES - 1) as f64;
         let half_span = step * (PATH_SAMPLES - 1) as f64 * 0.5;
         let (origin, _) = self.sample(s);
@@ -245,6 +271,39 @@ mod test {
         // Shorter than one interval: one anchor at the midpoint, not none.
         let short: Vec<f64> = path.anchors(PointPlacement::Line, 5000.0).collect();
         assert_eq!(short, vec![500.0]);
+    }
+
+    #[test]
+    fn invalid_spacing_gives_one_anchor_rather_than_unbounded_many() {
+        let verts = [(0.0, 0.0), (1000.0, 0.0)];
+        let path = LinePath::new(&verts).unwrap();
+        for spacing in [0.0, -5.0, f64::NAN, f64::INFINITY] {
+            let anchors: Vec<f64> = path.anchors(PointPlacement::Line, spacing).collect();
+            assert_eq!(anchors, vec![500.0], "spacing {spacing}");
+            let p = path.anchor_path(500.0, spacing, 1.0);
+            assert!(
+                p.meta[0].is_finite() && p.meta[0] > 0.0,
+                "spacing {spacing}"
+            );
+            assert!(p.samples.iter().all(|v| v.is_finite()), "spacing {spacing}");
+        }
+        // Valid but absurdly dense: capped, and still spread over the line.
+        let dense: Vec<f64> = path.anchors(PointPlacement::Line, 1e-12).collect();
+        assert!(dense.len() <= MAX_ANCHORS_PER_LINE as usize);
+        assert!(*dense.last().unwrap() > 999.0);
+    }
+
+    #[test]
+    fn a_repeated_first_vertex_does_not_bend_the_start() {
+        // The line runs due south (+y) but opens with a duplicate vertex. The
+        // extrapolation before its start has to continue that direction, not
+        // fall back to east for the zero-length first segment.
+        let verts = [(0.0, 0.0), (0.0, 0.0), (0.0, 100.0)];
+        let path = LinePath::new(&verts).unwrap();
+        let (pos, tangent) = path.sample(-10.0);
+        assert_eq!(tangent, (0.0, 1.0));
+        assert!((pos.0 - 0.0).abs() < 1e-12 && (pos.1 + 10.0).abs() < 1e-12);
+        assert_eq!(path.segment_at(0.0), (1, 0.0));
     }
 
     #[test]

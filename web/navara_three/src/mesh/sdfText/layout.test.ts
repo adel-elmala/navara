@@ -206,9 +206,10 @@ describe("lineWidthFu", () => {
 
 describe("buildLabelLayout word grouping", () => {
   /**
-   * A shaping result for `text` where every non-space character is a square
-   * glyph one em wide and a space draws nothing — which is what makes it a
-   * word boundary, since the layout has no access to the source characters.
+   * A shaping result for `text` where every visible character is a square
+   * glyph one em wide. A space and a zero-width joiner both draw nothing; only
+   * the space is classed as whitespace, which is what makes it — and not the
+   * joiner — a word boundary.
    */
   function shaped(text: string): ShapeTextResult {
     const unitsPerEm = 1000;
@@ -228,9 +229,9 @@ describe("buildLabelLayout word grouping", () => {
       compositeKey: BigInt(i + 1),
       atlasX: 0,
       atlasY: 0,
-      // A space has no atlas rectangle, so it produces no quad.
-      atlasW: ch === " " ? 0 : 64,
-      atlasH: ch === " " ? 0 : 64,
+      // Neither has an atlas rectangle, so neither produces a quad.
+      atlasW: ch === " " || ch === ZWJ ? 0 : 64,
+      atlasH: ch === " " || ch === ZWJ ? 0 : 64,
       bearingX: 0,
       bearingY: 0,
       isColor: false,
@@ -246,6 +247,20 @@ describe("buildLabelLayout word grouping", () => {
   }
 
   const options = { text: "", maxWidth: 0, lineHeight: 1, textAlign: 0 };
+  const ZWJ = "\u200D";
+
+  it("keeps a word whole across a glyph that draws nothing", () => {
+    // A join control inside a word has no quad, but it is not a space: the
+    // word either side of it has to stay one rigid group, or a joined script
+    // word would bend along the line as two separately rotated pieces.
+    const text = `a${ZWJ}b cd`;
+    const layout = buildLabelLayout(shaped(text), { ...options, text });
+    expect(layout.quads.length).toBe(4);
+    const centers = layout.quads.map((q) => q.wordCenterEmX);
+    expect(centers[0]).toBe(centers[1]);
+    expect(centers[2]).toBe(centers[3]);
+    expect(centers[0]).not.toBe(centers[2]);
+  });
 
   it("gives every glyph of a word the same centre", () => {
     const layout = buildLabelLayout(shaped("ab cd"), {

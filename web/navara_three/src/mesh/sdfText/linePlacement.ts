@@ -16,7 +16,7 @@ export const LINE_LABEL_STRIDE = 17;
 export const LINE_LABEL_RESULT_STRIDE = 6;
 
 /** `f64` values per label in the `lineLabelFit` pre-pass's packed input. */
-export const LINE_LABEL_FIT_STRIDE = 7;
+export const LINE_LABEL_FIT_STRIDE = 8;
 
 /** Scalars the engine sends per anchor alongside its path samples. */
 export const PATH_META_STRIDE = 2;
@@ -83,10 +83,23 @@ export type LinePlacementOptions = {
   keepUpright: boolean;
   /** The text block's anchor point, already clamped to [-0.5, 0.5]. */
   center: readonly [number, number];
+  /** Perpendicular offset from the line, in the font size's units. */
+  lineOffset: number;
   /** Whether the label is currently walked backwards, which feeds the kernel's
    *  flip hysteresis. */
   readFlip: (slot: number) => boolean;
 };
+
+/**
+ * How far the text runs from its anchor along the line, in ems.
+ *
+ * The anchor is the text's centre only when `center.x` is 0.5; otherwise one
+ * side is longer, and it is that side that has to fit. The shader lays glyphs
+ * out over `[-cx·w, (1 - cx)·w]` (see `wordCenterEm` in sdfText.vert.glsl).
+ */
+function reachEm(label: PackableLabel, centerX: number): number {
+  return Math.max(Math.abs(centerX), Math.abs(1 - centerX)) * label.widthEm;
+}
 
 /**
  * Flatten labels into the fit pre-pass's compact input.
@@ -103,20 +116,21 @@ export type LinePlacementOptions = {
 export function packLineLabelFits(
   labels: readonly PackableLabel[],
   path: LinePath,
-  sizeInMeters: boolean,
+  options: Pick<LinePlacementOptions, "sizeInMeters" | "center">,
 ): Float64Array {
   const out = new Float64Array(labels.length * LINE_LABEL_FIT_STRIDE);
-  const metric = sizeInMeters ? 1 : 0;
+  const metric = options.sizeInMeters ? 1 : 0;
   for (let i = 0; i < labels.length; i++) {
     const label = labels[i];
     const o = i * LINE_LABEL_FIT_STRIDE;
     out[o] = label.anchor[0];
     out[o + 1] = label.anchor[1];
     out[o + 2] = label.anchor[2];
-    out[o + 3] = label.widthEm;
-    out[o + 4] = label.fontSize;
-    out[o + 5] = metric;
-    out[o + 6] = usableHalfExtentMeters(path, label.instanceIndex);
+    out[o + 3] = label.addHeight;
+    out[o + 4] = reachEm(label, options.center[0]);
+    out[o + 5] = label.fontSize;
+    out[o + 6] = metric;
+    out[o + 7] = usableHalfExtentMeters(path, label.instanceIndex);
   }
   return out;
 }
@@ -147,7 +161,7 @@ export function packLineLabels(
     out[o + 1] = label.anchor[1];
     out[o + 2] = label.anchor[2];
     out[o + 3] = label.addHeight;
-    out[o + 4] = label.widthEm;
+    out[o + 4] = reachEm(label, options.center[0]);
     out[o + 5] = label.fontSize;
     out[o + 6] = options.sizeInMeters ? 1 : 0;
     out[o + 7] = maxAngleRad;
@@ -159,14 +173,16 @@ export function packLineLabels(
 
     // The unrotated collision box, in the font's own units. Computed here
     // rather than in Rust so the em-and-anchor arithmetic stays in the one
-    // place that also builds the box for point labels.
+    // place that also builds the box for point labels. `lineOffset` shifts the
+    // text along its own up (the shader's path normal), and is already in
+    // these units, so it moves the box across the baseline as it is.
     const [cx, cy] = options.center;
     const w = label.widthEm;
     const h = label.heightEm;
     out[o + 13] = (0 - cx * w) * label.fontSize;
     out[o + 14] = (w - cx * w) * label.fontSize;
-    out[o + 15] = (label.minYEm - cy * h) * label.fontSize;
-    out[o + 16] = (label.maxYEm - cy * h) * label.fontSize;
+    out[o + 15] = (label.minYEm - cy * h) * label.fontSize + options.lineOffset;
+    out[o + 16] = (label.maxYEm - cy * h) * label.fontSize + options.lineOffset;
 
     // Labels are created lazily and sparsely, so their path runs are gathered
     // into input order rather than passed as one contiguous slice.

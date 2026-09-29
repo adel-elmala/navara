@@ -282,9 +282,11 @@ export function buildLabelLayout(
   for (let li = 0; li < lines.length; li++) {
     let cursorX = (blockWidthFu - widths[li]) * options.textAlign;
     let cursorY = -li * lineHeightFu;
-    // Start of the word being laid out, as an index into `quads`. A word is a
-    // run of drawn glyphs; anything that draws nothing — a space, in every case
-    // that reaches here — closes it, as does the end of a line.
+    // Start of the word being laid out, as an index into `quads`. Only the
+    // shaper's whitespace closes a word (as does the end of a line): drawing
+    // nothing is not enough, since a join control (ZWJ/ZWNJ) or a glyph missing
+    // from the atlas has no quad yet sits inside its word, and splitting there
+    // would turn one joined word into independently rotated pieces.
     let wordStart = quads.length;
 
     for (const glyph of lines[li]) {
@@ -315,7 +317,7 @@ export function buildLabelLayout(
           // Filled in once the word is complete.
           wordCenterEmX: 0,
         });
-      } else {
+      } else if (glyph.charClass === GlyphCharClass.Whitespace) {
         assignWordCenter(quads, wordStart);
         wordStart = quads.length;
       }

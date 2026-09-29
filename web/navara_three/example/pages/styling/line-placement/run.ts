@@ -81,6 +81,7 @@ const labelParams = {
   sizeInMeters: false,
   outlineWidth: 4,
   declutter: true,
+  height: 0,
 };
 
 const spriteParams = {
@@ -96,6 +97,7 @@ const spriteParams = {
   size: 20,
   sizeInMeters: false,
   declutter: false,
+  height: 0,
 };
 
 export const run = async (view: ThreeView) => {
@@ -185,6 +187,7 @@ export const run = async (view: ThreeView) => {
         outlineColor: new Color().setStyle("#111318"),
         outlineWidth: labelParams.outlineWidth,
         declutter: labelParams.declutter,
+        height: labelParams.height,
       },
     });
     labels.on("featureUpdated", ({ evaluator }) => {
@@ -225,6 +228,7 @@ export const run = async (view: ThreeView) => {
         clampToGround: true,
         transparent: true,
         declutter: spriteParams.declutter,
+        height: spriteParams.height,
       },
     });
 
@@ -282,6 +286,7 @@ export const run = async (view: ThreeView) => {
         sizeInMeters: labelParams.sizeInMeters,
         outlineWidth: labelParams.outlineWidth,
         declutter: labelParams.declutter,
+        height: labelParams.height,
       },
     });
     view.forceUpdate();
@@ -336,6 +341,9 @@ export const run = async (view: ThreeView) => {
     .addBinding(labelParams, "outlineWidth", { min: 0, max: 6, step: 0.5 })
     .on("change", restyleLabels);
   labelsFolder.addBinding(labelParams, "declutter").on("change", restyleLabels);
+  labelsFolder
+    .addBinding(labelParams, "height", { min: 0, max: 100, step: 1 })
+    .on("change", restyleLabels);
 
   // --- Sprites ---
 
@@ -353,6 +361,7 @@ export const run = async (view: ThreeView) => {
         size: spriteParams.size,
         sizeInMeters: spriteParams.sizeInMeters,
         declutter: spriteParams.declutter,
+        height: spriteParams.height,
       },
     });
     view.forceUpdate();
@@ -393,6 +402,9 @@ export const run = async (view: ThreeView) => {
     .on("change", restyleSprites);
   spritesFolder
     .addBinding(spriteParams, "declutter")
+    .on("change", restyleSprites);
+  spritesFolder
+    .addBinding(spriteParams, "height", { min: 0, max: 100, step: 1 })
     .on("change", restyleSprites);
 
   view.attribution?.add([NOTO_SANS_ATTRIBUTION]);

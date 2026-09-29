@@ -537,9 +537,15 @@ export class BatchedSdfTextMesh
     const view = this._lineViewMatrix;
     view.set(camera.matrixWorldInverse.elements);
 
+    const state = this._enhancer.states();
+    const center = [
+      Math.min(Math.max(state.center[0], -0.5), 0.5),
+      Math.min(Math.max(state.center[1], -0.5), 0.5),
+    ] as const;
+
     // Phase one: which labels are short enough to sit on their line at all.
     const fits = lineLabelFit(
-      packLineLabelFits(placeable, line, sizeInMeters),
+      packLineLabelFits(placeable, line, { sizeInMeters, center }),
       view,
       heightPx,
       fovRad,
@@ -563,15 +569,12 @@ export class BatchedSdfTextMesh
 
     // Phase two: reading direction, curvature and the collision box — all of
     // which need the path.
-    const state = this._enhancer.states();
     const packed = packLineLabels(survivors, line, {
       sizeInMeters,
       maxAngleDeg: this._material.maxAngle ?? 45,
       keepUpright: this._material.keepUpright ?? true,
-      center: [
-        Math.min(Math.max(state.center[0], -0.5), 0.5),
-        Math.min(Math.max(state.center[1], -0.5), 0.5),
-      ],
+      center,
+      lineOffset: state.lineOffset,
       readFlip: (slot) =>
         this._labelData.getComponent(slot, LabelRow.PATH, 2) !== 0,
     });

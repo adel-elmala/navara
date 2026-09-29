@@ -416,7 +416,7 @@ view.addFontFamily({
 
 **Type:** `number | undefined`
 
-**Description:** The largest total turn, in degrees, that a label placed along a line may bend through before it is hidden as unreadable. The turn is measured over the length of the label, not at single corners, so a long gentle curve can be rejected even though no single corner is sharp. Only used when [`placement`](#placement) is `"line"` or `"line-center"`. Whether a label fits is decided again as the camera moves, and `layer.update()` applies a new value to labels that are already shown.
+**Description:** The largest turn, in degrees, that the line may make under a label placed along it before the label is hidden as unreadable. The turn is added up over a short stretch of the label, about one and a half times the font size, which slides along it: several small corners close together count together and can hide the label, while a long gentle curve is kept however far it turns in total. Only used when [`placement`](#placement) is `"line"` or `"line-center"`. Whether a label fits is decided again as the camera moves, and `layer.update()` applies a new value to labels that are already shown.
 
 **Default:** `45.0`
 

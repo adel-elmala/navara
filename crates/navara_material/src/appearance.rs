@@ -424,20 +424,24 @@ pub struct TextMaterial {
     /// constant on-screen spacing. An untiled GeoJSON source has no zoom, so
     /// there it is metres along the ground and the anchors stay put. Also sets
     /// the length of line sampled under each label (twice the spacing), so a
-    /// label longer than that is dropped. Only used by [`Placement::Line`].
+    /// label longer than that is dropped — under [`Placement::LineCenter`] too,
+    /// where it bounds the sampled length though not the anchor's position.
     /// Default `250.0`, matching MapLibre's `symbol-spacing`.
     pub spacing: f32,
-    /// Largest cumulative turn, in degrees, the label may bend through before
-    /// it is dropped as unreadable. Measured over a sliding window along the
-    /// label rather than per glyph, so a long gentle spiral is rejected even
-    /// though no single corner is sharp. Default `45.0`.
+    /// Largest turn, in degrees, the line may make under the label within a
+    /// window of about one and a half ems before the label is dropped as
+    /// unreadable. Measured over that sliding window rather than per glyph or
+    /// over the whole label: a few small corners close together add up and
+    /// are rejected, while a long gentle curve is accepted however far it
+    /// turns in total. Default `45.0`.
     pub max_angle: f32,
     /// Flip a label that would otherwise read right-to-left, so street names
     /// stay legible whichever way the underlying line runs. Default `true`.
     pub keep_upright: bool,
-    /// Offset perpendicular to the line, in pixels; positive is to the left of
-    /// the direction of travel. Lets a name sit above the road rather than on
-    /// it. Default `0.0`.
+    /// Offset perpendicular to the line, in the same units as the font size:
+    /// pixels, or metres when `size_in_meters` is set. Positive is to the left
+    /// of the direction of travel. Lets a name sit above the road rather than
+    /// on it. Default `0.0`.
     pub line_offset: f32,
     pub height: f32,
     pub size_in_meters: bool,

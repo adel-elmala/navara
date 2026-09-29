@@ -39,7 +39,8 @@ export const LabelRow = {
    * y = metres between adjacent path samples,
    * z = flip (non-zero reverses the walk, so `keepUpright` can turn a label
    *     that would otherwise read right-to-left),
-   * w = reserved.
+   * w = rejected (non-zero culls the label: it overruns its line or bends too
+   *     sharply). Starts at 1 until the placement pass first judges it.
    */
   PATH: 4,
 } as const;

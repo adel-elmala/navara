@@ -97,7 +97,9 @@ pub struct PointGeometryAccumulator {
     /// East/north metre offsets sampling the line around each anchor, at a
     /// fixed stride per anchor. Empty unless this is along-line text.
     pub path_samples: Vec<f32>,
-    /// Metres between adjacent `path_samples` entries, one per anchor.
+    /// `PATH_META_STRIDE` (two) scalars per anchor: the metres between
+    /// adjacent `path_samples` entries, then the metres of real line either
+    /// side of the anchor.
     pub path_meta: Vec<f32>,
 }
 

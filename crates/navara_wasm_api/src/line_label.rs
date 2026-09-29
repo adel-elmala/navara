@@ -26,7 +26,7 @@
 //! |--------|-------|---------|
 //! | 0,1,2  | anchorX/Y/Z | ECEF anchor in meters, before the height offset |
 //! | 3      | addHeight | surface-normal height offset (meters) |
-//! | 4      | widthEm | the text block's width, in ems |
+//! | 4      | reachEm | farthest the text runs from its anchor along the line, in ems |
 //! | 5      | fontSize | px or meters, per `sizeInMeters` |
 //! | 6      | sizeInMeters | `0.0` = px, non-zero = meters |
 //! | 7      | maxAngleRad | largest cumulative turn allowed under the label |
@@ -36,7 +36,13 @@
 //! | 11     | bearingRad | the line's tangent at the anchor, clockwise from north |
 //! | 12     | isFlipped | the label's current flip, for hysteresis |
 //! | 13,14  | minX/maxX | the label's unrotated box along its baseline |
-//! | 15,16  | minY/maxY | the same across it, +Y up, in the font's own units |
+//! | 15,16  | minY/maxY | the same across it, +Y up, in the font's own units, `lineOffset` included |
+//!
+//! `reachEm` rather than the width because the anchor need not be the text's
+//! centre: with `center.x = 0` the whole label runs off one side of it, and it
+//! is that side that has to fit on the line. The caller owns the `center`
+//! arithmetic (it also builds the box), so it hands over the larger of the two
+//! sides.
 //!
 //! ## Result layout
 //!
@@ -57,7 +63,7 @@
 //!
 //! [`line_label_fit`] therefore runs that test alone over a compact input, and
 //! the caller packs paths only for the labels that survive it. Both phases go
-//! through the same [`em_to_meters`], so they cannot disagree about how long a
+//! through the same [`fit_lengths`], so they cannot disagree about how long a
 //! label is; [`line_label_place`] repeats the test rather than trusting its
 //! caller, which keeps it correct on its own and lets it be called with every
 //! label when the split is not worth it.
@@ -72,11 +78,15 @@ pub const LINE_LABEL_STRIDE: usize = 17;
 /// | offset | field |
 /// |--------|-------|
 /// | 0,1,2  | anchorX/Y/Z — ECEF metres, before the height offset |
-/// | 3      | widthEm — the text block's width, in ems |
-/// | 4      | fontSize — px or metres, per `sizeInMeters` |
-/// | 5      | sizeInMeters — `0.0` = px, non-zero = metres |
-/// | 6      | halfExtentMeters — real line either side of the anchor |
-pub const LINE_LABEL_FIT_STRIDE: usize = 7;
+/// | 3      | addHeight — surface-normal height offset (metres) |
+/// | 4      | reachEm — farthest the text runs from its anchor, in ems |
+/// | 5      | fontSize — px or metres, per `sizeInMeters` |
+/// | 6      | sizeInMeters — `0.0` = px, non-zero = metres |
+/// | 7      | halfExtentMeters — real line either side of the anchor |
+///
+/// Offsets 0–6 are the full layout's, so a fit row is a prefix of a full row
+/// plus its extent.
+pub const LINE_LABEL_FIT_STRIDE: usize = 8;
 
 /// Number of `f64` values per label in the packed output slice.
 pub const LINE_LABEL_RESULT_STRIDE: usize = 6;
@@ -136,32 +146,52 @@ pub fn line_label_place(
         let l = &labels[i * LINE_LABEL_STRIDE..(i + 1) * LINE_LABEL_STRIDE];
         let path = &paths[i * samples_per_label * 2..(i + 1) * samples_per_label * 2];
 
-        let (half_len, half_extent, meters_per_em) =
-            fit_lengths((l[0], l[1], l[2]), l[4], l[5], l[6] != 0.0, l[10], &cam);
+        let (reach, half_extent, meters_per_em) = fit_lengths(l, l[10], &cam);
 
+        let axes = enu_screen_axes(l, view);
         // Which way the label runs on screen. Taken across the label's whole
         // extent rather than from the tangent at its anchor: on a curving road
         // the two disagree, and it is the overall reading direction that
         // decides whether a name comes out backwards.
-        let (mut sx, mut sy) = screen_direction(l, path, samples_per_label, half_len, view);
+        let (sx, sy) = screen_direction(l, path, samples_per_label, reach, axes);
 
         let flip = l[8] != 0.0 && should_flip(sx, sy, l[12] != 0.0);
-        if flip {
-            sx = -sx;
-            sy = -sy;
-        }
+
+        // The arc the text actually covers, in metres along the path from the
+        // anchor. The box's baseline extent is exactly that in font units, and
+        // walking the path backwards mirrors it.
+        let meters_per_unit = if l[5] > 0.0 {
+            meters_per_em / l[5]
+        } else {
+            0.0
+        };
+        let (x0, x1) = (l[13] * meters_per_unit, l[14] * meters_per_unit);
+        let arc = if flip { (-x1, -x0) } else { (x0, x1) };
 
         // The fit test is repeated here rather than trusted from phase one, so
         // this stays correct when called with labels that never went through
         // it.
-        let rejected = half_len <= 0.0
-            || half_len > half_extent
-            || exceeds_max_angle(path, samples_per_label, l[9], half_len, meters_per_em, l[7]);
+        let rejected = reach <= 0.0
+            || reach > half_extent
+            || exceeds_max_angle(path, samples_per_label, l[9], arc, meters_per_em, l[7]);
 
         let o = i * LINE_LABEL_RESULT_STRIDE;
         out[o] = if flip { 1.0 } else { 0.0 };
         out[o + 1] = if rejected { 1.0 } else { 0.0 };
-        let (bx0, bx1, by0, by1) = rotated_box(l[13], l[14], l[15], l[16], sx, sy);
+        let (bx0, bx1, by0, by1) = if meters_per_unit > 0.0 && l[9] > 0.0 {
+            path_box(
+                l,
+                path,
+                samples_per_label,
+                axes,
+                flip,
+                meters_per_unit,
+                (sx, sy),
+            )
+        } else {
+            let d = if flip { -1.0 } else { 1.0 };
+            rotated_box(l[13], l[14], l[15], l[16], sx * d, sy * d)
+        };
         out[o + 2] = bx0;
         out[o + 3] = bx1;
         out[o + 4] = by0;
@@ -171,12 +201,6 @@ pub fn line_label_place(
     out
 }
 
-/// Metres one em of the label spans on the ground.
-///
-/// Mirrors `sdfText.vert.glsl`'s `scaleFactor`: metres directly when the font
-/// size is metric, otherwise `nvr_pxToWorld` at the anchor's view depth —
-/// including its `|viewZ|` approximation of distance, so the CPU and the shader
-/// cannot disagree about how long a label is.
 /// The camera terms the sizing arithmetic needs. Grouped because they always
 /// travel together and are identical for every label in a pass.
 struct CameraView<'a> {
@@ -186,11 +210,19 @@ struct CameraView<'a> {
     fov_rad: f64,
 }
 
-/// Takes the anchor and sizing explicitly rather than a packed row, because the
-/// two phases pack them at different offsets and this is the one piece of
-/// arithmetic they must agree on exactly.
+/// Metres one em of the label spans on the ground.
+///
+/// Mirrors `sdfText.vert.glsl`'s `scaleFactor`: metres directly when the font
+/// size is metric, otherwise `nvr_pxToWorld` at the anchor's view depth —
+/// including its `|viewZ|` approximation of distance, so the CPU and the shader
+/// cannot disagree about how long a label is.
+///
+/// The depth is taken at the anchor *raised by `addHeight`*, as the shader
+/// applies `mvr_getMvHeightOffset` before reading `mvPosition.z` — and along
+/// the same geocentric normal, which is also what the declutter kernel uses.
 fn em_to_meters(
     anchor: (f64, f64, f64),
+    add_height: f64,
     font_size: f64,
     size_in_meters: bool,
     cam: &CameraView<'_>,
@@ -198,8 +230,16 @@ fn em_to_meters(
     if size_in_meters {
         return font_size;
     }
+    let (mut x, mut y, mut z) = anchor;
+    let len = (x * x + y * y + z * z).sqrt();
+    if add_height != 0.0 && len > 0.0 {
+        let s = add_height / len;
+        x += x * s;
+        y += y * s;
+        z += z * s;
+    }
     let v = cam.view;
-    let vz = v[2] * anchor.0 + v[6] * anchor.1 + v[10] * anchor.2 + v[14];
+    let vz = v[2] * x + v[6] * y + v[10] * z + v[14];
     if vz >= 0.0 {
         // Behind the camera: nothing sensible to scale by, and the declutter
         // pass will drop the label anyway.
@@ -208,21 +248,18 @@ fn em_to_meters(
     font_size * (2.0 * (cam.fov_rad / 2.0).tan() * -vz) / cam.height_px
 }
 
-/// Half the length of line a label needs, and half the length it has.
+/// How far the label runs from its anchor along the line, and how much line
+/// it has either side.
 ///
 /// The single place the fit test is defined, so [`line_label_fit`] and
-/// [`line_label_place`] cannot drift apart. Returns `(half_len, half_extent)`;
-/// the label fits when `0 < half_len <= half_extent`.
-fn fit_lengths(
-    anchor: (f64, f64, f64),
-    width_em: f64,
-    font_size: f64,
-    size_in_meters: bool,
-    half_extent: f64,
-    cam: &CameraView<'_>,
-) -> (f64, f64, f64) {
-    let meters_per_em = em_to_meters(anchor, font_size, size_in_meters, cam);
-    (width_em * meters_per_em * 0.5, half_extent, meters_per_em)
+/// [`line_label_place`] cannot drift apart. `row` is either phase's packed row:
+/// offsets 0–6 are shared, which is what lets both read them in one place; the
+/// extent sits at a different offset in each, so it is passed in. Returns
+/// `(reach, half_extent, meters_per_em)`; the label fits when
+/// `0 < reach <= half_extent`.
+fn fit_lengths(row: &[f64], half_extent: f64, cam: &CameraView<'_>) -> (f64, f64, f64) {
+    let meters_per_em = em_to_meters((row[0], row[1], row[2]), row[3], row[5], row[6] != 0.0, cam);
+    (row[4] * meters_per_em, half_extent, meters_per_em)
 }
 
 /// Whether a label is short enough to sit on its line, using nothing but the
@@ -241,12 +278,14 @@ pub fn line_label_fit(labels: &[f64], view: &[f64], height_px: f64, fov_rad: f64
     let mut out = vec![0u8; n];
     for i in 0..n {
         let l = &labels[i * LINE_LABEL_FIT_STRIDE..(i + 1) * LINE_LABEL_FIT_STRIDE];
-        let (half_len, half_extent, _) =
-            fit_lengths((l[0], l[1], l[2]), l[3], l[4], l[5] != 0.0, l[6], &cam);
-        out[i] = u8::from(half_len > 0.0 && half_len <= half_extent);
+        let (reach, half_extent, _) = fit_lengths(l, l[7], &cam);
+        out[i] = u8::from(reach > 0.0 && reach <= half_extent);
     }
     out
 }
+
+/// The anchor's east and north unit vectors, as view-space x/y.
+type ScreenAxes = ((f64, f64), (f64, f64));
 
 /// The anchor's east and north directions, projected into view space and kept
 /// as 2D screen axes.
@@ -255,7 +294,7 @@ pub fn line_label_fit(labels: &[f64], view: &[f64], height_px: f64, fov_rad: f64
 /// `shaders/glsl/chunks/quad_orientation.glsl`, which is the basis the vertex
 /// shader lays the label out in. Only the x/y components survive: view space
 /// shares the screen's axes, and the label's orientation is a 2D question.
-fn enu_screen_axes(l: &[f64], view: &[f64]) -> ((f64, f64), (f64, f64)) {
+fn enu_screen_axes(l: &[f64], view: &[f64]) -> ScreenAxes {
     let (x, y, z) = (l[0], l[1], l[2]);
     let len = (x * x + y * y + z * z).sqrt();
     if len <= 0.0 {
@@ -297,20 +336,16 @@ fn screen_direction(
     l: &[f64],
     path: &[f32],
     samples: usize,
-    half_len_meters: f64,
-    view: &[f64],
+    reach_meters: f64,
+    (east, north): ScreenAxes,
 ) -> (f64, f64) {
-    let (east, north) = enu_screen_axes(l, view);
-
     let step = l[9];
-    let mid = samples / 2;
-    let reach = if step > 0.0 {
-        ((half_len_meters / step).round() as usize).clamp(1, mid.max(1))
+    let (first, last) = if step > 0.0 {
+        sample_range(samples, step, (-reach_meters, reach_meters))
     } else {
-        1
+        // No step: every sample is the anchor, and the bearing below decides.
+        (0, samples - 1)
     };
-    let first = mid.saturating_sub(reach);
-    let last = (mid + reach).min(samples - 1);
 
     let (mut de, mut dn) = (
         (path[last * 2] - path[first * 2]) as f64,
@@ -403,6 +438,113 @@ fn rotated_box(
     )
 }
 
+/// Screen-space AABB of the label as the shader lays it along its path.
+///
+/// [`rotated_box`] turns the whole label by one direction, which is exact on a
+/// straight road but not on the long gentle curves [`exceeds_max_angle`]
+/// deliberately accepts: there the glyphs bow away from the chord, and a box
+/// that misses them lets decluttering overlap two labels it thinks are apart.
+/// So the box is built the way the shader places glyphs instead — each path
+/// segment the text covers contributes the stretch of text on it, turned to
+/// that segment's own direction.
+///
+/// Positions are the path samples projected through the anchor's screen axes,
+/// in the font's own units (the declutter kernel scales those to pixels at the
+/// anchor). `(sx, sy)` is the label's overall reading direction before any
+/// flip, standing in for a segment seen edge-on.
+fn path_box(
+    l: &[f64],
+    path: &[f32],
+    samples: usize,
+    (east, north): ScreenAxes,
+    flip: bool,
+    meters_per_unit: f64,
+    (sx, sy): (f64, f64),
+) -> (f64, f64, f64, f64) {
+    let (min_y, max_y) = (l[15], l[16]);
+    let step = l[9];
+    let d = if flip { -1.0 } else { 1.0 };
+    // The arc the text covers, in metres along the path's own direction.
+    let (a, b) = (d * l[13] * meters_per_unit, d * l[14] * meters_per_unit);
+    let (lo, hi) = (a.min(b), a.max(b));
+
+    let screen = |k: usize| {
+        let (e, n) = (path[k * 2] as f64, path[k * 2 + 1] as f64);
+        (
+            (e * east.0 + n * north.0) / meters_per_unit,
+            (e * east.1 + n * north.1) / meters_per_unit,
+        )
+    };
+    let centre = sample_index(samples, step, 0.0);
+
+    let mut bounds = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+    let (first, last) = sample_range(samples, step, (lo, hi));
+    for k in first..last {
+        // The part of segment k's arc the text covers, as fractions along it.
+        let (k_lo, k_hi) = ((k as f64 - centre) * step, (k as f64 + 1.0 - centre) * step);
+        let (t0, t1) = (
+            ((lo.max(k_lo) - k_lo) / step).clamp(0.0, 1.0),
+            ((hi.min(k_hi) - k_lo) / step).clamp(0.0, 1.0),
+        );
+        if t1 < t0 {
+            continue;
+        }
+        let (pa, pb) = (screen(k), screen(k + 1));
+        let (dx, dy) = (pb.0 - pa.0, pb.1 - pa.1);
+        let len = dx.hypot(dy);
+        let (ux, uy) = if len > 1e-12 {
+            (dx / len, dy / len)
+        } else {
+            (sx, sy)
+        };
+        // Text up is the left of its reading direction, which the flip turns.
+        let (nx, ny) = (-uy * d, ux * d);
+        for t in [t0, t1] {
+            let (px, py) = (pa.0 + dx * t, pa.1 + dy * t);
+            for h in [min_y, max_y] {
+                let (x, y) = (px + nx * h, py + ny * h);
+                bounds = (
+                    bounds.0.min(x),
+                    bounds.1.max(x),
+                    bounds.2.min(y),
+                    bounds.3.max(y),
+                );
+            }
+        }
+    }
+    if bounds.0 > bounds.1 {
+        // The text covers no segment: it has no extent, or runs wholly past
+        // the sampled span — either way it is rejected, so any box will do.
+        return rotated_box(l[13], l[14], min_y, max_y, sx * d, sy * d);
+    }
+    // Already anchor-relative: the samples are offsets from the anchor, and
+    // the shader draws at `anchor + pathPos` from the same interpolation.
+    bounds
+}
+
+/// Fractional index of the path sample at `arc_meters` from the anchor.
+///
+/// Mirrors the shader's `t = (s + halfSpan) / step`: the engine samples
+/// symmetrically about the anchor, so with an even count the anchor falls
+/// midway between the two middle samples rather than on either.
+fn sample_index(samples: usize, step_meters: f64, arc_meters: f64) -> f64 {
+    (samples - 1) as f64 * 0.5 + arc_meters / step_meters
+}
+
+/// The samples bracketing the arc `(lo, hi)` metres from the anchor, clamped to
+/// the path: `first..=last` covers every segment the arc touches.
+///
+/// Always at least one segment, so a chord taken across it never degenerates
+/// to a single sample. Requires `samples >= 2`.
+fn sample_range(samples: usize, step_meters: f64, (lo, hi): (f64, f64)) -> (usize, usize) {
+    let last_sample = samples - 1;
+    // `as` saturates (and maps NaN to 0), so an arc past either end clamps.
+    let first = (sample_index(samples, step_meters, lo).floor() as usize).min(last_sample - 1);
+    let last =
+        (sample_index(samples, step_meters, hi).ceil() as usize).clamp(first + 1, last_sample);
+    (first, last)
+}
+
 /// Whether the path bends too sharply anywhere under the label.
 ///
 /// The turn is accumulated over a sliding window rather than over the whole
@@ -414,7 +556,7 @@ fn exceeds_max_angle(
     path: &[f32],
     samples: usize,
     step_meters: f64,
-    half_len_meters: f64,
+    arc_meters: (f64, f64),
     meters_per_em: f64,
     max_angle_rad: f64,
 ) -> bool {
@@ -422,11 +564,9 @@ fn exceeds_max_angle(
         return false;
     }
 
-    // Samples the label actually covers, centred on the anchor.
-    let half_span_samples = (half_len_meters / step_meters).ceil() as usize;
-    let mid = samples / 2;
-    let first = mid.saturating_sub(half_span_samples);
-    let last = (mid + half_span_samples).min(samples - 1);
+    // Samples the label actually covers — not necessarily centred on the
+    // anchor, since `center.x` can put the text to one side of it.
+    let (first, last) = sample_range(samples, step_meters, arc_meters);
     if last - first < 2 {
         return false;
     }
@@ -516,7 +656,7 @@ mod tests {
             0.0,
             0.0,  //
             0.0,  // addHeight
-            4.0,  // widthEm
+            2.0,  // reachEm: a 4-em label centred on its anchor
             10.0, // fontSize
             1.0,  // sizeInMeters
             std::f64::consts::FRAC_PI_4,
@@ -542,12 +682,13 @@ mod tests {
 
     /// A dead-straight path through the anchor along the given east/north
     /// direction. The label's reading direction is taken from the path, so a
-    /// fixture's bearing and its samples have to agree.
+    /// fixture's bearing and its samples have to agree. Centred between the two
+    /// middle samples, as `anchor_path` lays them out.
     fn directed_path(samples: usize, step: f64, dir: (f64, f64)) -> Vec<f32> {
-        let mid = samples / 2;
+        let mid = (samples - 1) as f64 * 0.5;
         (0..samples)
             .flat_map(|k| {
-                let t = (k as f64 - mid as f64) * step;
+                let t = (k as f64 - mid) * step;
                 [(t * dir.0) as f32, (t * dir.1) as f32]
             })
             .collect()
@@ -656,16 +797,19 @@ mod tests {
         // way; running north it must come back 10 wide and 40 tall, or the
         // declutter grid models a vertical street label as a horizontal one and
         // lets its neighbours overlap it.
-        let l = label(std::f64::consts::FRAC_PI_2, false, false);
+        // Paths long enough to hold the whole label: past the sampled span the
+        // shader piles glyphs onto the last sample, and so does the box.
+        let mut l = label(std::f64::consts::FRAC_PI_2, false, false);
+        l[9] = 10.0;
 
-        let east = line_label_place(&l, &straight_path(32, 1.0), 32, &view(), 1000.0, 1.0);
+        let east = line_label_place(&l, &straight_path(32, 10.0), 32, &view(), 1000.0, 1.0);
         let (ew, eh) = (east[3] - east[2], east[5] - east[4]);
         assert!((ew - 40.0).abs() < 1e-6, "east width {ew}");
         assert!((eh - 10.0).abs() < 1e-6, "east height {eh}");
 
         let north = line_label_place(
             &l,
-            &directed_path(32, 1.0, (0.0, 1.0)),
+            &directed_path(32, 10.0, (0.0, 1.0)),
             32,
             &view(),
             1000.0,
@@ -756,7 +900,7 @@ mod tests {
     /// so the two strides are pinned against each other by a test rather than
     /// by comment alone.
     fn fit_row(l: &[f64]) -> [f64; LINE_LABEL_FIT_STRIDE] {
-        [l[0], l[1], l[2], l[4], l[5], l[6], l[10]]
+        [l[0], l[1], l[2], l[3], l[4], l[5], l[6], l[10]]
     }
 
     #[test]
@@ -767,25 +911,28 @@ mod tests {
         // road length, camera distance and metric-vs-pixel sizing — against a
         // straight path, which can never be rejected for angle.
         let path = straight_path(32, 10.0);
-        for &width_em in &[0.0, 1.0, 4.0, 40.0, 400.0] {
+        for &reach_em in &[0.0, 0.5, 2.0, 20.0, 200.0] {
             for &half_extent in &[0.0, 5.0, 60.0, 1000.0] {
                 for &distance in &[500.0, 20_000.0] {
                     for &metric in &[0.0, 1.0] {
-                        let mut l = label(std::f64::consts::FRAC_PI_2, true, false);
-                        l[4] = width_em;
-                        l[6] = metric;
-                        l[10] = half_extent;
-                        let view = top_down_view(distance);
+                        for &add_height in &[0.0, 400.0] {
+                            let mut l = label(std::f64::consts::FRAC_PI_2, true, false);
+                            l[3] = add_height;
+                            l[4] = reach_em;
+                            l[6] = metric;
+                            l[10] = half_extent;
+                            let view = top_down_view(distance);
 
-                        let placed = line_label_place(&l, &path, 32, &view, 1000.0, 1.0);
-                        let fits = line_label_fit(&fit_row(&l), &view, 1000.0, 1.0);
+                            let placed = line_label_place(&l, &path, 32, &view, 1000.0, 1.0);
+                            let fits = line_label_fit(&fit_row(&l), &view, 1000.0, 1.0);
 
-                        assert_eq!(
-                            fits[0] == 0,
-                            placed[1] == 1.0,
-                            "width {width_em}, extent {half_extent}, distance {distance}, \
-                             metric {metric}: phases disagree",
-                        );
+                            assert_eq!(
+                                fits[0] == 0,
+                                placed[1] == 1.0,
+                                "reach {reach_em}, extent {half_extent}, distance {distance}, \
+                                 metric {metric}, height {add_height}: phases disagree",
+                            );
+                        }
                     }
                 }
             }
@@ -798,9 +945,9 @@ mod tests {
         // back onto a sparse label list by index, so a shifted or shared result
         // would silently cull the wrong labels.
         let mut fits_row = fit_row(&label(0.0, true, false));
-        fits_row[6] = 1000.0; // plenty of road
+        fits_row[7] = 1000.0; // plenty of road
         let mut overruns_row = fit_row(&label(0.0, true, false));
-        overruns_row[6] = 1.0; // almost none
+        overruns_row[7] = 1.0; // almost none
 
         let packed: Vec<f64> = fits_row
             .iter()
@@ -819,8 +966,8 @@ mod tests {
         // reach the same verdict however far away the camera is — otherwise
         // pulling back would drop labels that are still exactly as long.
         let mut l = fit_row(&label(0.0, true, false));
-        l[5] = 1.0; // sizeInMeters
-        l[6] = 100.0; // 100 m of road either side; the label needs 4 * 10 / 2 = 20 m
+        l[6] = 1.0; // sizeInMeters
+        l[7] = 100.0; // 100 m of road either side; the label needs 2 * 10 = 20 m
 
         for &distance in &[10.0, 500.0, 1_000_000.0] {
             let out = line_label_fit(&l, &top_down_view(distance), 1000.0, 1.0);
@@ -886,7 +1033,91 @@ mod tests {
         // not slip through phase one as "fits trivially" — it draws nothing,
         // and letting it through would have it claim declutter space.
         let mut l = fit_row(&label(0.0, true, false));
-        l[3] = 0.0;
+        l[4] = 0.0;
         assert_eq!(line_label_fit(&l, &view(), 1000.0, 1.0)[0], 0);
+    }
+
+    #[test]
+    fn an_elevated_pixel_label_is_sized_at_its_raised_depth() {
+        // The shader raises the anchor by `addHeight` before converting pixels
+        // to metres, so a label lifted most of the way to a distant camera is
+        // short on the ground. Sized at the unraised anchor it would overrun
+        // 60 m of road; at the raised one it fits.
+        let mut l = fit_row(&label(0.0, true, false));
+        l[6] = 0.0; // pixel-sized
+        l[7] = 60.0;
+        let far = top_down_view(20_000.0);
+        assert_eq!(line_label_fit(&l, &far, 1000.0, 1.0)[0], 0, "on the ground");
+        l[3] = 19_700.0;
+        assert_eq!(line_label_fit(&l, &far, 1000.0, 1.0)[0], 1, "raised");
+    }
+
+    #[test]
+    fn the_angle_test_covers_only_the_side_the_text_is_on() {
+        // A right-angle kink three samples behind the anchor. With `center.x =
+        // 0` the text runs entirely ahead of the anchor and never crosses the
+        // kink; with `center.x = 1` it runs entirely behind and does.
+        let samples = 32;
+        let step = 10.0;
+        let centre = (samples - 1) as f64 * 0.5;
+        let kink: usize = 13;
+        let path: Vec<f32> = (0..samples)
+            .flat_map(|k| {
+                let e = (k.max(kink) as f64 - centre) * step;
+                let n = -((kink.saturating_sub(k)) as f64) * step;
+                [e as f32, n as f32]
+            })
+            .collect();
+        let mut l = label(std::f64::consts::FRAC_PI_2, false, false);
+        l[4] = 4.0; // the whole 4-em label on one side
+        l[9] = step;
+
+        l[13] = 0.0;
+        l[14] = 40.0;
+        let ahead = line_label_place(&l, &path, samples, &view(), 1000.0, 1.0);
+        assert_eq!(
+            ahead[1], 0.0,
+            "text ahead of the anchor never meets the kink"
+        );
+
+        l[13] = -40.0;
+        l[14] = 0.0;
+        let behind = line_label_place(&l, &path, samples, &view(), 1000.0, 1.0);
+        assert_eq!(behind[1], 1.0, "text behind the anchor runs over it");
+    }
+
+    #[test]
+    fn a_curved_label_claims_the_space_its_glyphs_bow_into() {
+        // A wide arc bowing north. The chord between the label's ends sits
+        // ~49 m north of the anchor, so a box turned along the chord covers
+        // only the first 10 m above the anchor and misses the glyphs where the
+        // road bends up to meet it.
+        let samples = 32;
+        let centre = (samples - 1) as f64 * 0.5;
+        let radius = 400.0;
+        let step = 20.0;
+        let path: Vec<f32> = (0..samples)
+            .flat_map(|k| {
+                let t = (k as f64 - centre) * step / radius;
+                [(radius * t.sin()) as f32, (radius * (1.0 - t.cos())) as f32]
+            })
+            .collect();
+        let mut l = label(std::f64::consts::FRAC_PI_2, false, false);
+        l[4] = 20.0; // 40 ems, centred: 200 m either side
+        l[9] = step;
+        l[13] = -200.0;
+        l[14] = 200.0;
+
+        let out = line_label_place(&l, &path, samples, &view(), 1000.0, 1.0);
+        assert_eq!(out[1], 0.0, "a gentle curve is accepted");
+        let sagitta = radius * (1.0 - (200.0f64 / radius).cos());
+        assert!(
+            out[5] > sagitta,
+            "box top {} misses the bow at {sagitta}",
+            out[5]
+        );
+        assert!(out[4] < 1.0, "box bottom {} lost the anchor", out[4]);
+        // And it still spans the label's length.
+        assert!(out[3] - out[2] > 2.0 * radius * (200.0f64 / radius).sin() - 1.0);
     }
 }
