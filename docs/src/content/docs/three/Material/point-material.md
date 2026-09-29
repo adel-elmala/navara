@@ -201,7 +201,7 @@ import { Color } from "@navaramap/three";
 
 **Type:** `("point" | "line" | "polygon")[] | undefined`
 
-**Description:** Source geometry categories this material consumes. Adding `"line"` emits one point per line-string vertex, and adding `"polygon"` emits one point per polygon-ring vertex (the closing duplicate vertex is skipped). Setting the array replaces the default, so include `"point"` when point geometry should keep rendering. This option applies when the layer's geometry is built: set it at layer creation. `layer.update()` applies a new value only to tiles loaded afterwards, so already-loaded tiles keep their previous geometry until the layer is re-created.
+**Description:** Source geometry categories this material consumes. Adding `"line"` emits one point per line-string vertex by default. Set [`placement`](#placement) to repeat points along the line instead. Adding `"polygon"` emits one point per polygon-ring vertex (the closing duplicate vertex is skipped). Setting the array replaces the default, so include `"point"` when point geometry should keep rendering. This option applies when the layer's geometry is built: set it at layer creation. `layer.update()` applies a new value only to tiles loaded afterwards, so already-loaded tiles keep their previous geometry until the layer is re-created.
 
 **Default:** `["point"]`
 
@@ -270,6 +270,37 @@ import { Color } from "@navaramap/three";
 }
 ```
 
+### placement
+
+**Type:** `"point" | "line" | "line-center" | undefined`
+
+**Description:** How points are placed on line geometry. Only takes effect when [`geometryTypes`](#geometrytypes) includes `"line"`. Point geometry is always placed at the point itself, and polygon rings always get one point per vertex.
+
+- `"point"`: one point per line-string vertex.
+- `"line"`: points repeat along the line every [`spacing`](#spacing), evenly spaced regardless of where the line's vertices are.
+- `"line-center"`: a single point at the halfway point along each line string.
+
+With `"line"` and `"line-center"`, each point is also turned to the direction of the line where it sits (see [`rotateToLine`](#rotatetoline)).
+
+This option applies when the layer's geometry is built: set it at layer creation. `layer.update()` does not rebuild points that are already loaded, so remove the layer and add it again to change it.
+
+**Default:** `"point"`
+
+**Example:**
+
+```typescript
+{
+  point: {
+    geometryTypes: ["line"],
+    placement: "line",
+    spacing: 50, // Meters on a GeoJSON source
+    size: 6,
+    sizeInMeters: false,
+    clampToGround: true
+  }
+}
+```
+
 ### sizeInMeters
 
 **Type:** `boolean | undefined`
@@ -313,6 +344,32 @@ Can also be set per feature from a [feature evaluator](../../api/feature-evaluat
 {
   point: {
     pointFacing: "flat"
+  }
+}
+```
+
+### rotateToLine
+
+**Type:** `boolean | undefined`
+
+**Description:** Whether a point placed along a line turns with the line. When `true`, the direction of the line at the point's anchor, as a compass bearing, is added to [`rotation`](#rotation). Only used when [`placement`](#placement) is `"line"` or `"line-center"`.
+
+The added bearing reads as a direction on the map when the point is fixed to the surface, so combine it with `pointFacing: "flat"` and `rotateWithCamera: false`. On a point that follows the camera, the bearing only spins it on screen.
+
+This option applies when the layer's geometry is built. `layer.update()` does not change it for points that are already loaded, so remove the layer and add it again to change it.
+
+**Default:** `true`
+
+**Example:**
+
+```typescript
+{
+  point: {
+    geometryTypes: ["line"],
+    placement: "line",
+    pointFacing: "flat",
+    rotateWithCamera: false,
+    rotateToLine: true
   }
 }
 ```
@@ -392,6 +449,33 @@ Can also be set per feature from a [feature evaluator](../../api/feature-evaluat
 {
   point: {
     size: 10 // 10 meters
+  }
+}
+```
+
+### spacing
+
+**Type:** `number | undefined`
+
+**Description:** The distance between repeated points when [`placement`](#placement) is `"line"`. The unit depends on the source:
+
+- **`vector-tile` sources**: pixels at the tile's own zoom level. Tiles are loaded again as the camera zooms, so points repeat more often per line as you zoom in and stay roughly the same distance apart on screen.
+- **`geojson` sources**: meters along the ground. A GeoJSON source is not split into tiles, so the points stay where they were placed as the camera moves.
+
+A line shorter than `spacing` still gets one point, at its halfway point.
+
+This option applies when the layer's geometry is built. `layer.update()` does not rebuild points that are already loaded, so remove the layer and add it again to change it.
+
+**Default:** `250.0`
+
+**Example:**
+
+```typescript
+{
+  point: {
+    geometryTypes: ["line"],
+    placement: "line",
+    spacing: 100
   }
 }
 ```

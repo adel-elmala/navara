@@ -100,7 +100,7 @@ The `point`, `billboard`, `text`, and `polyline` materials accept a `geometryTyp
 Derivation is downward only:
 
 - `polyline` with `"polygon"`: every polygon boundary ring (the outer ring and any holes) renders as a closed polyline at the ring's base height. Extruded side edges are not included, so use the polygon material's [`outline`](../../../three/material/polygon-material/#outline) for extruded polygons.
-- `point` / `billboard` / `text` with `"line"`: one point per line-string vertex.
+- `point` / `billboard` / `text` with `"line"`: one point per line-string vertex by default. The `placement` option can place them along the line instead. See [Placing labels and sprites along lines](#placing-labels-and-sprites-along-lines).
 - `point` / `billboard` / `text` with `"polygon"`: one point per polygon-ring vertex (the closing duplicate vertex is skipped).
 
 ```typescript
@@ -125,6 +125,38 @@ Each derived representation is a full-featured instance of its material. A bound
 `geometryTypes` applies when geometry is built, so set it at layer creation. Calling `layer.update()` with a new value only affects tiles loaded afterwards. Tiles already on screen keep the geometry they were built with, so re-create the layer to change the derivation everywhere.
 
 On tiled rendering paths (vector tile sources, or materials with `tiled` / `clampToGround`), derivation walks each tile's clipped rings. Boundary polylines handle this automatically: edges introduced by tile clipping are dropped, so tile outlines never render through polygon interiors. Points derived from polygons on vector tiles can still appear at clip-introduced vertices near tile edges; if that matters, prefer an untiled GeoJSON layer for point derivation.
+
+### Placing labels and sprites along lines
+
+With `"line"` in `geometryTypes`, the `point`, `billboard`, and `text` materials also accept `placement`:
+
+- `"point"` (the default): one object per line-string vertex.
+- `"line"`: objects repeat along the line every `spacing`, evenly spaced regardless of where the vertices are.
+- `"line-center"`: a single object at the halfway point along each line string.
+
+Text placed along a line bends glyph by glyph to follow the curve, like a street name. A label that would overrun its line or bend more than `maxAngle` is hidden, and a label that would read upside down is flipped unless `keepUpright` is `false`. Both are decided again as the camera moves. Billboards and points turn to the line's direction through `rotateToLine`.
+
+The unit of `spacing` depends on the source. On a vector tile source it is pixels at the tile's zoom level, so the on-screen spacing stays roughly constant as tiles reload while you zoom. On a GeoJSON source, which is not split into tiles, it is meters along the ground.
+
+```typescript
+// Street names along road lines from a vector tile source
+view.addLayer({
+  type: "vector",
+  source: roads,
+  text: {
+    font: "Arsenal",
+    geometryTypes: ["line"],
+    placement: "line",
+    spacing: 250, // Pixels at the tile's zoom level
+    textFacing: "flat",
+    size: 14,
+    sizeInMeters: false,
+    clampToGround: true,
+  },
+});
+```
+
+Like `geometryTypes`, `placement`, `spacing`, and `rotateToLine` apply when geometry is built, so set them at layer creation. See [TextMaterial](../../../three/material/text-material/#placement), [BillboardMaterial](../../../three/material/billboard-material/#placement), and [PointMaterial](../../../three/material/point-material/#placement) for the full list of options.
 
 ## Related Resources
 

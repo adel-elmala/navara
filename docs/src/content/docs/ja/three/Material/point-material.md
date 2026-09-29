@@ -201,7 +201,7 @@ import { Color } from "@navaramap/three";
 
 **Type:** `("point" | "line" | "polygon")[] | undefined`
 
-**Description:** このマテリアルが消費するソースジオメトリのカテゴリーです。`"line"` を含めるとラインの頂点ごとに、`"polygon"` を含めるとポリゴンリングの頂点ごとに 1 つのポイントを描画します（リングを閉じる重複頂点はスキップされます）。配列を指定するとデフォルトは置き換えられるため、ポイントジオメトリも描画し続けたい場合は `"point"` を含めてください。このオプションはジオメトリ構築時に適用されます。レイヤー作成時に指定してください。`layer.update()` で変更しても読み込み済みのタイルには反映されず、変更後に読み込まれたタイルにのみ適用されます（すべてに反映するにはレイヤーを作り直してください）。
+**Description:** このマテリアルが消費するソースジオメトリのカテゴリーです。`"line"` を含めると、デフォルトではラインの頂点ごとに 1 つのポイントを描画します。ラインに沿って繰り返し配置するには [`placement`](#placement) を指定してください。`"polygon"` を含めるとポリゴンリングの頂点ごとに 1 つのポイントを描画します（リングを閉じる重複頂点はスキップされます）。配列を指定するとデフォルトは置き換えられるため、ポイントジオメトリも描画し続けたい場合は `"point"` を含めてください。このオプションはジオメトリ構築時に適用されます。レイヤー作成時に指定してください。`layer.update()` で変更しても読み込み済みのタイルには反映されず、変更後に読み込まれたタイルにのみ適用されます（すべてに反映するにはレイヤーを作り直してください）。
 
 **Default:** `["point"]`
 
@@ -270,6 +270,37 @@ import { Color } from "@navaramap/three";
 }
 ```
 
+### placement
+
+**Type:** `"point" | "line" | "line-center" | undefined`
+
+**Description:** ラインジオメトリ上でのポイントの配置方法を指定します。[`geometryTypes`](#geometrytypes) に `"line"` が含まれる場合のみ有効です。ポイントジオメトリは常にその地点に、ポリゴンリングは常に頂点ごとにポイントが配置されます。
+
+- `"point"`：ラインの頂点ごとに 1 つのポイントを配置します。
+- `"line"`：[`spacing`](#spacing) ごとにラインに沿ってポイントを繰り返し配置します。ラインの頂点の位置に関係なく等間隔になります。
+- `"line-center"`：各ラインの長さの中間点に 1 つのポイントを配置します。
+
+`"line"` と `"line-center"` では、各ポイントは配置された位置でのラインの向きにも回転します（[`rotateToLine`](#rotatetoline) を参照）。
+
+このオプションはジオメトリ構築時に適用されます。レイヤー作成時に指定してください。`layer.update()` では読み込み済みのポイントは再構築されないため、変更するにはレイヤーを削除して追加し直してください。
+
+**Default:** `"point"`
+
+**Example:**
+
+```typescript
+{
+  point: {
+    geometryTypes: ["line"],
+    placement: "line",
+    spacing: 50, // GeoJSON ソースではメートル単位
+    size: 6,
+    sizeInMeters: false,
+    clampToGround: true
+  }
+}
+```
+
 ### sizeInMeters
 
 **Type:** `boolean | undefined`
@@ -313,6 +344,32 @@ import { Color } from "@navaramap/three";
 {
   point: {
     pointFacing: "flat"
+  }
+}
+```
+
+### rotateToLine
+
+**Type:** `boolean | undefined`
+
+**Description:** ライン沿いに配置したポイントをラインに合わせて回転させるかどうかを指定します。`true` の場合、アンカー位置でのラインの向きを方位角として [`rotation`](#rotation) に加算します。[`placement`](#placement) が `"line"` または `"line-center"` のときのみ使用されます。
+
+加算される方位角は、ポイントが地表に固定されているときに地図上の向きとして意味を持つため、`pointFacing: "flat"` と `rotateWithCamera: false` と組み合わせてください。カメラに追従するポイントでは、方位角は画面上で回転させるだけです。
+
+このオプションはジオメトリ構築時に適用されます。`layer.update()` では読み込み済みのポイントには反映されないため、変更するにはレイヤーを削除して追加し直してください。
+
+**Default:** `true`
+
+**Example:**
+
+```typescript
+{
+  point: {
+    geometryTypes: ["line"],
+    placement: "line",
+    pointFacing: "flat",
+    rotateWithCamera: false,
+    rotateToLine: true
   }
 }
 ```
@@ -392,6 +449,33 @@ import { Color } from "@navaramap/three";
 {
   point: {
     size: 10 // 10メートル
+  }
+}
+```
+
+### spacing
+
+**Type:** `number | undefined`
+
+**Description:** [`placement`](#placement) が `"line"` のときに繰り返し配置するポイントの間隔です。単位はソースによって異なります。
+
+- **`vector-tile` ソース**：タイル自身のズームレベルでのピクセル。カメラのズームに合わせてタイルが読み込み直されるため、ズームインするほど 1 本のラインあたりのポイント数が増え、画面上の間隔はほぼ一定に保たれます。
+- **`geojson` ソース**：地表に沿ったメートル。GeoJSON ソースはタイル分割されないため、カメラを動かしてもポイントは配置された位置にとどまります。
+
+`spacing` より短いラインにも、その中間点に 1 つのポイントが配置されます。
+
+このオプションはジオメトリ構築時に適用されます。`layer.update()` では読み込み済みのポイントは再構築されないため、変更するにはレイヤーを削除して追加し直してください。
+
+**Default:** `250.0`
+
+**Example:**
+
+```typescript
+{
+  point: {
+    geometryTypes: ["line"],
+    placement: "line",
+    spacing: 100
   }
 }
 ```

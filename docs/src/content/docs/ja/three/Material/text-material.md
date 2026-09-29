@@ -302,7 +302,7 @@ view.addFontFamily({
 
 **Type:** `("point" | "line" | "polygon")[] | undefined`
 
-**Description:** このマテリアルが消費するソースジオメトリのカテゴリーです。`"line"` を含めるとラインの頂点ごとに、`"polygon"` を含めるとポリゴンリングの頂点ごとに 1 つのラベルを描画します（リングを閉じる重複頂点はスキップされます）。配列を指定するとデフォルトは置き換えられるため、ポイントジオメトリも描画し続けたい場合は `"point"` を含めてください。このオプションはジオメトリ構築時に適用されます。レイヤー作成時に指定してください。`layer.update()` で変更しても読み込み済みのタイルには反映されず、変更後に読み込まれたタイルにのみ適用されます（すべてに反映するにはレイヤーを作り直してください）。
+**Description:** このマテリアルが消費するソースジオメトリのカテゴリーです。`"line"` を含めると、デフォルトではラインの頂点ごとに 1 つのラベルを描画します。ラインに沿ってラベルを配置するには [`placement`](#placement) を指定してください。`"polygon"` を含めるとポリゴンリングの頂点ごとに 1 つのラベルを描画します（リングを閉じる重複頂点はスキップされます）。配列を指定するとデフォルトは置き換えられるため、ポイントジオメトリも描画し続けたい場合は `"point"` を含めてください。このオプションはジオメトリ構築時に適用されます。レイヤー作成時に指定してください。`layer.update()` で変更しても読み込み済みのタイルには反映されず、変更後に読み込まれたタイルにのみ適用されます（すべてに反映するにはレイヤーを作り直してください）。
 
 **Default:** `["point"]`
 
@@ -330,6 +330,26 @@ view.addFontFamily({
 {
   text: {
     height: 100 // 100メートル
+  }
+}
+```
+
+### keepUpright
+
+**Type:** `boolean | undefined`
+
+**Description:** ライン沿いに配置したラベルが上下逆さまに読める向きになる場合に反転し、ラインがどちら向きに描かれていても名前が読めるようにします。[`placement`](#placement) が `"line"` または `"line-center"` のときのみ使用されます。ラベルの読み方向はカメラに依存するため、カメラの移動に合わせて判定し直されます。`layer.update()` で変更した値は、表示中のラベルにも反映されます。
+
+**Default:** `true`
+
+**Example:**
+
+```typescript
+{
+  text: {
+    geometryTypes: ["line"],
+    placement: "line",
+    keepUpright: false // 常にラインが描かれた向きに読む
   }
 }
 ```
@@ -366,6 +386,48 @@ view.addFontFamily({
 {
   text: {
     lineHeight: 1.2
+  }
+}
+```
+
+### lineOffset
+
+**Type:** `number | undefined`
+
+**Description:** ライン沿いに配置したラベルを、ラインから横方向にずらします。正の値はラインの進行方向の左側に移動し、ラベルが左から右に読める向きのときはラインの上側になります。単位は [`size`](#size) と同じで、[`sizeInMeters`](#sizeinmeters) が `true` のときはメートル、それ以外はピクセルです。道路の上ではなく道路の脇に名前を置きたい場合に使用します。[`placement`](#placement) が `"line"` または `"line-center"` のときのみ使用されます。`layer.update()` で変更した値は、表示中のラベルにも反映されます。
+
+**Default:** `0.0`
+
+**Example:**
+
+```typescript
+{
+  text: {
+    geometryTypes: ["line"],
+    placement: "line",
+    size: 14,
+    sizeInMeters: false,
+    lineOffset: 10 // ラインから 10 ピクセル横に配置
+  }
+}
+```
+
+### maxAngle
+
+**Type:** `number | undefined`
+
+**Description:** ライン沿いに配置したラベルが曲がってよい回転角の合計の上限（度）です。これを超えるラベルは読みにくいため非表示になります。角度は個々の角ではなくラベルの長さ全体で測るため、鋭い角が 1 つもない長く緩やかなカーブでも非表示になることがあります。[`placement`](#placement) が `"line"` または `"line-center"` のときのみ使用されます。ラベルが収まるかどうかはカメラの移動に合わせて判定し直され、`layer.update()` で変更した値は表示中のラベルにも反映されます。
+
+**Default:** `45.0`
+
+**Example:**
+
+```typescript
+{
+  text: {
+    geometryTypes: ["line"],
+    placement: "line",
+    maxAngle: 90 // よりきついカーブにもラベルを配置
   }
 }
 ```
@@ -478,6 +540,95 @@ import { Color } from "@navaramap/three";
     outlineWidth: 2
   }
 }
+```
+
+### placement
+
+**Type:** `"point" | "line" | "line-center" | undefined`
+
+**Description:** ラインジオメトリ上でのラベルの配置方法を指定します。[`geometryTypes`](#geometrytypes) に `"line"` が含まれる場合のみ有効です。ポイントジオメトリは常にその地点に、ポリゴンリングは常に頂点ごとにラベルが配置されます。
+
+- `"point"`：ラインの頂点ごとに 1 つのラベルを配置します。
+- `"line"`：[`spacing`](#spacing) ごとにラインに沿ってラベルを繰り返し配置します。地図上の道路名のように、各グリフがラインのカーブに沿って曲がります。
+- `"line-center"`：各ラインの長さの中間点に 1 つのラベルを配置し、同じようにラインに沿って曲げます。
+
+ライン沿いのラベルは、読みにくくなる場合は描画されずに非表示になります。
+
+- アンカーの左右に残っているラインよりもラベルが長い場合
+- ラベルが `spacing` の 2 倍より長い場合（各ラベルの下に保持されるラインの長さが `spacing` の 2 倍のため）
+- ラベルが [`maxAngle`](#maxangle) を超えて曲がる場合
+
+ピクセル単位のラベルはカメラが遠ざかるほど地表上で広い範囲を占めるため、これらの判定はカメラの移動に合わせて再実行されます。そのため `spacing` がメートル単位になる GeoJSON ソースでは、カメラを引くと遠くのラベルが消えていきます。早く消えすぎる場合は `spacing` を大きくしてください。
+
+ライン沿いのラベルでは [`keepUpright`](#keepupright) と [`lineOffset`](#lineoffset) も使用できます。テキストをラインに沿って地表に寝かせるため、通常は `textFacing: "flat"` と組み合わせます。
+
+このオプションはジオメトリ構築時に適用されます。レイヤー作成時に指定してください。`layer.update()` では読み込み済みのラベルは再構築されないため、変更するにはレイヤーを削除して追加し直してください。
+
+**Default:** `"point"`
+
+**Example:**
+
+```typescript
+import ThreeView, { Color, fetchFontFamilyFromCss } from "@navaramap/three";
+import { DefaultPlugin } from "@navaramap/three-default-plugin";
+
+const view = new ThreeView({ canvas: document.querySelector("canvas")! });
+view.addPlugin(new DefaultPlugin());
+await view.init();
+
+view.addFontFamily(
+  await fetchFontFamilyFromCss(
+    "Arsenal",
+    "https://fonts.googleapis.com/css2?family=Arsenal:wght@700",
+  ),
+);
+
+const source = view.addSource({
+  type: "geojson",
+  data: {
+    type: "FeatureCollection",
+    features: [
+      {
+        type: "Feature",
+        properties: { name: "Riverside Avenue" },
+        geometry: {
+          type: "LineString",
+          coordinates: [
+            [139.76, 35.68],
+            [139.77, 35.685],
+            [139.78, 35.683],
+            [139.79, 35.688],
+          ],
+        },
+      },
+    ],
+  },
+});
+
+const streets = view.addLayer({
+  type: "vector",
+  source,
+  text: {
+    font: "Arsenal",
+    geometryTypes: ["line"],
+    placement: "line",
+    spacing: 600, // GeoJSON ソースはタイル分割されないためメートル単位
+    textFacing: "flat",
+    size: 18,
+    sizeInMeters: false,
+    clampToGround: true,
+    color: new Color().setStyle("#ffffff"),
+    outlineColor: new Color().setStyle("#111318"),
+    outlineWidth: 4,
+  },
+});
+
+streets.on("featureUpdated", ({ evaluator }) => {
+  evaluator.evaluate(
+    ({ properties }) => ({ text: properties?.["name"] as string, show: true }),
+    { filters: ["name"] },
+  );
+});
 ```
 
 ### rotateWithCamera
@@ -598,6 +749,33 @@ import { Color } from "@navaramap/three";
 {
   text: {
     size: 16
+  }
+}
+```
+
+### spacing
+
+**Type:** `number | undefined`
+
+**Description:** [`placement`](#placement) が `"line"` のときに繰り返し配置するラベルの間隔です。単位はソースによって異なります。
+
+- **`vector-tile` ソース**：タイル自身のズームレベルでのピクセル。カメラのズームに合わせてタイルが読み込み直されるため、ズームインするほど 1 本のラインあたりのラベル数が増え、画面上の間隔はほぼ一定に保たれます。
+- **`geojson` ソース**：地表に沿ったメートル。GeoJSON ソースはタイル分割されないため、カメラを動かしてもラベルは配置された位置にとどまります。
+
+`spacing` より短いラインにも、その中間点に 1 つのラベルが配置されます。`spacing` は各ラベルの下に保持されるラインの長さ（`spacing` の 2 倍）も決めるため、それより長いラベルは非表示になります。これは `"line-center"` にも当てはまります。
+
+このオプションはジオメトリ構築時に適用されます。`layer.update()` では読み込み済みのラベルは再構築されないため、変更するにはレイヤーを削除して追加し直してください。
+
+**Default:** `250.0`
+
+**Example:**
+
+```typescript
+{
+  text: {
+    geometryTypes: ["line"],
+    placement: "line",
+    spacing: 400
   }
 }
 ```
