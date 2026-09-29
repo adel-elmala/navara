@@ -243,18 +243,43 @@ fn accumulate_point_rte(
 /// Radius of the Web Mercator sphere (EPSG:3857).
 const MERCATOR_RADIUS_M: f64 = 6_378_137.0;
 
-/// Web Mercator position of a GeoJSON position, in metres at the equator, with
-/// y growing southward as [`LinePath`] expects.
-fn to_mercator(p: &Position) -> (f64, f64) {
+/// Web Mercator position of a longitude/latitude in degrees, in metres at the
+/// equator, with y growing southward as [`LinePath`] expects.
+fn to_mercator(lon: f64, lat: f64) -> (f64, f64) {
     (
-        p[0].to_radians() * MERCATOR_RADIUS_M,
-        -mercator_y(p[1].to_radians()) * MERCATOR_RADIUS_M,
+        lon.to_radians() * MERCATOR_RADIUS_M,
+        -mercator_y(lat.to_radians()) * MERCATOR_RADIUS_M,
     )
 }
 
 /// Latitude in degrees of a [`to_mercator`] y.
 fn mercator_lat(y: f64) -> f64 {
     mercator_y_to_lat(-y / MERCATOR_RADIUS_M).to_degrees()
+}
+
+/// Web Mercator positions of a line-string, unwrapped across the antimeridian.
+///
+/// Each longitude is taken within 180° of the previous vertex's, so a segment
+/// from 179° to -179° is the 2° hop the line is drawn as (polylines go through
+/// ECEF, where the seam does not exist) rather than 358° the long way round.
+/// The result may run past ±180°; [`wrap_lon`] brings anchors back.
+fn project_unwrapped(line: &[Position]) -> Vec<(f64, f64)> {
+    let mut prev: Option<f64> = None;
+    line.iter()
+        .map(|p| {
+            let mut lon = p[0];
+            if let Some(prev) = prev {
+                lon -= ((lon - prev) / 360.0).round() * 360.0;
+            }
+            prev = Some(lon);
+            to_mercator(lon, p[1])
+        })
+        .collect()
+}
+
+/// A longitude in degrees, back in `[-180, 180)`.
+fn wrap_lon(lon: f64) -> f64 {
+    (lon + 180.0).rem_euclid(360.0) - 180.0
 }
 
 /// Anchors spaced along one line-string, `spacing_m` metres apart.
@@ -274,7 +299,7 @@ fn add_line_anchors(
     placement: PointPlacement,
     spacing_m: f32,
 ) {
-    let projected: Vec<(f64, f64)> = line.iter().map(to_mercator).collect();
+    let projected = project_unwrapped(line);
     let Some(path) = LinePath::new(&projected) else {
         return; // Degenerate: fewer than two vertices, or all coincide.
     };
@@ -290,7 +315,7 @@ fn add_line_anchors(
         let (seg, t) = path.segment_at(s);
         let z0 = coords(&line[seg]).z;
         let z = z0 + (coords(&line[seg + 1]).z - z0) * t;
-        let anchor = Vec3::new((pos.0 / MERCATOR_RADIUS_M).to_degrees(), lat, z);
+        let anchor = Vec3::new(wrap_lon((pos.0 / MERCATOR_RADIUS_M).to_degrees()), lat, z);
         let anchor_path = wants_path.then(|| path.anchor_path(s, spacing, lat.to_radians().cos()));
         builder.add_line_anchor(
             kind,
@@ -1716,6 +1741,29 @@ mod test {
     }
 
     // --- Along-line placement ---
+
+    #[test]
+    fn a_line_crossing_the_antimeridian_takes_the_short_way() {
+        // 179 E to 179 W is a 2 deg hop across the seam, not 358 deg the long
+        // way round. At 50 km spacing that is a handful of anchors, all within
+        // a degree of the seam and heading east — not thousands spread over
+        // the globe heading west.
+        let acc = line_anchors(
+            &[[179.0, 0.0, 0.0], [-179.0, 0.0, 0.0]],
+            GeometryAppearanceKind::Point,
+            PointPlacement::Line,
+            50_000.0,
+        );
+        assert!(
+            !acc.coords.is_empty() && acc.coords.len() < 10,
+            "{} anchors",
+            acc.coords.len()
+        );
+        for (c, &b) in acc.coords.iter().zip(&acc.bearings) {
+            assert!(c.x.abs() > 178.9 && c.x.abs() <= 180.0, "lon {}", c.x);
+            assert!((b - 90.0).abs() < 1e-3, "bearing {b}");
+        }
+    }
 
     /// Run [`add_line_anchors`] over one line and return the resulting points.
     fn line_anchors(

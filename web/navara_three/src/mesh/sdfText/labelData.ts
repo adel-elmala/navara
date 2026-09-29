@@ -15,9 +15,9 @@ import {
 export { LABEL_ROWS, LabelRow };
 
 /**
- * Texels per texture row. Fixed so a capacity grow never changes an existing
- * label's address — only the height grows, and previously written data stays
- * valid after the copy.
+ * Default texels per texture row. Fixed per store so a capacity grow never
+ * changes an existing label's address — only the height grows, and previously
+ * written data stays valid after the copy.
  */
 const TEXTURE_WIDTH = 64;
 
@@ -25,9 +25,13 @@ const TEXTURE_WIDTH = 64;
 const INITIAL_CAPACITY = 16;
 
 /** Floats needed to hold `capacity` labels, padded out to whole texture rows. */
-function floatsFor(capacity: number, texelsPerSlot: number): number {
-  const rows = Math.ceil((capacity * texelsPerSlot) / TEXTURE_WIDTH);
-  return rows * TEXTURE_WIDTH * 4;
+function floatsFor(
+  capacity: number,
+  texelsPerSlot: number,
+  width: number,
+): number {
+  const rows = Math.ceil((capacity * texelsPerSlot) / width);
+  return rows * width * 4;
 }
 
 /**
@@ -68,13 +72,17 @@ export class LabelDataTexture {
    * @param texelsPerSlot Texels each slot occupies. Defaults to
    *   {@link LABEL_ROWS} for the per-label state texture; the path texture
    *   (`uPathData`) uses the same machinery with its own, much wider stride.
+   * @param width Texels per row. The height is what grows, so a wide slot
+   *   needs a wide row to keep the height under the GPU's texture size limit:
+   *   at 64 texels a 16-texel path slot fits only four labels per row.
    */
   constructor(
     initialCapacity = INITIAL_CAPACITY,
     private readonly _texelsPerSlot: number = LABEL_ROWS,
+    private readonly _width: number = TEXTURE_WIDTH,
   ) {
     this._data = new Float32Array(
-      floatsFor(Math.max(1, initialCapacity), _texelsPerSlot),
+      floatsFor(Math.max(1, initialCapacity), _texelsPerSlot, _width),
     );
     this._capacity = labelsIn(this._data.length, _texelsPerSlot);
     this._texture = this._createTexture();
@@ -112,7 +120,9 @@ export class LabelDataTexture {
     let target = this._capacity;
     while (target < slotCount) target *= 2;
 
-    const data = new Float32Array(floatsFor(target, this._texelsPerSlot));
+    const data = new Float32Array(
+      floatsFor(target, this._texelsPerSlot, this._width),
+    );
     data.set(this._data);
 
     this._data = data;
@@ -175,10 +185,10 @@ export class LabelDataTexture {
   private _createTexture(): DataTexture {
     // Derived from the buffer rather than recomputed from `_capacity`: the
     // texture must describe exactly the memory it is backed by.
-    const height = this._data.length / (TEXTURE_WIDTH * 4);
+    const height = this._data.length / (this._width * 4);
     const tex = new DataTexture(
       this._data,
-      TEXTURE_WIDTH,
+      this._width,
       height,
       RGBAFormat,
       FloatType,
@@ -191,7 +201,7 @@ export class LabelDataTexture {
     tex.wrapT = ClampToEdgeWrapping;
     tex.generateMipmaps = false;
     tex.needsUpdate = true;
-    this._size.set(TEXTURE_WIDTH, height);
+    this._size.set(this._width, height);
     return tex;
   }
 }

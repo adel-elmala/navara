@@ -134,7 +134,7 @@ With `"line"` in `geometryTypes`, the `point`, `billboard`, and `text` materials
 - `"line"`: objects repeat along the line every `spacing`, evenly spaced regardless of where the vertices are.
 - `"line-center"`: a single object at the halfway point along each line string.
 
-Text placed along a line bends glyph by glyph to follow the curve, like a street name. A label that would overrun its line or bend more than `maxAngle` is hidden, and a label that would read upside down is flipped unless `keepUpright` is `false`. Both are decided again as the camera moves. Billboards and points turn to the line's direction through `rotateToLine`.
+Text placed along a line follows the curve word by word, like a street name: each word turns to match the line under it, and the letters within a word stay straight. A label that would overrun its line or bend more than `maxAngle` is hidden, and a label that would read upside down is flipped unless `keepUpright` is `false`. Both are decided again as the camera moves. Billboards and points turn to the line's direction through `rotateToLine`.
 
 The unit of `spacing` depends on the source. On a vector tile source it is pixels at the tile's zoom level, so the on-screen spacing stays roughly constant as tiles reload while you zoom. On a GeoJSON source, which is not split into tiles, it is meters along the ground.
 

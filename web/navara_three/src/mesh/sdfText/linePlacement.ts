@@ -9,7 +9,7 @@ import { MathUtils } from "three";
  */
 
 /** `f64` values per label in the kernel's packed input. */
-export const LINE_LABEL_STRIDE = 17;
+export const LINE_LABEL_STRIDE = 19;
 
 /** `f64` values per label in the kernel's packed output: flip, rejected, then
  *  the rotated box as minX/maxX/minY/maxY. */
@@ -85,6 +85,9 @@ export type LinePlacementOptions = {
   center: readonly [number, number];
   /** Perpendicular offset from the line, in the font size's units. */
   lineOffset: number;
+  /** Whether the label lies flat rather than standing upright, resolved per
+   *  label since a feature can override the material's facing. */
+  readFlatFacing: (slot: number) => boolean;
   /** Whether the label is currently walked backwards, which feeds the kernel's
    *  flip hysteresis. */
   readFlip: (slot: number) => boolean;
@@ -173,16 +176,19 @@ export function packLineLabels(
 
     // The unrotated collision box, in the font's own units. Computed here
     // rather than in Rust so the em-and-anchor arithmetic stays in the one
-    // place that also builds the box for point labels. `lineOffset` shifts the
-    // text along its own up (the shader's path normal), and is already in
-    // these units, so it moves the box across the baseline as it is.
+    // place that also builds the box for point labels. `lineOffset` is already
+    // in these units but goes separately: it always moves the text across the
+    // ground, while the text's height stands along the surface normal unless
+    // it lies flat, so the kernel projects the two differently.
     const [cx, cy] = options.center;
     const w = label.widthEm;
     const h = label.heightEm;
     out[o + 13] = (0 - cx * w) * label.fontSize;
     out[o + 14] = (w - cx * w) * label.fontSize;
-    out[o + 15] = (label.minYEm - cy * h) * label.fontSize + options.lineOffset;
-    out[o + 16] = (label.maxYEm - cy * h) * label.fontSize + options.lineOffset;
+    out[o + 15] = (label.minYEm - cy * h) * label.fontSize;
+    out[o + 16] = (label.maxYEm - cy * h) * label.fontSize;
+    out[o + 17] = options.lineOffset;
+    out[o + 18] = options.readFlatFacing(label.slot) ? 1 : 0;
 
     // Labels are created lazily and sparsely, so their path runs are gathered
     // into input order rather than passed as one contiguous slice.

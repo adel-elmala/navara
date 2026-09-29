@@ -18,8 +18,10 @@ import invariant from "tiny-invariant";
 
 import {
   hasBatchScalarSlot,
+  readBatchScalar,
   registerBatchedMaterial,
   TEXT_BATCH_SUPPORT,
+  unpackOrientation,
   updateBatchAttribute,
   type BatchAttributeDefaults,
   type BatchedAttributeName,
@@ -66,6 +68,14 @@ const _tmpSize = new Vector2();
 const _tmpColor = new Color();
 const _tmpColorArray: [number, number, number] = [0, 0, 0];
 const _visibility = createAnchorVisibilityState();
+
+/**
+ * Line labels per row of the path texture. At 32 samples (16 texels) a label
+ * that is a 1024-texel row, so the 4096-row limit the batch texture also
+ * assumes holds ~262k labels — well past a dense tile, where the default
+ * 64-texel row ran out at 16k.
+ */
+const PATH_LABELS_PER_ROW = 64;
 
 type PositionsInfoBase = {
   batchIDs: Float32Array<ArrayBufferLike> | null;
@@ -342,7 +352,9 @@ export class BatchedSdfTextMesh
     // rather than restating it.
     const pathTexels = this._path ? this._path.stride / 4 : 0;
     this._pathData =
-      pathTexels > 0 ? new LabelDataTexture(16, pathTexels) : null;
+      pathTexels > 0
+        ? new LabelDataTexture(16, pathTexels, pathTexels * PATH_LABELS_PER_ROW)
+        : null;
 
     this.geometry = this._glyphs.geometry;
     const mat = new ShaderMaterial({
@@ -564,6 +576,7 @@ export class BatchedSdfTextMesh
       // culls them, so nothing reads it.
       this._labelData.setComponent(slot, LabelRow.PATH, 3, 1);
       rejected[slot] = 1;
+      this._hideRejectedLineLabel(placeable[i]);
     }
     if (survivors.length === 0) return;
 
@@ -577,6 +590,7 @@ export class BatchedSdfTextMesh
       lineOffset: state.lineOffset,
       readFlip: (slot) =>
         this._labelData.getComponent(slot, LabelRow.PATH, 2) !== 0,
+      readFlatFacing: (slot) => this._resolveFlatFacing(slot, state.flatFacing),
     });
 
     const result = lineLabelPlace(
@@ -594,11 +608,50 @@ export class BatchedSdfTextMesh
       this._labelData.setComponent(slot, LabelRow.PATH, 2, result[r]);
       this._labelData.setComponent(slot, LabelRow.PATH, 3, result[r + 1]);
       rejected[slot] = result[r + 1] > 0.5 ? 1 : 0;
+      if (rejected[slot]) this._hideRejectedLineLabel(survivors[i]);
       boxes[slot * 4] = result[r + 2];
       boxes[slot * 4 + 1] = result[r + 3];
       boxes[slot * 4 + 2] = result[r + 4];
       boxes[slot * 4 + 3] = result[r + 5];
     }
+  }
+
+  /**
+   * Drop a rejected line label to hidden in the declutter pass's eyes.
+   *
+   * The shader culls it and `collectDeclutterCandidates` skips it, so the
+   * declutter pass never gets to tell it that it lost. Left alone its target
+   * would still say "shown", and when it fits again it would come back as an
+   * incumbent — winning equal-priority ties and the sticky collision shrink
+   * over labels that really were on screen. Snapped rather than faded: it
+   * draws nothing either way, so it comes back as a fresh candidate and fades
+   * in like one.
+   */
+  private _hideRejectedLineLabel(record: LabelRecord): void {
+    if (!this._declutter) return;
+    record.declutterTarget = 1;
+    if (record.declutterHide === 1) return;
+    record.declutterHide = 1;
+    this._writeDeclutterHide(record);
+  }
+
+  /**
+   * Whether a label lies flat, as the shader resolves it: the feature's own
+   * facing once any feature has one (the batch texture then governs every
+   * feature), the material's until then.
+   */
+  private _resolveFlatFacing(slot: number, materialFlat: boolean): boolean {
+    const record = this._labels[slot];
+    const packed = record
+      ? readBatchScalar(
+          this.material as ShaderMaterial,
+          record.batchIndex,
+          "orientation",
+        )
+      : undefined;
+    return packed === undefined
+      ? materialFlat
+      : unpackOrientation(packed).flatFacing;
   }
 
   /** Same, for the path texture. */

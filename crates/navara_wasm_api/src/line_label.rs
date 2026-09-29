@@ -29,20 +29,27 @@
 //! | 4      | reachEm | farthest the text runs from its anchor along the line, in ems |
 //! | 5      | fontSize | px or meters, per `sizeInMeters` |
 //! | 6      | sizeInMeters | `0.0` = px, non-zero = meters |
-//! | 7      | maxAngleRad | largest cumulative turn allowed under the label |
+//! | 7      | maxAngleRad | largest turn allowed within the sliding window; `0` = straight only |
 //! | 8      | keepUpright | `0.0` = never flip, non-zero = flip when backwards |
 //! | 9      | stepMeters | arc length between adjacent path samples |
 //! | 10     | halfExtentMeters | real line either side of the anchor |
 //! | 11     | bearingRad | the line's tangent at the anchor, clockwise from north |
 //! | 12     | isFlipped | the label's current flip, for hysteresis |
 //! | 13,14  | minX/maxX | the label's unrotated box along its baseline |
-//! | 15,16  | minY/maxY | the same across it, +Y up, in the font's own units, `lineOffset` included |
+//! | 15,16  | minY/maxY | the same across it, +Y up, in the font's own units |
+//! | 17     | lineOffset | shift off the line along its ground normal, in the font's own units |
+//! | 18     | flatFacing | `0.0` = upright, non-zero = flat, as resolved for this label |
 //!
 //! `reachEm` rather than the width because the anchor need not be the text's
 //! centre: with `center.x = 0` the whole label runs off one side of it, and it
 //! is that side that has to fit on the line. The caller owns the `center`
 //! arithmetic (it also builds the box), so it hands over the larger of the two
 //! sides.
+//!
+//! `lineOffset` and the text's own height are kept apart because they need not
+//! run along the same axis: the shader always moves the text off the line
+//! across the ground, but stands its glyphs up along the surface normal unless
+//! the label lies flat.
 //!
 //! ## Result layout
 //!
@@ -71,7 +78,7 @@
 use wasm_bindgen::prelude::*;
 
 /// Number of `f64` values per label in the packed input slice.
-pub const LINE_LABEL_STRIDE: usize = 17;
+pub const LINE_LABEL_STRIDE: usize = 19;
 
 /// Number of `f64` values per label in [`line_label_fit`]'s packed input.
 ///
@@ -97,6 +104,10 @@ pub const LINE_LABEL_RESULT_STRIDE: usize = 6;
 /// em is the same idea — the turn that matters is the one a reader sees across
 /// a couple of adjacent glyphs, not the total bend of a long gentle curve.
 const ANGLE_WINDOW_EMS: f64 = 1.5;
+
+/// Turn below which [`exceeds_max_angle`] treats the path as straight: about
+/// 0.06°, far under anything visible and far over the f32 noise on the samples.
+const ANGLE_TOLERANCE_RAD: f64 = 1e-3;
 
 /// How near vertical a label has to run before its horizontal direction stops
 /// being a meaningful test of whether it reads forwards.
@@ -179,15 +190,7 @@ pub fn line_label_place(
         out[o] = if flip { 1.0 } else { 0.0 };
         out[o + 1] = if rejected { 1.0 } else { 0.0 };
         let (bx0, bx1, by0, by1) = if meters_per_unit > 0.0 && l[9] > 0.0 {
-            path_box(
-                l,
-                path,
-                samples_per_label,
-                axes,
-                flip,
-                meters_per_unit,
-                (sx, sy),
-            )
+            path_box(l, path, samples_per_label, axes, flip, meters_per_unit)
         } else {
             let d = if flip { -1.0 } else { 1.0 };
             rotated_box(l[13], l[14], l[15], l[16], sx * d, sy * d)
@@ -284,11 +287,26 @@ pub fn line_label_fit(labels: &[f64], view: &[f64], height_px: f64, fov_rad: f64
     out
 }
 
-/// The anchor's east and north unit vectors, as view-space x/y.
-type ScreenAxes = ((f64, f64), (f64, f64));
+/// The anchor's east, north and up unit vectors, as view-space x/y.
+#[derive(Clone, Copy)]
+struct ScreenAxes {
+    east: (f64, f64),
+    north: (f64, f64),
+    up: (f64, f64),
+}
 
-/// The anchor's east and north directions, projected into view space and kept
-/// as 2D screen axes.
+impl ScreenAxes {
+    /// A ground-plane vector, east then north, carried onto the screen.
+    fn ground(&self, (e, n): (f64, f64)) -> (f64, f64) {
+        (
+            e * self.east.0 + n * self.north.0,
+            e * self.east.1 + n * self.north.1,
+        )
+    }
+}
+
+/// The anchor's east, north and up directions, projected into view space and
+/// kept as 2D screen axes.
 ///
 /// The derivation mirrors `nvr_enuBasis` in
 /// `shaders/glsl/chunks/quad_orientation.glsl`, which is the basis the vertex
@@ -298,7 +316,11 @@ fn enu_screen_axes(l: &[f64], view: &[f64]) -> ScreenAxes {
     let (x, y, z) = (l[0], l[1], l[2]);
     let len = (x * x + y * y + z * z).sqrt();
     if len <= 0.0 {
-        return ((1.0, 0.0), (0.0, 1.0));
+        return ScreenAxes {
+            east: (1.0, 0.0),
+            north: (0.0, 1.0),
+            up: (0.0, 0.0),
+        };
     }
     let (nx, ny, nz) = (x / len, y / len, z / len);
 
@@ -323,7 +345,11 @@ fn enu_screen_axes(l: &[f64], view: &[f64]) -> ScreenAxes {
             view[1] * v.0 + view[5] * v.1 + view[9] * v.2,
         )
     };
-    (rot(east), rot(north))
+    ScreenAxes {
+        east: rot(east),
+        north: rot(north),
+        up: rot((nx, ny, nz)),
+    }
 }
 
 /// Unit direction the label reads in, on screen.
@@ -337,7 +363,7 @@ fn screen_direction(
     path: &[f32],
     samples: usize,
     reach_meters: f64,
-    (east, north): ScreenAxes,
+    axes: ScreenAxes,
 ) -> (f64, f64) {
     let step = l[9];
     let (first, last) = if step > 0.0 {
@@ -360,8 +386,7 @@ fn screen_direction(
         dn = cos_b;
     }
 
-    let sx = de * east.0 + dn * north.0;
-    let sy = de * east.1 + dn * north.1;
+    let (sx, sy) = axes.ground((de, dn));
     let len = sx.hypot(sy);
     if len <= 1e-12 {
         // The label is edge-on to the camera; any direction reads the same.
@@ -445,36 +470,34 @@ fn rotated_box(
 /// deliberately accepts: there the glyphs bow away from the chord, and a box
 /// that misses them lets decluttering overlap two labels it thinks are apart.
 /// So the box is built the way the shader places glyphs instead — each path
-/// segment the text covers contributes the stretch of text on it, turned to
-/// that segment's own direction.
+/// segment the text covers contributes the stretch of text on it, in that
+/// segment's own frame:
 ///
-/// Positions are the path samples projected through the anchor's screen axes,
-/// in the font's own units (the declutter kernel scales those to pixels at the
-/// anchor). `(sx, sy)` is the label's overall reading direction before any
-/// flip, standing in for a segment seen edge-on.
+/// - along the path, from the samples themselves;
+/// - off it by `lineOffset`, across the ground (the shader's `normal`);
+/// - up by the text's height, along that same ground normal when the label
+///   lies flat, and along the surface normal when it stands upright.
+///
+/// Everything is carried onto the screen through the anchor's axes, in the
+/// font's own units (the declutter kernel scales those to pixels at the
+/// anchor), so an upright label seen from above and a flat one seen edge-on
+/// both claim the thin strip they actually cover.
 fn path_box(
     l: &[f64],
     path: &[f32],
     samples: usize,
-    (east, north): ScreenAxes,
+    axes: ScreenAxes,
     flip: bool,
     meters_per_unit: f64,
-    (sx, sy): (f64, f64),
 ) -> (f64, f64, f64, f64) {
-    let (min_y, max_y) = (l[15], l[16]);
+    let (min_y, max_y, line_offset, flat) = (l[15], l[16], l[17], l[18] != 0.0);
     let step = l[9];
     let d = if flip { -1.0 } else { 1.0 };
     // The arc the text covers, in metres along the path's own direction.
     let (a, b) = (d * l[13] * meters_per_unit, d * l[14] * meters_per_unit);
     let (lo, hi) = (a.min(b), a.max(b));
 
-    let screen = |k: usize| {
-        let (e, n) = (path[k * 2] as f64, path[k * 2 + 1] as f64);
-        (
-            (e * east.0 + n * north.0) / meters_per_unit,
-            (e * east.1 + n * north.1) / meters_per_unit,
-        )
-    };
+    let sample = |k: usize| (path[k * 2] as f64, path[k * 2 + 1] as f64);
     let centre = sample_index(samples, step, 0.0);
 
     let mut bounds = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
@@ -489,20 +512,27 @@ fn path_box(
         if t1 < t0 {
             continue;
         }
-        let (pa, pb) = (screen(k), screen(k + 1));
-        let (dx, dy) = (pb.0 - pa.0, pb.1 - pa.1);
-        let len = dx.hypot(dy);
-        let (ux, uy) = if len > 1e-12 {
-            (dx / len, dy / len)
+        let (pa, pb) = (sample(k), sample(k + 1));
+        let (ge, gn) = (pb.0 - pa.0, pb.1 - pa.1);
+        let len = ge.hypot(gn);
+        // The shader's tangent, including its east fallback for a segment
+        // with no length, turned by the flip.
+        let (te, tn) = if len > 1e-6 {
+            (ge / len * d, gn / len * d)
         } else {
-            (sx, sy)
+            (d, 0.0)
         };
-        // Text up is the left of its reading direction, which the flip turns.
-        let (nx, ny) = (-uy * d, ux * d);
+        let normal = axes.ground((-tn, te));
+        let up = if flat { normal } else { axes.up };
+        let offset = (normal.0 * line_offset, normal.1 * line_offset);
         for t in [t0, t1] {
-            let (px, py) = (pa.0 + dx * t, pa.1 + dy * t);
+            let p = axes.ground((pa.0 + ge * t, pa.1 + gn * t));
+            let (px, py) = (
+                p.0 / meters_per_unit + offset.0,
+                p.1 / meters_per_unit + offset.1,
+            );
             for h in [min_y, max_y] {
-                let (x, y) = (px + nx * h, py + ny * h);
+                let (x, y) = (px + up.0 * h, py + up.1 * h);
                 bounds = (
                     bounds.0.min(x),
                     bounds.1.max(x),
@@ -514,8 +544,8 @@ fn path_box(
     }
     if bounds.0 > bounds.1 {
         // The text covers no segment: it has no extent, or runs wholly past
-        // the sampled span — either way it is rejected, so any box will do.
-        return rotated_box(l[13], l[14], min_y, max_y, sx * d, sy * d);
+        // the sampled span — either way it is rejected, so nothing reads it.
+        return (0.0, 0.0, 0.0, 0.0);
     }
     // Already anchor-relative: the samples are offsets from the anchor, and
     // the shader draws at `anchor + pathPos` from the same interpolation.
@@ -560,9 +590,14 @@ fn exceeds_max_angle(
     meters_per_em: f64,
     max_angle_rad: f64,
 ) -> bool {
-    if step_meters <= 0.0 || max_angle_rad <= 0.0 {
+    if step_meters <= 0.0 {
         return false;
     }
+    // Zero means "straight only", so it has to survive as a limit rather than
+    // switch the test off; a negative limit is no more permissive than that.
+    // The tolerance absorbs the f32 noise on the samples of a straight road,
+    // which would otherwise read as a turn and reject it.
+    let limit = max_angle_rad.max(0.0) + ANGLE_TOLERANCE_RAD;
 
     // Samples the label actually covers — not necessarily centred on the
     // anchor, since `center.x` can put the text to one side of it.
@@ -582,10 +617,10 @@ fn exceeds_max_angle(
         .ceil()
         .max(1.0) as usize;
     if window_samples >= prefix.len() {
-        return *prefix.last().unwrap_or(&0.0) > max_angle_rad;
+        return *prefix.last().unwrap_or(&0.0) > limit;
     }
     for start in 0..(prefix.len() - window_samples) {
-        if prefix[start + window_samples] - prefix[start] > max_angle_rad {
+        if prefix[start + window_samples] - prefix[start] > limit {
             return true;
         }
     }
@@ -670,6 +705,32 @@ mod tests {
             2.0 * 10.0,
             0.0,
             10.0,
+            0.0, // lineOffset
+            1.0, // flatFacing: lying on the ground, like the top-down camera sees it
+        ]
+    }
+
+    /// A camera level with the anchor, south of it and looking due north:
+    /// screen right = east, screen up = the surface normal, and north runs
+    /// straight into the screen.
+    fn level_view_north(distance_m: f64) -> Vec<f64> {
+        vec![
+            0.0,
+            1.0,
+            0.0,
+            0.0, // col 0: ECEF x (up) -> screen y
+            1.0,
+            0.0,
+            0.0,
+            0.0, // col 1: ECEF y (east) -> screen x
+            0.0,
+            0.0,
+            -1.0,
+            0.0, // col 2: ECEF z (north) -> into the screen
+            0.0,
+            -WGS84_EQ,
+            -distance_m,
+            1.0,
         ]
     }
 
@@ -818,6 +879,80 @@ mod tests {
         let (nw, nh) = (north[3] - north[2], north[5] - north[4]);
         assert!((nw - 10.0).abs() < 1e-6, "north width {nw}");
         assert!((nh - 40.0).abs() < 1e-6, "north height {nh}");
+    }
+
+    #[test]
+    fn the_box_stands_the_text_up_the_way_the_shader_does() {
+        // Flat text lies across the ground, so its height runs along the
+        // road's normal; upright text stands along the surface normal. The
+        // line offset always runs across the ground. Seen from above, then from
+        // ground level looking along the road's normal, each of the three
+        // either shows at full size or collapses to nothing.
+        let path = straight_path(32, 10.0);
+        let place = |flat: bool, view: &[f64]| {
+            let mut l = label(std::f64::consts::FRAC_PI_2, false, false);
+            l[9] = 10.0;
+            l[17] = 5.0;
+            l[18] = if flat { 1.0 } else { 0.0 };
+            let out = line_label_place(&l, &path, 32, view, 1000.0, 1.0);
+            (out[3] - out[2], out[4], out[5])
+        };
+        let (above, level) = (top_down_view(500.0), level_view_north(500.0));
+
+        for flat in [true, false] {
+            let (w, _, _) = place(flat, &above);
+            assert!((w - 40.0).abs() < 1e-6, "flat {flat}: width {w}");
+        }
+        // From above: the offset shows, and only flat text shows its height.
+        let (_, y0, y1) = place(true, &above);
+        assert!(
+            (y0 - 5.0).abs() < 1e-6 && (y1 - 15.0).abs() < 1e-6,
+            "flat above {y0}..{y1}"
+        );
+        let (_, y0, y1) = place(false, &above);
+        assert!(
+            (y0 - 5.0).abs() < 1e-6 && (y1 - 5.0).abs() < 1e-6,
+            "upright above {y0}..{y1}"
+        );
+        // From ground level: the offset is depth, and only upright text shows
+        // its height.
+        let (_, y0, y1) = place(false, &level);
+        assert!(
+            y0.abs() < 1e-6 && (y1 - 10.0).abs() < 1e-6,
+            "upright level {y0}..{y1}"
+        );
+        let (_, y0, y1) = place(true, &level);
+        assert!(y0.abs() < 1e-6 && y1.abs() < 1e-6, "flat level {y0}..{y1}");
+    }
+
+    #[test]
+    fn a_zero_max_angle_accepts_only_straight_lines() {
+        // Zero is the strictest limit, not "off": a straight road still fits,
+        // any real bend does not.
+        let mut l = label(std::f64::consts::FRAC_PI_2, true, false);
+        l[9] = 10.0;
+        let straight = straight_path(32, 10.0);
+        let samples = 32;
+        let centre = (samples - 1) as f64 * 0.5;
+        let bent: Vec<f32> = (0..samples)
+            .flat_map(|k| {
+                let e = (k as f64 - centre) * 10.0;
+                // A 2 deg kink at the anchor.
+                let n = if e > 0.0 {
+                    e * 2f64.to_radians().tan()
+                } else {
+                    0.0
+                };
+                [e as f32, n as f32]
+            })
+            .collect();
+        for max_angle in [0.0, -1.0] {
+            l[7] = max_angle;
+            let out = line_label_place(&l, &straight, 32, &view(), 1000.0, 1.0);
+            assert_eq!(out[1], 0.0, "max {max_angle}: straight road fits");
+            let out = line_label_place(&l, &bent, 32, &view(), 1000.0, 1.0);
+            assert_eq!(out[1], 1.0, "max {max_angle}: a bend is rejected");
+        }
     }
 
     #[test]

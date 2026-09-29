@@ -549,7 +549,7 @@ import { Color } from "@navaramap/three";
 **Description:** How labels are placed on line geometry. Only takes effect when [`geometryTypes`](#geometrytypes) includes `"line"`. Point geometry is always labeled at the point itself, and polygon rings always get one label per vertex.
 
 - `"point"`: one label per line-string vertex.
-- `"line"`: labels repeat along the line every [`spacing`](#spacing), and each glyph bends to follow the line's curve, like a street name on a map.
+- `"line"`: labels repeat along the line every [`spacing`](#spacing) and follow its curve word by word, like a street name on a map. Each word turns to match the line under it, and the letters within a word stay straight.
 - `"line-center"`: a single label at the halfway point along each line string, bent along the line in the same way.
 
 A label along a line is hidden instead of drawn when it would not read well:

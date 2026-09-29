@@ -53,6 +53,7 @@ const options = {
   center: [0.5, 0] as const,
   lineOffset: 0,
   readFlip: () => false,
+  readFlatFacing: () => true,
 };
 
 /** The span the samples cover either side of the anchor. */
@@ -172,17 +173,28 @@ describe("anchor and offset", () => {
     expect(packLineLabels([raised], p, options).labels[3]).toBe(120);
   });
 
-  it("moves the collision box with the line offset", () => {
+  it("keeps the line offset apart from the text's own height", () => {
+    // Upright text stands its height along the surface normal but is offset
+    // across the ground, so the kernel has to be able to tell the two apart.
     const p = path(10, 500);
     const plain = packLineLabels([label()], p, options).labels;
     const lifted = packLineLabels([label()], p, {
       ...options,
       lineOffset: 7,
     }).labels;
-    expect(lifted[15]).toBe(plain[15] + 7);
-    expect(lifted[16]).toBe(plain[16] + 7);
-    expect(lifted[13]).toBe(plain[13]);
-    expect(lifted[14]).toBe(plain[14]);
+    expect(lifted[17]).toBe(7);
+    expect(lifted.slice(13, 17)).toEqual(plain.slice(13, 17));
+  });
+
+  it("resolves the facing per label", () => {
+    const p = path(10, 500);
+    const labels = [label({ slot: 0 }), label({ slot: 1 })];
+    const packed = packLineLabels(labels, p, {
+      ...options,
+      readFlatFacing: (slot) => slot === 1,
+    }).labels;
+    expect(packed[18]).toBe(0);
+    expect(packed[LINE_LABEL_STRIDE + 18]).toBe(1);
   });
 });
 
