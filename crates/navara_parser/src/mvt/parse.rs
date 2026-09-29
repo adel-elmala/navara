@@ -18,7 +18,7 @@ use navara_math::{FloatType, Vec3};
 
 use super::config::{LayerParseConfig, LayerParseKind, PointEmitter};
 use super::pos_converter::PosConverter;
-use crate::line_placement::{AnchorPath, LinePath, tangent_to_bearing};
+use crate::line_placement::{AnchorPath, LinePath, push_anchor_line_data, tangent_to_bearing};
 
 // ============================================================================
 // Output types
@@ -539,16 +539,10 @@ impl<'a> MvtFeatureProcessor<'a> {
             path_meta,
         } = &mut self.layers[index].groups[group_index].geom
         {
+            push_anchor_line_data(c.len(), bearings, path_samples, path_meta, bearing, path);
             c.push(coords);
             batch_indices.push(batch_index);
             encoded_coords.extend_from_slice(&rtc);
-            if let Some(bearing) = bearing {
-                bearings.push(bearing);
-            }
-            if let Some(path) = path {
-                path_samples.extend_from_slice(&path.samples);
-                path_meta.extend_from_slice(&path.meta);
-            }
         }
     }
 

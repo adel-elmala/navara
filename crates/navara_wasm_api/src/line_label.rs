@@ -159,15 +159,6 @@ pub fn line_label_place(
 
         let (reach, half_extent, meters_per_em) = fit_lengths(l, l[10], &cam);
 
-        let axes = enu_screen_axes(l, view);
-        // Which way the label runs on screen. Taken across the label's whole
-        // extent rather than from the tangent at its anchor: on a curving road
-        // the two disagree, and it is the overall reading direction that
-        // decides whether a name comes out backwards.
-        let (sx, sy) = screen_direction(l, path, samples_per_label, reach, axes);
-
-        let flip = l[8] != 0.0 && should_flip(sx, sy, l[12] != 0.0);
-
         // The arc the text actually covers, in metres along the path from the
         // anchor. The box's baseline extent is exactly that in font units, and
         // walking the path backwards mirrors it.
@@ -177,6 +168,18 @@ pub fn line_label_place(
             0.0
         };
         let (x0, x1) = (l[13] * meters_per_unit, l[14] * meters_per_unit);
+
+        let axes = enu_screen_axes(l, view);
+        // Which way the label runs on screen. Taken across the text's own
+        // extent rather than from the tangent at its anchor: on a curving road
+        // the two disagree, and it is the overall reading direction that
+        // decides whether a name comes out backwards. The unflipped extent,
+        // not one symmetric about the anchor: with `center.x` off 0.5 the
+        // text sits to one side, and on a hairpin the side it does not cover
+        // can point the other way.
+        let (sx, sy) = screen_direction(l, path, samples_per_label, (x0, x1), axes);
+
+        let flip = l[8] != 0.0 && should_flip(sx, sy, l[12] != 0.0);
         let arc = if flip { (-x1, -x0) } else { (x0, x1) };
 
         // The fit test is repeated here rather than trusted from phase one, so
@@ -362,12 +365,12 @@ fn screen_direction(
     l: &[f64],
     path: &[f32],
     samples: usize,
-    reach_meters: f64,
+    arc_meters: (f64, f64),
     axes: ScreenAxes,
 ) -> (f64, f64) {
     let step = l[9];
     let (first, last) = if step > 0.0 {
-        sample_range(samples, step, (-reach_meters, reach_meters))
+        sample_range(samples, step, arc_meters)
     } else {
         // No step: every sample is the anchor, and the bearing below decides.
         (0, samples - 1)
@@ -923,6 +926,31 @@ mod tests {
         );
         let (_, y0, y1) = place(true, &level);
         assert!(y0.abs() < 1e-6 && y1.abs() < 1e-6, "flat level {y0}..{y1}");
+    }
+
+    #[test]
+    fn an_off_centre_label_reads_the_way_its_own_side_of_the_line_runs() {
+        // A hairpin at the anchor: the line arrives heading east and leaves
+        // heading west. With `center.x = 0` the text covers only the westward
+        // leg, so it reads backwards and must flip — even though a chord taken
+        // symmetrically about the anchor spans both legs and points east.
+        let samples = 32;
+        let step = 10.0;
+        let centre = (samples - 1) as f64 * 0.5;
+        let path: Vec<f32> = (0..samples)
+            .flat_map(|k| {
+                let a = (k as f64 - centre) * step;
+                let e = if a < 0.0 { 3.0 * a } else { -a };
+                [e as f32, 0.0f32]
+            })
+            .collect();
+        let mut l = label(std::f64::consts::FRAC_PI_2, true, false);
+        l[4] = 4.0; // the whole 4-em label ahead of the anchor
+        l[9] = step;
+        l[13] = 0.0;
+        l[14] = 40.0;
+        let out = line_label_place(&l, &path, samples, &view(), 1000.0, 1.0);
+        assert_eq!(out[0], 1.0, "text on the westward leg should flip");
     }
 
     #[test]

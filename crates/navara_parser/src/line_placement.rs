@@ -105,15 +105,24 @@ impl<'a> LinePath<'a> {
     /// fraction along it, for interpolating per-vertex values such as height.
     pub fn segment_at(&self, s: f64) -> (usize, f64) {
         let clamped = s.clamp(0.0, self.length());
+        let last_seg = self.verts.len() - 2;
         // The first segment whose end is at or past `clamped` contains it.
+        // Binary search, since this runs for every path sample of every anchor
+        // and a line can have thousands of vertices.
+        let first = self.cum[1..]
+            .partition_point(|&c| c < clamped)
+            .min(last_seg);
         // Zero-length segments (repeated vertices) are skipped: a line opening
         // with a duplicate would otherwise hand every query at its start that
         // segment, whose tangent is undefined, and the extrapolation before the
-        // first anchor would run off in an arbitrary direction. The line has
-        // positive length, so some segment always qualifies.
-        let seg = (0..self.verts.len() - 1)
-            .find(|&i| self.cum[i + 1] >= clamped && self.cum[i + 1] > self.cum[i])
-            .unwrap_or(self.verts.len() - 2);
+        // first anchor would run off in an arbitrary direction. Only a run of
+        // duplicates at `clamped == 0` can be found this way — any later
+        // zero-length segment ends where its predecessor did, so the search
+        // stops on the predecessor — and the line has positive length, so a
+        // real segment follows.
+        let seg = (first..=last_seg)
+            .find(|&i| self.cum[i + 1] > self.cum[i])
+            .unwrap_or(last_seg);
         let len = self.cum[seg + 1] - self.cum[seg];
         let t = if len > 0.0 {
             (clamped - self.cum[seg]) / len
@@ -228,6 +237,46 @@ impl<'a> LinePath<'a> {
     }
 }
 
+/// Append one point's along-line data to a point group's buffers, keeping them
+/// one entry per point.
+///
+/// A group can mix along-line anchors with native points — a material with
+/// `geometryTypes: ["point", "line"]` puts both in one batch — while the
+/// renderer indexes every buffer by instance. So once any point in the group
+/// carries a bearing or a path, every point does: the ones without get a
+/// bearing of `0.0` (no rotation added) and a path whose sample step is `0.0`,
+/// which is how the renderer tells them apart. Points pushed before the
+/// group's first along-line anchor are backfilled the same way.
+///
+/// `points_before` is the number of points already in the group.
+pub fn push_anchor_line_data(
+    points_before: usize,
+    bearings: &mut Vec<f32>,
+    path_samples: &mut Vec<f32>,
+    path_meta: &mut Vec<f32>,
+    bearing: Option<f32>,
+    path: Option<AnchorPath>,
+) {
+    if bearing.is_some() || !bearings.is_empty() {
+        bearings.resize(points_before, 0.0);
+        bearings.push(bearing.unwrap_or(0.0));
+    }
+    if path.is_some() || !path_meta.is_empty() {
+        path_samples.resize(points_before * PATH_SAMPLES * 2, 0.0);
+        path_meta.resize(points_before * PATH_META_STRIDE, 0.0);
+        match path {
+            Some(p) => {
+                path_samples.extend_from_slice(&p.samples);
+                path_meta.extend_from_slice(&p.meta);
+            }
+            None => {
+                path_samples.resize(path_samples.len() + PATH_SAMPLES * 2, 0.0);
+                path_meta.resize(path_meta.len() + PATH_META_STRIDE, 0.0);
+            }
+        }
+    }
+}
+
 /// Convert a frame tangent to a compass bearing in degrees.
 ///
 /// East is `+x` and north is `-y`, so clockwise-from-north matches the
@@ -304,6 +353,62 @@ mod test {
         assert_eq!(tangent, (0.0, 1.0));
         assert!((pos.0 - 0.0).abs() < 1e-12 && (pos.1 + 10.0).abs() < 1e-12);
         assert_eq!(path.segment_at(0.0), (1, 0.0));
+    }
+
+    #[test]
+    fn segment_at_skips_duplicates_anywhere_in_the_line() {
+        // Duplicates in the middle and at the end, too: every query lands on a
+        // segment with length, and the binary search agrees with the old scan.
+        let verts = [
+            (0.0, 0.0),
+            (0.0, 0.0),
+            (10.0, 0.0),
+            (10.0, 0.0),
+            (10.0, 10.0),
+            (10.0, 10.0),
+        ];
+        let path = LinePath::new(&verts).unwrap();
+        for s in [-1.0, 0.0, 5.0, 10.0, 15.0, 20.0, 25.0] {
+            let (seg, _) = path.segment_at(s);
+            let (a, b) = (verts[seg], verts[seg + 1]);
+            assert!(a != b, "s {s} landed on zero-length segment {seg}");
+        }
+        assert_eq!(path.segment_at(10.0), (1, 1.0));
+        assert_eq!(path.segment_at(20.0), (3, 1.0));
+    }
+
+    #[test]
+    fn mixed_groups_keep_one_entry_per_point() {
+        // native, anchor, native: the leading native point is backfilled when
+        // the anchor arrives, the trailing one padded as it is pushed.
+        let (mut b, mut s, mut m) = (Vec::new(), Vec::new(), Vec::new());
+        let anchor = AnchorPath {
+            samples: vec![1.0; PATH_SAMPLES * 2],
+            meta: [2.0, 3.0],
+        };
+        push_anchor_line_data(0, &mut b, &mut s, &mut m, None, None);
+        assert!(
+            b.is_empty() && m.is_empty(),
+            "no line data until an anchor needs it"
+        );
+        push_anchor_line_data(1, &mut b, &mut s, &mut m, Some(90.0), Some(anchor));
+        push_anchor_line_data(2, &mut b, &mut s, &mut m, None, None);
+
+        assert_eq!(b, vec![0.0, 90.0, 0.0]);
+        assert_eq!(s.len(), 3 * PATH_SAMPLES * 2);
+        assert_eq!(m, vec![0.0, 0.0, 2.0, 3.0, 0.0, 0.0]);
+        assert!(
+            s[PATH_SAMPLES * 2..PATH_SAMPLES * 4]
+                .iter()
+                .all(|&v| v == 1.0)
+        );
+
+        // A sprite group carries bearings but never paths.
+        let (mut b, mut s, mut m) = (Vec::new(), Vec::new(), Vec::new());
+        push_anchor_line_data(0, &mut b, &mut s, &mut m, Some(45.0), None);
+        push_anchor_line_data(1, &mut b, &mut s, &mut m, None, None);
+        assert_eq!(b, vec![45.0, 0.0]);
+        assert!(s.is_empty() && m.is_empty());
     }
 
     #[test]

@@ -1765,6 +1765,43 @@ mod test {
         }
     }
 
+    #[test]
+    fn native_points_and_line_anchors_share_a_group_aligned() {
+        // `geometryTypes: ["point", "line"]` with along-line text: a point
+        // feature, then a line, then another point, all into one text group.
+        // Every per-anchor buffer has to stay one entry per point, or the
+        // renderer reads a neighbour's path and bearing (or past the end).
+        use navara_feature_component::geometry_builder::AccumulatedGeometry;
+        use navara_parser::line_placement::{PATH_META_STRIDE, PATH_SAMPLES};
+        let kind = GeometryAppearanceKind::Text;
+        let mut batch_table = BatchTable::default();
+        let mut builder = GeometryBuilder::new(&mut batch_table, "l");
+        builder.begin_feature(&None);
+        builder.add_point(kind, Vec3::new(1.0, 1.0, 0.0), CRS::Geographic, 0.0);
+        let line: Vec<Position> = [[0.0, 0.0, 0.0], [0.01, 0.0, 0.0]]
+            .iter()
+            .map(|p| Position::from(*p))
+            .collect();
+        add_line_anchors(&mut builder, &line, kind, 0.0, PointPlacement::Line, 250.0);
+        builder.add_point(kind, Vec3::new(2.0, 2.0, 0.0), CRS::Geographic, 0.0);
+
+        let acc = match builder.groups.groups.pop().map(|g| g.accumulated) {
+            Some(AccumulatedGeometry::Points(acc)) => acc,
+            _ => panic!("expected points"),
+        };
+        let n = acc.coords.len();
+        assert!(n >= 3, "{n} points");
+        assert_eq!(acc.bearings.len(), n);
+        assert_eq!(acc.path_samples.len(), n * PATH_SAMPLES * 2);
+        assert_eq!(acc.path_meta.len(), n * PATH_META_STRIDE);
+        // The native points are marked by a zero step; the anchors are not.
+        let step = |i: usize| acc.path_meta[i * PATH_META_STRIDE];
+        assert_eq!(step(0), 0.0);
+        assert_eq!(step(n - 1), 0.0);
+        assert!((1..n - 1).all(|i| step(i) > 0.0));
+        assert_eq!((acc.bearings[0], acc.bearings[n - 1]), (0.0, 0.0));
+    }
+
     /// Run [`add_line_anchors`] over one line and return the resulting points.
     fn line_anchors(
         line: &[[f64; 3]],

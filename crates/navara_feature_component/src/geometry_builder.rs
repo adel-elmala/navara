@@ -7,7 +7,7 @@ use navara_geometry::{Hierarchy, WindingOrder};
 use navara_layer::LayerId;
 use navara_material::Appearance;
 use navara_math::{Transform, Vec3};
-use navara_parser::line_placement::AnchorPath;
+use navara_parser::line_placement::{AnchorPath, push_anchor_line_data};
 
 use crate::{
     BatchedFeatureMarker,
@@ -160,6 +160,16 @@ impl GeometryGroups {
             AccumulatedGeometry::Points(g) => g,
             _ => unreachable!(),
         };
+        // Never along-line itself, but it may share a group with anchors that
+        // are, so it still takes its padding entry.
+        push_anchor_line_data(
+            geom.coords.len(),
+            &mut geom.bearings,
+            &mut geom.path_samples,
+            &mut geom.path_meta,
+            None,
+            None,
+        );
         geom.coords.push(coords);
         geom.batch_indices.push(batch_index);
         geom.batch_ids.push(global_batch_id as f32);
@@ -170,8 +180,9 @@ impl GeometryGroups {
 
     /// Accumulate a point with RTE-encoded position.
     /// `high`/`low`: pre-computed `EncodedVec3` f32 triplets.
-    /// `bearing` and `path` are set only for anchors placed along a line; a
-    /// group takes them for every point or for none.
+    /// `bearing` and `path` are set only for anchors placed along a line; see
+    /// [`push_anchor_line_data`] for how a group mixing them with plain points
+    /// stays aligned.
     /// Returns `(batch_index, commit_batch_id)`.
     #[allow(clippy::too_many_arguments)]
     pub fn track_point_rte(
@@ -192,17 +203,18 @@ impl GeometryGroups {
             AccumulatedGeometry::Points(g) => g,
             _ => unreachable!(),
         };
+        push_anchor_line_data(
+            geom.coords.len(),
+            &mut geom.bearings,
+            &mut geom.path_samples,
+            &mut geom.path_meta,
+            bearing,
+            path,
+        );
         geom.coords.push(coords);
         geom.batch_indices.push(batch_index);
         geom.batch_ids.push(global_batch_id as f32);
         geom.encoded.push_rte(high, low);
-        if let Some(bearing) = bearing {
-            geom.bearings.push(bearing);
-        }
-        if let Some(path) = path {
-            geom.path_samples.extend_from_slice(&path.samples);
-            geom.path_meta.extend_from_slice(&path.meta);
-        }
         (batch_index, commit_batch_id)
     }
 

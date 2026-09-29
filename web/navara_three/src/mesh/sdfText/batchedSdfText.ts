@@ -527,6 +527,8 @@ export class BatchedSdfTextMesh
     placeable.length = 0;
     for (const record of this._labels) {
       if (!record.show || record.widthEm <= 0 || record.fontSize <= 0) continue;
+      // A plain point sharing the batch has no path to be placed along.
+      if (!this._isAlongLine(record)) continue;
       placeable.push(record);
     }
     if (placeable.length === 0) return;
@@ -617,6 +619,17 @@ export class BatchedSdfTextMesh
   }
 
   /**
+   * Whether this label sits on a line, as opposed to a plain point sharing the
+   * batch (`geometryTypes: ["point", "line"]`). The engine keeps the path
+   * buffers one entry per point and marks plain points with a zero sample
+   * step, which the shader tests the same way.
+   */
+  private _isAlongLine(record: LabelRecord): boolean {
+    const meta = this._path?.meta;
+    return (meta?.[record.instanceIndex * PATH_META_STRIDE] ?? 0) > 0;
+  }
+
+  /**
    * Drop a rejected line label to hidden in the declutter pass's eyes.
    *
    * The shader culls it and `collectDeclutterCandidates` skips it, so the
@@ -689,17 +702,20 @@ export class BatchedSdfTextMesh
       );
     }
 
+    const alongLine = this._isAlongLine(record);
     this._labelData.setRow(
       record.slot,
       LabelRow.PATH,
       record.slot * texelsPerLabel,
+      // Zero for a plain point, which is what tells the shader to lay it out
+      // as an ordinary label.
       line.meta?.[record.instanceIndex * PATH_META_STRIDE] ?? 0,
       0, // flip — decided per pass by `placeLineLabels`
       // Rejected until that pass has judged it. A label drawn before its first
       // placement runs has no flip yet, so it would appear for a frame or two
       // reading backwards — and while tiles stream in there is always a fresh
-      // batch in that state.
-      1,
+      // batch in that state. A plain point is never judged, so never waits.
+      alongLine ? 1 : 0,
     );
   }
 
@@ -1182,8 +1198,10 @@ export class BatchedSdfTextMesh
       // unrotated block matters: reading past the array would put `undefined`
       // — and then NaN — into the packed candidate, and a NaN box never
       // registers a collision, so the label would silently overlap everything.
+      // A plain point in a line batch is screen-aligned like any other label.
       const b = record.slot * 4;
-      const hasBox = boxes !== null && b + 3 < boxes.length;
+      const hasBox =
+        boxes !== null && b + 3 < boxes.length && this._isAlongLine(record);
       out.push({
         anchorX: record.anchor[0],
         anchorY: record.anchor[1],

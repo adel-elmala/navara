@@ -217,96 +217,107 @@ void main() {
 
     vec3 axisRight;
     vec3 axisUp;
+    // Set by the along-line walk below; an ordinary label keeps these.
+    bool nvr_alongLine = false;
+    float wordCenterEm = 0.0;
+    float pathScale = 1.0;
 #ifdef NVR_LINE_PLACEMENT
-    // A curved label's background would have to be a bent ribbon, which one
-    // quad cannot express, so line placement draws glyphs only.
-    if (isBackground) {
-        gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
-        return;
-    }
-
     vec4 pathRow = nvr_readLabel(slot, LABEL_ROW_PATH);
-    // The placement pass rejected this label: it is longer than the road it
-    // sits on, or the road bends too sharply under it to stay readable. Culled
-    // rather than faded, because unlike a declutter loss this is not a
-    // competition the label could win back by a pixel of camera drift.
-    if (pathRow.w > 0.5) {
-        gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
-        return;
+    // A zero sample step marks a plain point sharing the batch with along-line
+    // anchors (`geometryTypes: ["point", "line"]`): it has no path to walk, so
+    // it lays out as an ordinary label, background and all.
+    nvr_alongLine = pathRow.y > 0.0;
+    if (nvr_alongLine) {
+        // A curved label's background would have to be a bent ribbon, which
+        // one quad cannot express, so line placement draws glyphs only.
+        if (isBackground) {
+            gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+            return;
+        }
+
+        // The placement pass rejected this label: it is longer than the road it
+        // sits on, or the road bends too sharply under it to stay readable. Culled
+        // rather than faded, because unlike a declutter loss this is not a
+        // competition the label could win back by a pixel of camera drift.
+        if (pathRow.w > 0.5) {
+            gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+            return;
+        }
+
+        int pathBase = int(pathRow.x);
+        float stepMeters = pathRow.y;
+        // keepUpright walks the path backwards, so a label never reads
+        // right-to-left. Reversing the tangent with it keeps the glyph frame
+        // self-consistent: the text's own "up" stays on its own up side.
+        float dir = pathRow.z > 0.5 ? -1.0 : 1.0;
+
+        // Follow the line a WORD at a time. The word is placed rigidly at its own
+        // centre and its glyphs are laid along that one tangent, so the letters of
+        // a name stay square to each other however the road bends under them —
+        // per-glyph tangents splay them apart on a tight curve and the word stops
+        // reading as a word. Only the joins between words take up the curvature.
+        //
+        // Quads are never bent vertex by vertex either way: that would shear them.
+        wordCenterEm = glyphWordCenter - center.x * textWidth;
+        float sMeters = wordCenterEm * scaleFactor * dir;
+
+        float halfSpan = 0.5 * float(PATH_SAMPLES - 1) * stepMeters;
+        float t = (sMeters + halfSpan) / max(stepMeters, 1e-6);
+        int seg = int(clamp(floor(t), 0.0, float(PATH_SAMPLES - 2)));
+        vec2 pa = nvr_readPath(pathBase, seg);
+        vec2 pb = nvr_readPath(pathBase, seg + 1);
+        vec2 pathPos = mix(pa, pb, clamp(t - float(seg), 0.0, 1.0));
+
+        vec2 tangent = pb - pa;
+        float tangentLen = length(tangent);
+        // A doubled-back hairpin can put two samples on the same point; east keeps
+        // the glyph readable rather than letting a normalize() produce NaN.
+        tangent = (tangentLen > 1e-6 ? tangent / tangentLen : vec2(1.0, 0.0)) * dir;
+
+        // Samples are evenly spaced in ARC length but joined by straight chords, so
+        // a segment containing a bend covers less ground than the arc it stands
+        // for, and `mix` advances more slowly than the label's own em ruler.
+        //
+        // Placing every glyph individually hid this: all of them shrank by the same
+        // factor, so the label just came out slightly short. A rigid word does not
+        // shrink, so the whole of the discrepancy is taken out of the gaps between
+        // words instead — which is where the spaces went. Put the glyphs on the
+        // path's ruler too, and words and gaps shrink together again.
+        //
+        // Chord never exceeds arc, so the clamp only guards f32 noise.
+        pathScale = min(tangentLen / max(stepMeters, 1e-6), 1.0);
+        vec2 normal = vec2(-tangent.y, tangent.x);
+
+        // `scaleFactor` is metres per em, so dividing by the font size recovers
+        // metres per style unit — which is what lineOffset is expressed in.
+        pathPos += normal * (uLineOffset * (scaleFactor / max(fontSize, 1e-6)));
+
+        vec3 eastWorld, northWorld, normalWorld;
+        nvr_enuBasis(absTransformed, eastWorld, northWorld, normalWorld);
+        vec3 eastView = (viewMatrix * vec4(eastWorld, 0.0)).xyz;
+        vec3 northView = (viewMatrix * vec4(northWorld, 0.0)).xyz;
+
+        // The walk decides where in the tangent plane the glyph sits; facing still
+        // decides which plane its quad stands in.
+        axisRight = tangent.x * eastView + tangent.y * northView;
+        axisUp = nvr_batchFlatFacing
+            ? normal.x * eastView + normal.y * northView
+            : (viewMatrix * vec4(normalWorld, 0.0)).xyz;
+
+        // Path offsets are already metres, so they bypass the em scaling below.
+        mvPosition.xyz += pathPos.x * eastView + pathPos.y * northView;
     }
-
-    int pathBase = int(pathRow.x);
-    float stepMeters = pathRow.y;
-    // keepUpright walks the path backwards, so a label never reads
-    // right-to-left. Reversing the tangent with it keeps the glyph frame
-    // self-consistent: the text's own "up" stays on its own up side.
-    float dir = pathRow.z > 0.5 ? -1.0 : 1.0;
-
-    // Follow the line a WORD at a time. The word is placed rigidly at its own
-    // centre and its glyphs are laid along that one tangent, so the letters of
-    // a name stay square to each other however the road bends under them —
-    // per-glyph tangents splay them apart on a tight curve and the word stops
-    // reading as a word. Only the joins between words take up the curvature.
-    //
-    // Quads are never bent vertex by vertex either way: that would shear them.
-    float wordCenterEm = glyphWordCenter - center.x * textWidth;
-    float sMeters = wordCenterEm * scaleFactor * dir;
-
-    float halfSpan = 0.5 * float(PATH_SAMPLES - 1) * stepMeters;
-    float t = (sMeters + halfSpan) / max(stepMeters, 1e-6);
-    int seg = int(clamp(floor(t), 0.0, float(PATH_SAMPLES - 2)));
-    vec2 pa = nvr_readPath(pathBase, seg);
-    vec2 pb = nvr_readPath(pathBase, seg + 1);
-    vec2 pathPos = mix(pa, pb, clamp(t - float(seg), 0.0, 1.0));
-
-    vec2 tangent = pb - pa;
-    float tangentLen = length(tangent);
-    // A doubled-back hairpin can put two samples on the same point; east keeps
-    // the glyph readable rather than letting a normalize() produce NaN.
-    tangent = (tangentLen > 1e-6 ? tangent / tangentLen : vec2(1.0, 0.0)) * dir;
-
-    // Samples are evenly spaced in ARC length but joined by straight chords, so
-    // a segment containing a bend covers less ground than the arc it stands
-    // for, and `mix` advances more slowly than the label's own em ruler.
-    //
-    // Placing every glyph individually hid this: all of them shrank by the same
-    // factor, so the label just came out slightly short. A rigid word does not
-    // shrink, so the whole of the discrepancy is taken out of the gaps between
-    // words instead — which is where the spaces went. Put the glyphs on the
-    // path's ruler too, and words and gaps shrink together again.
-    //
-    // Chord never exceeds arc, so the clamp only guards f32 noise.
-    float pathScale = min(tangentLen / max(stepMeters, 1e-6), 1.0);
-    vec2 normal = vec2(-tangent.y, tangent.x);
-
-    // `scaleFactor` is metres per em, so dividing by the font size recovers
-    // metres per style unit — which is what lineOffset is expressed in.
-    pathPos += normal * (uLineOffset * (scaleFactor / max(fontSize, 1e-6)));
-
-    vec3 eastWorld, northWorld, normalWorld;
-    nvr_enuBasis(absTransformed, eastWorld, northWorld, normalWorld);
-    vec3 eastView = (viewMatrix * vec4(eastWorld, 0.0)).xyz;
-    vec3 northView = (viewMatrix * vec4(northWorld, 0.0)).xyz;
-
-    // The walk decides where in the tangent plane the glyph sits; facing still
-    // decides which plane its quad stands in.
-    axisRight = tangent.x * eastView + tangent.y * northView;
-    axisUp = nvr_batchFlatFacing
-        ? normal.x * eastView + normal.y * northView
-        : (viewMatrix * vec4(normalWorld, 0.0)).xyz;
-
-    // Path offsets are already metres, so they bypass the em scaling below.
-    mvPosition.xyz += pathPos.x * eastView + pathPos.y * northView;
-#else
-    nvr_quadBasis(
-        absTransformed,
-        nvr_batchFlatFacing,
-        nvr_batchRotateWithCamera,
-        nvr_batchRotation,
-        axisRight,
-        axisUp
-    );
 #endif
+    if (!nvr_alongLine) {
+        nvr_quadBasis(
+            absTransformed,
+            nvr_batchFlatFacing,
+            nvr_batchRotateWithCamera,
+            nvr_batchRotation,
+            axisRight,
+            axisUp
+        );
+    }
 
     vIsColor = glyphKind == GLYPH_KIND_COLOR ? 1 : 0;
     // Meters to push a background strip away from the camera (below).
@@ -367,7 +378,6 @@ void main() {
         localPos.x -= center.x * textWidth;
         localPos.y -= center.y * textHeight;
 
-#ifdef NVR_LINE_PLACEMENT
         // The walk placed this glyph's WORD on the curve, so what is left is
         // the offset from the word's centre, laid along the word's single
         // tangent. Only x needs rebasing: y is still the baseline-relative
@@ -376,10 +386,11 @@ void main() {
         // Split in two so `pathScale` reaches the spacing but not the
         // letterforms: where the glyph sits inside its word rides the path's
         // ruler, while the quad's own corners keep the glyph's true shape.
-        float glyphCenterEm = glyphOffset.x + glyphSize.x * 0.5 - center.x * textWidth;
-        localPos.x =
-            (glyphCenterEm - wordCenterEm) * pathScale + (localPos.x - glyphCenterEm);
-#endif
+        if (nvr_alongLine) {
+            float glyphCenterEm = glyphOffset.x + glyphSize.x * 0.5 - center.x * textWidth;
+            localPos.x =
+                (glyphCenterEm - wordCenterEm) * pathScale + (localPos.x - glyphCenterEm);
+        }
 
         // Lay the glyph out in the label's basis (see nvr_quadBasis), scaled,
         // and wrapped onto the globe when flat (see nvr_quadOffset).

@@ -91,15 +91,17 @@ pub struct PointGeometryAccumulator {
     pub batch_ids: Vec<f32>,
     pub transform: Transform,
     /// Tangent bearing at each anchor, in degrees clockwise from north. Empty
-    /// unless the anchors were placed along a line, so this is either empty or
-    /// as long as `coords`.
+    /// unless some anchor was placed along a line, and then as long as
+    /// `coords`, with `0.0` for plain points (see `push_anchor_line_data`).
     pub bearings: Vec<f32>,
     /// East/north metre offsets sampling the line around each anchor, at a
-    /// fixed stride per anchor. Empty unless this is along-line text.
+    /// fixed stride per anchor. Empty unless this is along-line text, and then
+    /// one run per point, zeros for plain points.
     pub path_samples: Vec<f32>,
     /// `PATH_META_STRIDE` (two) scalars per anchor: the metres between
     /// adjacent `path_samples` entries, then the metres of real line either
-    /// side of the anchor.
+    /// side of the anchor. A step of `0.0` marks a plain point sharing the
+    /// group, which the renderer lays out as an ordinary label.
     pub path_meta: Vec<f32>,
 }
 
