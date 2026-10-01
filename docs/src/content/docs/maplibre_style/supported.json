@@ -1,0 +1,775 @@
+{
+  "layer": {
+    "fill": {
+      "status": "⚠️",
+      "paint": {
+        "fill-color": {
+          "status": "✅"
+        },
+        "fill-opacity": {
+          "status": "✅"
+        },
+        "fill-antialias": {
+          "status": "❌"
+        },
+        "fill-outline-color": {
+          "status": "❌"
+        },
+        "fill-translate": {
+          "status": "❌"
+        },
+        "fill-translate-anchor": {
+          "status": "❌"
+        },
+        "fill-pattern": {
+          "status": "❌"
+        }
+      }
+    },
+    "fill-extrusion": {
+      "status": "⚠️",
+      "paint": {
+        "fill-extrusion-color": {
+          "status": "✅"
+        },
+        "fill-extrusion-opacity": {
+          "status": "✅"
+        },
+        "fill-extrusion-height": {
+          "status": "✅"
+        },
+        "fill-extrusion-base": {
+          "status": "✅"
+        },
+        "fill-extrusion-translate": {
+          "status": "❌"
+        },
+        "fill-extrusion-translate-anchor": {
+          "status": "❌"
+        },
+        "fill-extrusion-pattern": {
+          "status": "❌"
+        },
+        "fill-extrusion-vertical-gradient": {
+          "status": "❌"
+        }
+      }
+    },
+    "line": {
+      "status": "⚠️",
+      "paint": {
+        "line-color": {
+          "status": "✅"
+        },
+        "line-opacity": {
+          "status": "✅"
+        },
+        "line-width": {
+          "status": "✅"
+        },
+        "line-gap-width": {
+          "status": "❌"
+        },
+        "line-offset": {
+          "status": "❌"
+        },
+        "line-blur": {
+          "status": "❌"
+        },
+        "line-dasharray": {
+          "status": "❌"
+        },
+        "line-pattern": {
+          "status": "❌"
+        },
+        "line-gradient": {
+          "status": "❌"
+        }
+      },
+      "layout": {
+        "line-cap": {
+          "status": "❌"
+        },
+        "line-join": {
+          "status": "❌"
+        },
+        "line-miter-limit": {
+          "status": "❌"
+        },
+        "line-round-limit": {
+          "status": "❌"
+        }
+      }
+    },
+    "circle": {
+      "status": "⚠️",
+      "paint": {
+        "circle-color": {
+          "status": "✅"
+        },
+        "circle-opacity": {
+          "status": "✅"
+        },
+        "circle-radius": {
+          "status": "✅"
+        },
+        "circle-blur": {
+          "status": "❌"
+        },
+        "circle-stroke-color": {
+          "status": "❌"
+        },
+        "circle-stroke-opacity": {
+          "status": "❌"
+        },
+        "circle-stroke-width": {
+          "status": "❌"
+        },
+        "circle-translate": {
+          "status": "❌"
+        },
+        "circle-translate-anchor": {
+          "status": "❌"
+        },
+        "circle-pitch-scale": {
+          "status": "❌"
+        },
+        "circle-pitch-alignment": {
+          "status": "❌"
+        }
+      }
+    },
+    "symbol": {
+      "status": "⚠️",
+      "paint": {
+        "icon-color": {
+          "status": "✅"
+        },
+        "icon-opacity": {
+          "status": "✅"
+        },
+        "text-color": {
+          "status": "✅"
+        },
+        "text-opacity": {
+          "status": "✅"
+        },
+        "text-halo-color": {
+          "status": "⚠️ Evaluated once at layer construction"
+        },
+        "text-halo-width": {
+          "status": "⚠️ Evaluated once at layer construction"
+        },
+        "text-halo-blur": {
+          "status": "❌"
+        },
+        "icon-halo-color": {
+          "status": "❌"
+        },
+        "icon-halo-width": {
+          "status": "❌"
+        },
+        "icon-halo-blur": {
+          "status": "❌"
+        },
+        "icon-translate": {
+          "status": "❌"
+        },
+        "text-translate": {
+          "status": "❌"
+        }
+      },
+      "layout": {
+        "icon-image": {
+          "status": "✅"
+        },
+        "icon-size": {
+          "status": "✅"
+        },
+        "text-field": {
+          "status": "✅"
+        },
+        "text-size": {
+          "status": "✅"
+        },
+        "text-font": {
+          "status": "✅"
+        },
+        "text-anchor": {
+          "status": "❌"
+        },
+        "icon-anchor": {
+          "status": "❌"
+        },
+        "text-offset": {
+          "status": "❌"
+        },
+        "icon-offset": {
+          "status": "❌"
+        },
+        "text-rotate": {
+          "status": "❌"
+        },
+        "icon-rotate": {
+          "status": "❌"
+        },
+        "symbol-sort-key": {
+          "status": "❌"
+        }
+      }
+    },
+    "raster": {
+      "status": "⚠️ Layer only, no properties supported",
+      "paint": {
+        "raster-opacity": {
+          "status": "❌"
+        },
+        "raster-brightness-min": {
+          "status": "❌"
+        },
+        "raster-brightness-max": {
+          "status": "❌"
+        },
+        "raster-contrast": {
+          "status": "❌"
+        },
+        "raster-saturation": {
+          "status": "❌"
+        },
+        "raster-fade-duration": {
+          "status": "❌"
+        },
+        "raster-hue-rotate": {
+          "status": "❌"
+        },
+        "raster-resampling": {
+          "status": "❌"
+        }
+      }
+    },
+    "hillshade": {
+      "status": "⚠️ Layer only, no properties supported",
+      "paint": {
+        "hillshade-illumination-direction": {
+          "status": "❌"
+        },
+        "hillshade-illumination-anchor": {
+          "status": "❌"
+        },
+        "hillshade-exaggeration": {
+          "status": "❌"
+        },
+        "hillshade-shadow-color": {
+          "status": "❌"
+        },
+        "hillshade-highlight-color": {
+          "status": "❌"
+        },
+        "hillshade-accent-color": {
+          "status": "❌"
+        }
+      }
+    },
+    "background": {
+      "status": "⚠️",
+      "paint": {
+        "background-color": {
+          "status": "✅"
+        },
+        "background-opacity": {
+          "status": "✅"
+        },
+        "background-pattern": {
+          "status": "❌"
+        }
+      },
+      "layout": {
+        "visibility": {
+          "status": "✅"
+        }
+      }
+    },
+    "sky": {
+      "status": "❌"
+    },
+    "heatmap": {
+      "status": "❌"
+    }
+  },
+  "source": {
+    "geojson": {
+      "status": "✅"
+    },
+    "vector": {
+      "status": "✅"
+    },
+    "raster": {
+      "status": "✅"
+    },
+    "raster-dem": {
+      "status": "✅",
+      "encoding": {
+        "terrarium": {
+          "status": "✅"
+        },
+        "mapbox": {
+          "status": "✅"
+        }
+      }
+    },
+    "image": {
+      "status": "❌"
+    },
+    "video": {
+      "status": "❌"
+    },
+    "canvas": {
+      "status": "❌"
+    }
+  },
+  "expression": {
+    "get": {
+      "status": "✅"
+    },
+    "has": {
+      "status": "✅"
+    },
+    "in": {
+      "status": "✅"
+    },
+    "index-of": {
+      "status": "✅"
+    },
+    "length": {
+      "status": "✅"
+    },
+    "case": {
+      "status": "✅"
+    },
+    "match": {
+      "status": "✅"
+    },
+    "coalesce": {
+      "status": "✅"
+    },
+    "to-boolean": {
+      "status": "✅"
+    },
+    "to-number": {
+      "status": "✅"
+    },
+    "to-string": {
+      "status": "✅"
+    },
+    "to-color": {
+      "status": "✅"
+    },
+    "array": {
+      "status": "✅"
+    },
+    "literal": {
+      "status": "✅"
+    },
+    "typeof": {
+      "status": "✅"
+    },
+    "concat": {
+      "status": "✅"
+    },
+    "upcase": {
+      "status": "✅"
+    },
+    "downcase": {
+      "status": "✅"
+    },
+    "+": {
+      "status": "✅"
+    },
+    "-": {
+      "status": "✅"
+    },
+    "*": {
+      "status": "✅"
+    },
+    "/": {
+      "status": "✅"
+    },
+    "%": {
+      "status": "✅"
+    },
+    "^": {
+      "status": "✅"
+    },
+    "sqrt": {
+      "status": "✅"
+    },
+    "log10": {
+      "status": "✅"
+    },
+    "ln": {
+      "status": "✅"
+    },
+    "abs": {
+      "status": "✅"
+    },
+    "ceil": {
+      "status": "✅"
+    },
+    "floor": {
+      "status": "✅"
+    },
+    "round": {
+      "status": "✅"
+    },
+    "min": {
+      "status": "✅"
+    },
+    "max": {
+      "status": "✅"
+    },
+    "==": {
+      "status": "✅"
+    },
+    "!=": {
+      "status": "✅"
+    },
+    ">": {
+      "status": "✅"
+    },
+    ">=": {
+      "status": "✅"
+    },
+    "<": {
+      "status": "✅"
+    },
+    "<=": {
+      "status": "✅"
+    },
+    "!": {
+      "status": "✅"
+    },
+    "all": {
+      "status": "✅"
+    },
+    "any": {
+      "status": "✅"
+    },
+    "zoom": {
+      "status": "✅"
+    },
+    "geometry-type": {
+      "status": "✅"
+    },
+    "id": {
+      "status": "✅"
+    },
+    "properties": {
+      "status": "✅"
+    },
+    "pitch": {
+      "status": "❌"
+    },
+    "distance-from-center": {
+      "status": "❌"
+    },
+    "let": {
+      "status": "✅"
+    },
+    "var": {
+      "status": "✅"
+    },
+    "semiliteral": {
+      "status": "✅"
+    },
+    "number": {
+      "status": "✅"
+    },
+    "boolean": {
+      "status": "✅"
+    },
+    "string": {
+      "status": "✅"
+    },
+    "object": {
+      "status": "✅"
+    },
+    "collator": {
+      "status": "✅"
+    },
+    "format": {
+      "status": "❌"
+    },
+    "image": {
+      "status": "❌"
+    },
+    "number-format": {
+      "status": "✅"
+    },
+    "at": {
+      "status": "✅"
+    },
+    "slice": {
+      "status": "✅"
+    },
+    "global-state": {
+      "status": "✅"
+    },
+    "within": {
+      "status": "✅"
+    },
+    "step": {
+      "status": "✅"
+    },
+    "interpolate": {
+      "status": "✅"
+    },
+    "interpolate-hcl": {
+      "status": "✅"
+    },
+    "interpolate-lab": {
+      "status": "✅"
+    },
+    "ln2": {
+      "status": "✅"
+    },
+    "pi": {
+      "status": "✅"
+    },
+    "e": {
+      "status": "✅"
+    },
+    "log2": {
+      "status": "✅"
+    },
+    "sin": {
+      "status": "✅"
+    },
+    "cos": {
+      "status": "✅"
+    },
+    "tan": {
+      "status": "✅"
+    },
+    "asin": {
+      "status": "✅"
+    },
+    "acos": {
+      "status": "✅"
+    },
+    "atan": {
+      "status": "✅"
+    },
+    "distance": {
+      "status": "✅"
+    },
+    "to-rgba": {
+      "status": "✅"
+    },
+    "rgb": {
+      "status": "✅"
+    },
+    "rgba": {
+      "status": "✅"
+    },
+    "feature-state": {
+      "status": "❌"
+    },
+    "line-progress": {
+      "status": "❌"
+    },
+    "accumulated": {
+      "status": "❌"
+    },
+    "heatmap-density": {
+      "status": "❌"
+    },
+    "elevation": {
+      "status": "❌"
+    },
+    "is-supported-script": {
+      "status": "✅"
+    },
+    "resolved-locale": {
+      "status": "✅"
+    },
+    "split": {
+      "status": "✅"
+    },
+    "join": {
+      "status": "✅"
+    }
+  },
+  "root": {
+    "version": {
+      "status": "✅"
+    },
+    "name": {
+      "status": "✅"
+    },
+    "metadata": {
+      "status": "✅"
+    },
+    "center": {
+      "status": "❌"
+    },
+    "centerAltitude": {
+      "status": "❌"
+    },
+    "zoom": {
+      "status": "❌"
+    },
+    "bearing": {
+      "status": "❌"
+    },
+    "pitch": {
+      "status": "❌"
+    },
+    "roll": {
+      "status": "❌"
+    },
+    "sources": {
+      "status": "⚠️"
+    },
+    "layers": {
+      "status": "⚠️"
+    },
+    "state": {
+      "status": "❌"
+    },
+    "light": {
+      "status": "❌"
+    },
+    "sky": {
+      "status": "❌"
+    },
+    "projection": {
+      "status": "❌"
+    },
+    "terrain": {
+      "status": "✅"
+    },
+    "sprite": {
+      "status": "✅"
+    },
+    "glyphs": {
+      "status": "✅"
+    },
+    "font-faces": {
+      "status": "✅"
+    },
+    "transition": {
+      "status": "❌"
+    }
+  },
+  "light": {
+    "anchor": {
+      "status": "❌"
+    },
+    "position": {
+      "status": "❌"
+    },
+    "color": {
+      "status": "❌"
+    },
+    "intensity": {
+      "status": "❌"
+    }
+  },
+  "sky": {
+    "sky-color": {
+      "status": "❌"
+    },
+    "horizon-color": {
+      "status": "❌"
+    },
+    "fog-color": {
+      "status": "❌"
+    },
+    "fog-ground-blend": {
+      "status": "❌"
+    },
+    "horizon-fog-blend": {
+      "status": "❌"
+    },
+    "sky-horizon-blend": {
+      "status": "❌"
+    },
+    "atmosphere-blend": {
+      "status": "❌"
+    }
+  },
+  "terrain": {
+    "source": {
+      "status": "✅"
+    },
+    "exaggeration": {
+      "status": "❌"
+    }
+  },
+  "projection": {
+    "type": {
+      "status": "❌"
+    }
+  },
+  "transition": {
+    "duration": {
+      "status": "❌"
+    },
+    "delay": {
+      "status": "❌"
+    }
+  },
+  "sprite": {
+    "status": "❌"
+  },
+  "glyphs": {
+    "status": "❌"
+  },
+  "font-faces": {
+    "status": "✅"
+  },
+  "state": {
+    "status": "❌"
+  },
+  "types": {
+    "color": {
+      "status": "✅"
+    },
+    "formatted": {
+      "status": "❌"
+    },
+    "resolvedImage": {
+      "status": "✅"
+    },
+    "string": {
+      "status": "✅"
+    },
+    "boolean": {
+      "status": "✅"
+    },
+    "number": {
+      "status": "✅"
+    },
+    "array": {
+      "status": "✅"
+    },
+    "Point": {
+      "status": "✅"
+    },
+    "enum": {
+      "status": "✅"
+    },
+    "padding": {
+      "status": "✅"
+    },
+    "projectionDefinition": {
+      "status": "❌"
+    },
+    "numberArray": {
+      "status": "✅"
+    },
+    "colorArray": {
+      "status": "✅"
+    }
+  }
+}
