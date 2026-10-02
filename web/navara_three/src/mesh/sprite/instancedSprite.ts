@@ -1215,33 +1215,47 @@ export class InstancedSpriteMesh
    * converted to the radians the shader wants here, matching the material path.
    */
   setFeatureFacingByBatchIndex(batchIndex: number, facing: "upright" | "flat") {
-    this._updateBatchAttribute(
-      batchIndex,
-      "flatFacing",
-      facing === "flat",
-      this._orientationDefaults(),
-    );
+    // Orientation turns the quad, so it moves the box the declutter pass
+    // reserves and, along a line, the level the anchor asks for.
+    if (
+      this._updateBatchAttribute(
+        batchIndex,
+        "flatFacing",
+        facing === "flat",
+        this._orientationDefaults(),
+      )
+    ) {
+      this.ctx.declutter?.markDirty();
+    }
     // The first per-feature facing allocates the orientation slot, from which
     // point any feature may be flat.
     this._syncQuadGrid();
   }
 
   setFeatureRotateWithCameraByBatchIndex(batchIndex: number, follow: boolean) {
-    this._updateBatchAttribute(
-      batchIndex,
-      "rotateWithCamera",
-      follow,
-      this._orientationDefaults(),
-    );
+    if (
+      this._updateBatchAttribute(
+        batchIndex,
+        "rotateWithCamera",
+        follow,
+        this._orientationDefaults(),
+      )
+    ) {
+      this.ctx.declutter?.markDirty();
+    }
   }
 
   setFeatureRotationByBatchIndex(batchIndex: number, degrees: number) {
-    this._updateBatchAttribute(
-      batchIndex,
-      "rotation",
-      degrees * MathUtils.DEG2RAD,
-      this._orientationDefaults(),
-    );
+    if (
+      this._updateBatchAttribute(
+        batchIndex,
+        "rotation",
+        degrees * MathUtils.DEG2RAD,
+        this._orientationDefaults(),
+      )
+    ) {
+      this.ctx.declutter?.markDirty();
+    }
   }
 
   /**

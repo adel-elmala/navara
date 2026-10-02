@@ -273,35 +273,94 @@ export type RepeatableLabel = {
  * `labels` are the labels the placement pass accepted and `metersPerPx` their
  * scale at the anchor, in the same order. Labels are judged in anchor order,
  * as MapLibre walks a tile's features, so the first of a pair is kept. Returns
- * the indices, into `labels`, of the ones to drop.
+ * the indices, into `labels`, of the ones to drop. An unusable spacing places
+ * no pattern to repeat, so nothing is dropped.
+ *
+ * A GeoJSON source is one batch, so a common name can have thousands of
+ * accepted repeats in a pass, and comparing each against every kept one is
+ * quadratic. Kept anchors are filed in a grid instead. The limit differs per
+ * label, so one cell size cannot fit them all: each anchor is filed at every
+ * power-of-two cell size that some label in this pass needs, and each label
+ * looks only at the 27 cells around it at the smallest size not under its own
+ * limit, which hold everything that close.
  */
 export function findRepeatedLabels(
   labels: readonly RepeatableLabel[],
   metersPerPx: ArrayLike<number>,
   spacingPx: number,
 ): number[] {
+  if (!(spacingPx > 0 && Number.isFinite(spacingPx))) return [];
+  const limit = (i: number) => 0.5 * spacingPx * metersPerPx[i];
+  // Accepted labels are in their scale band, so `metersPerPx` is positive.
+  const level = (i: number) => Math.ceil(Math.log2(limit(i)));
+  let minLevel = Infinity;
+  let maxLevel = -Infinity;
+  for (let i = 0; i < labels.length; i++) {
+    minLevel = Math.min(minLevel, level(i));
+    maxLevel = Math.max(maxLevel, level(i));
+  }
+
   const order = labels.map((_, i) => i);
   order.sort((a, b) => labels[a].instanceIndex - labels[b].instanceIndex);
-  const kept = new Map<string, Float64Array[]>();
+  const cellKey = (lv: number, x: number, y: number, z: number) =>
+    `${lv},${x},${y},${z}`;
+  // Per text, the kept anchors in each cell of each level.
+  const kept = new Map<string, Map<string, Float64Array[]>>();
   const repeated: number[] = [];
   for (const i of order) {
     const { text, anchor } = labels[i];
-    const limit = 0.5 * spacingPx * metersPerPx[i];
-    const others = kept.get(text);
-    const tooClose = others?.some(
-      (o) =>
-        (o[0] - anchor[0]) ** 2 +
-          (o[1] - anchor[1]) ** 2 +
-          (o[2] - anchor[2]) ** 2 <
-        limit * limit,
-    );
-    if (tooClose) {
+    let grid = kept.get(text);
+    if (grid && hasKeptWithin(grid, anchor, limit(i), level(i), cellKey)) {
       repeated.push(i);
-    } else if (others) {
-      others.push(anchor);
-    } else {
-      kept.set(text, [anchor]);
+      continue;
+    }
+    if (!grid) {
+      grid = new Map();
+      kept.set(text, grid);
+    }
+    for (let lv = minLevel; lv <= maxLevel; lv++) {
+      const size = 2 ** lv;
+      const key = cellKey(
+        lv,
+        Math.floor(anchor[0] / size),
+        Math.floor(anchor[1] / size),
+        Math.floor(anchor[2] / size),
+      );
+      const cell = grid.get(key);
+      if (cell) cell.push(anchor);
+      else grid.set(key, [anchor]);
     }
   }
   return repeated;
+}
+
+/** Whether `grid` holds an anchor closer than `limit` to `anchor`, searching
+ *  the cells of `lv`, whose size is at least `limit`. */
+function hasKeptWithin(
+  grid: Map<string, Float64Array[]>,
+  anchor: Float64Array,
+  limit: number,
+  lv: number,
+  cellKey: (lv: number, x: number, y: number, z: number) => string,
+): boolean {
+  const size = 2 ** lv;
+  const cx = Math.floor(anchor[0] / size);
+  const cy = Math.floor(anchor[1] / size);
+  const cz = Math.floor(anchor[2] / size);
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        const cell = grid.get(cellKey(lv, cx + dx, cy + dy, cz + dz));
+        if (!cell) continue;
+        for (const o of cell) {
+          const d2 =
+            (o[0] - anchor[0]) ** 2 +
+            (o[1] - anchor[1]) ** 2 +
+            (o[2] - anchor[2]) ** 2;
+          if (d2 < limit * limit) return true;
+        }
+      }
+    }
+  }
+  return false;
 }

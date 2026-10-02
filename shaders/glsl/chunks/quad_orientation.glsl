@@ -111,6 +111,28 @@ void nvr_quadBasis(
 }
 
 /**
+ * The wrap step of nvr_quadOffset on its own, for a view-space `offset`
+ * already laid out in the tangent plane. A flat offset must be wrapped whole:
+ * wrapping two parts of it separately and summing them leaves the first part
+ * planar, rising off the surface quadratically with its length.
+ */
+vec3 nvr_wrapOffset(vec3 offset, bool flatFacing, vec3 worldPos, float addHeight) {
+    float dist = length(offset);
+    float radius = length(worldPos) + addHeight;
+    if (!flatFacing || dist < 1e-6 || radius < 1.0) {
+        return offset;
+    }
+    vec3 n = (viewMatrix * vec4(normalize(worldPos), 0.0)).xyz;
+    // Exponential map on the sphere: arc length `dist` along the offset's
+    // direction. cos(theta) - 1 is written as -2 sin^2(theta / 2) so small
+    // angles do not cancel to zero in float32.
+    float theta = dist / radius;
+    float halfSin = sin(0.5 * theta);
+    return offset * (radius * sin(theta) / dist)
+        - n * (2.0 * radius * halfSin * halfSin);
+}
+
+/**
  * View-space offset of a quad vertex at `local` (already scaled to meters)
  * from its anchor, laid out in the `(right, up)` basis above.
  *
@@ -143,20 +165,7 @@ vec3 nvr_quadOffset(
     vec3 worldPos,
     float addHeight
 ) {
-    vec3 offset = local.x * right + local.y * up;
-    float dist = length(offset);
-    float radius = length(worldPos) + addHeight;
-    if (!flatFacing || dist < 1e-6 || radius < 1.0) {
-        return offset;
-    }
-    vec3 n = (viewMatrix * vec4(normalize(worldPos), 0.0)).xyz;
-    // Exponential map on the sphere: arc length `dist` along the offset's
-    // direction. cos(theta) - 1 is written as -2 sin^2(theta / 2) so small
-    // angles do not cancel to zero in float32.
-    float theta = dist / radius;
-    float halfSin = sin(0.5 * theta);
-    return offset * (radius * sin(theta) / dist)
-        - n * (2.0 * radius * halfSin * halfSin);
+    return nvr_wrapOffset(local.x * right + local.y * up, flatFacing, worldPos, addHeight);
 }
 
 #endif // QUAD_ORIENTATION_GLSL

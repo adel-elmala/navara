@@ -220,6 +220,7 @@ void main() {
     // Set by the along-line walk below; an ordinary label keeps these.
     bool nvr_alongLine = false;
     float wordCenterEm = 0.0;
+    vec3 pathOffset = vec3(0.0);
 #ifdef NVR_LINE_PLACEMENT
     vec4 pathRow = nvr_readLabel(slot, LABEL_ROW_PATH);
     // A zero sample step marks a plain point sharing the batch with along-line
@@ -292,7 +293,10 @@ void main() {
             : (viewMatrix * vec4(normalWorld, 0.0)).xyz;
 
         // Path offsets are already metres, so they bypass the em scaling below.
-        mvPosition.xyz += pathPos.x * eastView + pathPos.y * northView;
+        // Kept apart rather than added to mvPosition so a flat label wraps the
+        // word's place on the path and the glyph's place in its word as one
+        // offset (see nvr_wrapOffset).
+        pathOffset = pathPos.x * eastView + pathPos.y * northView;
     }
 #endif
     if (!nvr_alongLine) {
@@ -374,11 +378,10 @@ void main() {
         }
 
         // Lay the glyph out in the label's basis (see nvr_quadBasis), scaled,
-        // and wrapped onto the globe when flat (see nvr_quadOffset).
-        vec4 newMvPosition = mvPosition + vec4(nvr_quadOffset(
-            localPos * scaleFactor,
-            axisRight,
-            axisUp,
+        // and wrapped onto the globe when flat (see nvr_wrapOffset).
+        vec2 glyphLocal = localPos * scaleFactor;
+        vec4 newMvPosition = mvPosition + vec4(nvr_wrapOffset(
+            pathOffset + glyphLocal.x * axisRight + glyphLocal.y * axisUp,
             nvr_batchFlatFacing,
             absTransformed,
             addHeight

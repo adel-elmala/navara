@@ -208,6 +208,54 @@ describe("findRepeatedLabels", () => {
     ];
     expect(findRepeatedLabels(labels, [2, 2, 2], 250)).toEqual([1]);
   });
+
+  it("agrees with comparing every pair, at every scale in a view", () => {
+    // The grid files anchors at several cell sizes because the limit varies
+    // with each label's scale, as across a pitched view; it must drop
+    // exactly what the plain all-pairs comparison drops.
+    let seed = 7;
+    const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    const texts = ["Main St", "High St", "Mill Rd"];
+    const labels = Array.from({ length: 600 }, (_, i) => ({
+      instanceIndex: (i * 37) % 600,
+      text: texts[i % texts.length],
+      anchor: new Float64Array([
+        (random() - 0.5) * 2e5,
+        (random() - 0.5) * 2e5,
+        (random() - 0.5) * 2e3,
+      ]),
+    }));
+    const metersPerPx = labels.map(() => 10 ** (random() * 3 - 1));
+
+    const expected: number[] = [];
+    const kept: number[] = [];
+    const order = labels.map((_, i) => i);
+    order.sort((a, b) => labels[a].instanceIndex - labels[b].instanceIndex);
+    for (const i of order) {
+      const limit = 0.5 * 250 * metersPerPx[i];
+      const a = labels[i].anchor;
+      const close = kept.some((k) => {
+        const o = labels[k].anchor;
+        if (labels[k].text !== labels[i].text) return false;
+        return (
+          (o[0] - a[0]) ** 2 + (o[1] - a[1]) ** 2 + (o[2] - a[2]) ** 2 <
+          limit * limit
+        );
+      });
+      if (close) expected.push(i);
+      else kept.push(i);
+    }
+
+    expect(expected.length).toBeGreaterThan(0);
+    expect(findRepeatedLabels(labels, metersPerPx, 250)).toEqual(expected);
+  });
+
+  it("drops nothing when the spacing places no pattern", () => {
+    const labels = [at(0, "Main St", 0), at(1, "Main St", 1)];
+    for (const spacing of [0, -1, Number.NaN, Infinity]) {
+      expect(findRepeatedLabels(labels, [2, 2], spacing)).toEqual([]);
+    }
+  });
 });
 
 describe("packing shape", () => {
