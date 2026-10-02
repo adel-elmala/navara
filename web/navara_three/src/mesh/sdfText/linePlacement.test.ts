@@ -44,6 +44,7 @@ function label(over: Partial<PackableLabel> = {}): PackableLabel {
     heightEm: 1,
     minYEm: 0,
     maxYEm: 1,
+    maxWordHalfEm: 1.5,
     fontSize: 10,
     ...over,
   };
@@ -162,6 +163,13 @@ describe("label width", () => {
     const offCentre = { ...options, center: [0, 0] as const };
     expect(packLineLabelFits([l], p, offCentre)[10]).toBe(7);
     expect(packLineLabels([l], p, offCentre).labels[21]).toBe(7);
+  });
+
+  it("sends the widest word's reach in the font's own units", () => {
+    // The kernel bounds each rigid word along its own tangent, so it needs
+    // the reach in the same units as the box: ems times the font size.
+    const l = label({ maxWordHalfEm: 1.5, fontSize: 10 });
+    expect(packLineLabels([l], path(10, 500), options).labels[22]).toBe(15);
   });
 });
 

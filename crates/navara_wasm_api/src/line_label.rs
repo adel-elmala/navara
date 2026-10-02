@@ -37,7 +37,7 @@
 //! | 6      | sizeInMeters | `0.0` = px, non-zero = meters |
 //! | 7      | maxAngleRad | largest turn allowed within the sliding window; `0` = straight only |
 //! | 8      | keepUpright | `0.0` = never flip, non-zero = flip when backwards |
-//! | 9      | stepMeters | arc length between adjacent path samples |
+//! | 9      | stepMeters | straight-line distance between adjacent path samples |
 //! | 10     | halfExtentMeters | real line either side of the anchor |
 //! | 11     | bearingRad | the line's tangent at the anchor, clockwise from north |
 //! | 12     | isFlipped | the label's current flip, for hysteresis |
@@ -47,6 +47,7 @@
 //! | 18     | flatFacing | `0.0` = upright, non-zero = flat, as resolved for this label |
 //! | 19,20  | minMpp/maxMpp | the `(min, max]` ground metres per pixel the anchor shows over |
 //! | 21     | widthEm | the label's full length along the line, in ems |
+//! | 22     | wordReach | half the widest word's length, in the font's own units |
 //!
 //! `reachEm` rather than the width because the anchor need not be the text's
 //! centre: with `center.x = 0` the whole label runs off one side of it, and it
@@ -88,7 +89,7 @@
 use wasm_bindgen::prelude::*;
 
 /// Number of `f64` values per label in the packed input slice.
-pub const LINE_LABEL_STRIDE: usize = 22;
+pub const LINE_LABEL_STRIDE: usize = 23;
 
 /// Number of `f64` values per label in [`line_label_fit`]'s packed input.
 ///
@@ -107,16 +108,26 @@ pub const LINE_LABEL_STRIDE: usize = 22;
 /// plus its extent, band and width.
 pub const LINE_LABEL_FIT_STRIDE: usize = 11;
 
-/// Number of `f64` values per anchor in [`line_anchor_shown`]'s packed input.
+/// Number of `f64` values per anchor in [`line_anchor_place`]'s packed input.
 ///
 /// | offset | field |
 /// |--------|-------|
 /// | 0,1,2  | anchorX/Y/Z — ECEF metres, before the height offset |
 /// | 3      | addHeight — surface-normal height offset (metres) |
 /// | 4,5    | minMpp/maxMpp — the anchor's scale band |
-/// | 6      | length — the symbol's extent along the line, px or metres per `sizeInMeters` |
-/// | 7      | sizeInMeters — `0.0` = px, non-zero = metres |
-pub const LINE_ANCHOR_STRIDE: usize = 8;
+/// | 6      | sizeInMeters — `0.0` = px, non-zero = metres |
+/// | 7,8    | minX/maxX — the quad's box across its local x, px or metres per `sizeInMeters` |
+/// | 9,10   | minY/maxY — the same along its local y |
+/// | 11     | rotation — the quad's in-plane turn, radians clockwise, the line's bearing included when it follows the line |
+/// | 12     | bearing — the line's tangent, radians clockwise from north |
+/// | 13     | flatFacing — `0.0` = upright, non-zero = flat, as resolved for this anchor |
+/// | 14     | rotateWithCamera — `0.0` = frozen in the anchor's frame, non-zero = follows the camera |
+pub const LINE_ANCHOR_STRIDE: usize = 15;
+
+/// Number of `f64` values per anchor in [`line_anchor_place`]'s output: shown
+/// (`1.0`) or not (`0.0`), then minX/maxX/minY/maxY of the screen-aligned box
+/// the quad covers, +Y up, in the input box's units.
+pub const LINE_ANCHOR_RESULT_STRIDE: usize = 5;
 
 /// Number of `f64` values per label in the packed output slice.
 pub const LINE_LABEL_RESULT_STRIDE: usize = 7;
@@ -364,38 +375,97 @@ pub fn line_label_fit(
     out
 }
 
-/// Whether each along-line anchor's level is the one on screen, for meshes
-/// that place no label along the line — a sprite is one quad at its anchor.
+/// Place along-line anchors for meshes that lay no label along the line — a
+/// sprite is one quad at its anchor: whether each one's level is the one on
+/// screen, and the box its quad covers there for the declutter pass.
 ///
-/// `anchors` is packed [`LINE_ANCHOR_STRIDE`] values per anchor. Returns one
-/// byte per anchor: `1` shown, `0` not.
-#[wasm_bindgen(js_name = lineAnchorShown)]
-pub fn line_anchor_shown(
+/// The level is chosen by the quad's extent *along its line*, measured in the
+/// quad's own frame as MapLibre measures an icon: its local +y is turned
+/// `rotation` from north and the line runs at `bearing`, so a quad turned to
+/// follow its line is measured by its height, whatever its image's aspect.
+///
+/// The box mirrors `nvr_quadBasis`, so a quad turned by its line, its style or
+/// its facing claims the space it is drawn over rather than its unrotated
+/// rectangle.
+///
+/// `anchors` is packed [`LINE_ANCHOR_STRIDE`] values per anchor. Returns
+/// [`LINE_ANCHOR_RESULT_STRIDE`] values per anchor, in input order.
+#[wasm_bindgen(js_name = lineAnchorPlace)]
+pub fn line_anchor_place(
     anchors: &[f64],
     view: &[f64],
     height_px: f64,
     fov_rad: f64,
     spacing_px: f64,
-) -> Vec<u8> {
+) -> Vec<f64> {
     let cam = CameraView {
         view,
         height_px,
         fov_rad,
     };
-    anchors
-        .as_chunks::<LINE_ANCHOR_STRIDE>()
-        .0
-        .iter()
-        .map(|a| {
-            let m = meters_per_px((a[0], a[1], a[2]), a[3], &cam);
-            u8::from(in_scale_band(
-                m,
-                (a[4], a[5]),
-                (a[6], a[7] != 0.0),
-                spacing_px,
-            ))
-        })
-        .collect()
+    let rows = anchors.as_chunks::<LINE_ANCHOR_STRIDE>().0;
+    let mut out = Vec::with_capacity(rows.len() * LINE_ANCHOR_RESULT_STRIDE);
+    for a in rows {
+        let (min_x, max_x, min_y, max_y) = (a[7], a[8], a[9], a[10]);
+        let (sin, cos) = (a[12] - a[11]).sin_cos();
+        let length = (max_x - min_x) * sin.abs() + (max_y - min_y) * cos.abs();
+        let m = meters_per_px((a[0], a[1], a[2]), a[3], &cam);
+        let shown = in_scale_band(m, (a[4], a[5]), (length, a[6] != 0.0), spacing_px);
+        let (right, up) = quad_screen_basis(a, view, a[13] != 0.0, a[14] != 0.0, a[11]);
+        let (bx0, bx1, by0, by1) = basis_box(min_x, max_x, min_y, max_y, right, up);
+        out.extend_from_slice(&[if shown { 1.0 } else { 0.0 }, bx0, bx1, by0, by1]);
+    }
+    out
+}
+
+/// Screen axes of an anchored quad's local +x and +y: `nvr_quadBasis` in
+/// `shaders/glsl/chunks/quad_orientation.glsl`, kept as view-space x/y like
+/// [`enu_screen_axes`]. `row` starts with the anchor.
+fn quad_screen_basis(
+    row: &[f64],
+    view: &[f64],
+    flat: bool,
+    follow: bool,
+    rotation: f64,
+) -> ((f64, f64), (f64, f64)) {
+    let (right, up) = match (flat, follow) {
+        // Screen plane, screen up.
+        (false, true) => ((1.0, 0.0), (0.0, 1.0)),
+        // Tangent plane, yawed so screen right projected onto it stays right.
+        (true, true) => {
+            let (x, y, z) = (row[0], row[1], row[2]);
+            let len = (x * x + y * y + z * z).sqrt();
+            let n = (
+                (view[0] * x + view[4] * y + view[8] * z) / len,
+                (view[1] * x + view[5] * y + view[9] * z) / len,
+                (view[2] * x + view[6] * y + view[10] * z) / len,
+            );
+            let reject = |a: (f64, f64, f64), d: f64| (a.0 - d * n.0, a.1 - d * n.1, a.2 - d * n.2);
+            let t = reject((1.0, 0.0, 0.0), n.0);
+            let t_len = (t.0 * t.0 + t.1 * t.1 + t.2 * t.2).sqrt();
+            let r = if t_len > 1e-4 {
+                (t.0 / t_len, t.1 / t_len, t.2 / t_len)
+            } else {
+                let t = reject((0.0, 1.0, 0.0), n.1);
+                let t_len = (t.0 * t.0 + t.1 * t.1 + t.2 * t.2).sqrt();
+                (t.0 / t_len, t.1 / t_len, t.2 / t_len)
+            };
+            // cross(n, r), screen plane only.
+            let u = (n.1 * r.2 - n.2 * r.1, n.2 * r.0 - n.0 * r.2);
+            ((r.0, r.1), u)
+        }
+        // Frozen in the anchor's east-north-up frame.
+        _ => {
+            let axes = enu_screen_axes(row, view);
+            (axes.east, if flat { axes.north } else { axes.up })
+        }
+    };
+    // Clockwise seen from the front, as the shader turns it.
+    let (s, c) = rotation.sin_cos();
+    (
+        (c * right.0 - s * up.0, c * right.1 - s * up.1),
+        (s * right.0 + c * up.0, s * right.1 + c * up.1),
+    )
 }
 
 /// The anchor's east, north and up unit vectors, as view-space x/y.
@@ -561,7 +631,20 @@ fn rotated_box(
     dy: f64,
 ) -> (f64, f64, f64, f64) {
     // The label's own +x maps to (dx, dy) and its +y to the perpendicular.
-    let corner = |lx: f64, ly: f64| (lx * dx - ly * dy, lx * dy + ly * dx);
+    basis_box(min_x, max_x, min_y, max_y, (dx, dy), (-dy, dx))
+}
+
+/// Screen-space AABB of a local box laid out along `right` (its +x) and `up`
+/// (its +y).
+fn basis_box(
+    min_x: f64,
+    max_x: f64,
+    min_y: f64,
+    max_y: f64,
+    right: (f64, f64),
+    up: (f64, f64),
+) -> (f64, f64, f64, f64) {
+    let corner = |lx: f64, ly: f64| (lx * right.0 + ly * up.0, lx * right.1 + ly * up.1);
     let corners = [
         corner(min_x, min_y),
         corner(max_x, min_y),
@@ -580,11 +663,19 @@ fn rotated_box(
 /// straight road but not on the long gentle curves [`exceeds_max_angle`]
 /// deliberately accepts: there the glyphs bow away from the chord, and a box
 /// that misses them lets decluttering overlap two labels it thinks are apart.
-/// So the box is built the way the shader places glyphs instead — each path
-/// segment the text covers contributes the stretch of text on it, in that
-/// segment's own frame:
+/// So the box is built the way the shader places glyphs instead.
 ///
-/// - along the path, from the samples themselves;
+/// The shader lays each word rigidly along the tangent of the segment its
+/// centre falls on, so a word does not follow the path past that segment's
+/// ends but runs straight on along its line. Where the words fall is not sent
+/// here, only how far the widest one reaches (`wordReach`), so each segment the
+/// text covers contributes the stretch of its own line that any word centred on
+/// it could cover: no more than `wordReach` past the segment, and no further
+/// than a word that still fits inside the text's own ends. That contains every
+/// word wherever it sits, and on a straight road it is exactly the text. Each
+/// such stretch is placed in that segment's own frame:
+///
+/// - along the segment's line, from the samples themselves;
 /// - off it by `lineOffset`, across the ground (the shader's `normal`);
 /// - up by the text's height, along that same ground normal when the label
 ///   lies flat, and along the surface normal when it stands upright.
@@ -603,6 +694,7 @@ fn path_box(
 ) -> (f64, f64, f64, f64) {
     let (min_y, max_y, line_offset, flat) = (l[15], l[16], l[17], l[18] != 0.0);
     let step = l[9];
+    let reach = l[22] * meters_per_unit;
     let d = if flip { -1.0 } else { 1.0 };
     // The arc the text covers, in metres along the path's own direction.
     let (a, b) = (d * l[13] * meters_per_unit, d * l[14] * meters_per_unit);
@@ -614,15 +706,20 @@ fn path_box(
     let mut bounds = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
     let (first, last) = sample_range(samples, step, (lo, hi));
     for k in first..last {
-        // The part of segment k's arc the text covers, as fractions along it.
         let (k_lo, k_hi) = ((k as f64 - centre) * step, (k as f64 + 1.0 - centre) * step);
-        let (t0, t1) = (
-            ((lo.max(k_lo) - k_lo) / step).clamp(0.0, 1.0),
-            ((hi.min(k_hi) - k_lo) / step).clamp(0.0, 1.0),
-        );
-        if t1 < t0 {
+        // Where on this segment a word's centre can fall.
+        let (c_lo, c_hi) = (lo.max(k_lo), hi.min(k_hi));
+        if c_lo > c_hi {
             continue;
         }
+        // The stretch of segment k's line its words can cover, as fractions
+        // along the segment; past `[0, 1]` it runs on beyond the segment. A
+        // word centred at `c` reaches at most `hi - c` back, or it would
+        // overrun the text's far end.
+        let (t0, t1) = (
+            (lo.max(c_lo - reach).max(2.0 * c_lo - hi) - k_lo) / step,
+            (hi.min(c_hi + reach).min(2.0 * c_hi - lo) - k_lo) / step,
+        );
         let (pa, pb) = (sample(k), sample(k + 1));
         let (ge, gn) = (pb.0 - pa.0, pb.1 - pa.1);
         let len = ge.hypot(gn);
@@ -820,7 +917,8 @@ mod tests {
             1.0, // flatFacing: lying on the ground, like the top-down camera sees it
             0.0, // minMpp
             f64::INFINITY,
-            4.0, // widthEm
+            4.0,  // widthEm
+            20.0, // wordReach: one word, the whole label
         ]
     }
 
@@ -1356,12 +1454,92 @@ mod tests {
         }
     }
 
+    /// A sprite anchor row: a `(width, height)` quad centred on its anchor,
+    /// standing on screen, turned `rotation` on a line running at `bearing`.
+    fn sprite(
+        band: (f64, f64),
+        (w, h): (f64, f64),
+        metric: f64,
+        rotation: f64,
+        bearing: f64,
+    ) -> [f64; LINE_ANCHOR_STRIDE] {
+        [
+            WGS84_EQ,
+            0.0,
+            0.0,
+            0.0,
+            band.0,
+            band.1,
+            metric,
+            -w * 0.5,
+            w * 0.5,
+            -h * 0.5,
+            h * 0.5,
+            rotation,
+            bearing,
+            0.0, // upright
+            1.0, // rotateWithCamera
+        ]
+    }
+
+    fn shown(packed: &[f64]) -> Vec<bool> {
+        line_anchor_place(packed, &view(), 1000.0, 1.0, SPACING)
+            .chunks(LINE_ANCHOR_RESULT_STRIDE)
+            .map(|r| r[0] != 0.0)
+            .collect()
+    }
+
+    #[test]
+    fn a_sprite_turned_to_its_line_is_measured_along_it() {
+        // A 1:10 image 200 px tall on an eastbound line, turned to follow it:
+        // it runs 200 px along the line, past three quarters of the spacing,
+        // so it asks for a sparser level than a band just above the scale.
+        // Not turned, the line crosses its 20 px width instead.
+        let mpp = 2.0 * 0.5f64.tan() * 500.0 / 1000.0;
+        let east = std::f64::consts::FRAC_PI_2;
+        let packed: Vec<f64> = [
+            sprite((0.0, mpp * 1.01), (20.0, 200.0), 0.0, east, east),
+            sprite((0.0, mpp * 1.01), (20.0, 200.0), 0.0, 0.0, east),
+        ]
+        .concat();
+        assert_eq!(shown(&packed), vec![false, true]);
+    }
+
+    #[test]
+    fn a_sprite_claims_the_box_it_is_turned_into() {
+        // A 100x10 px billboard turned a quarter for an eastbound line draws
+        // 10x100 px on screen, and must claim that rather than 100x10.
+        let east = std::f64::consts::FRAC_PI_2;
+        let row = sprite((0.0, f64::INFINITY), (100.0, 10.0), 0.0, east, east);
+        let out = line_anchor_place(&row, &view(), 1000.0, 1.0, SPACING);
+        let expected = [-5.0, 5.0, -50.0, 50.0];
+        for (got, want) in out[1..].iter().zip(expected) {
+            assert!((got - want).abs() < 1e-9, "{:?}", &out[1..]);
+        }
+
+        // Lying flat and frozen to the ground, the top-down camera sees the
+        // same turn: east is screen right, north is screen up.
+        let mut flat = row;
+        (flat[13], flat[14]) = (1.0, 0.0);
+        let out = line_anchor_place(&flat, &view(), 1000.0, 1.0, SPACING);
+        for (got, want) in out[1..].iter().zip(expected) {
+            assert!((got - want).abs() < 1e-9, "{:?}", &out[1..]);
+        }
+
+        // Standing up but frozen, seen from straight above: the quad is
+        // edge-on, so it claims only its width across the screen.
+        let mut upright = row;
+        (upright[11], upright[12], upright[14]) = (0.0, 0.0, 0.0);
+        let out = line_anchor_place(&upright, &view(), 1000.0, 1.0, SPACING);
+        assert!((out[2] - out[1] - 100.0).abs() < 1e-9 && (out[4] - out[3]).abs() < 1e-9);
+    }
+
     #[test]
     fn an_anchor_shows_only_inside_its_scale_band() {
         // Looking straight down from 500 m with a one-radian field of view
         // over 1000 px: 2 * tan(0.5) * 500 / 1000 ≈ 0.546 m per pixel.
         let mpp = 2.0 * 0.5f64.tan() * 500.0 / 1000.0;
-        let anchor = |min: f64, max: f64| [WGS84_EQ, 0.0, 0.0, 0.0, min, max, 20.0, 0.0];
+        let anchor = |min: f64, max: f64| sprite((min, max), (2.0, 20.0), 0.0, 0.0, 0.0);
         let packed: Vec<f64> = [
             anchor(0.0, f64::INFINITY),
             anchor(0.0, mpp * 1.01),
@@ -1371,8 +1549,7 @@ mod tests {
             anchor(0.0, mpp * 0.99),
         ]
         .concat();
-        let out = line_anchor_shown(&packed, &view(), 1000.0, 1.0, SPACING);
-        assert_eq!(out, vec![1, 1, 1, 0, 0]);
+        assert_eq!(shown(&packed), vec![true, true, true, false, false]);
 
         // Text runs the same test before anything else.
         let mut l = label(std::f64::consts::FRAC_PI_2, true, false);
@@ -1390,7 +1567,7 @@ mod tests {
         // 400 px sprite asks for (400 + 62.5) / 250 = 1.85 times the scale.
         let mpp = 2.0 * 0.5f64.tan() * 500.0 / 1000.0;
         let anchor = |max: f64, length: f64, metric: f64| {
-            [WGS84_EQ, 0.0, 0.0, 0.0, 0.0, max, length, metric]
+            sprite((0.0, max), (2.0, length), metric, 0.0, 0.0)
         };
         let packed: Vec<f64> = [
             // Short: the plain spacing, so a band just above the scale holds.
@@ -1403,8 +1580,7 @@ mod tests {
             anchor(mpp * 1.86, 400.0 * mpp, 1.0),
         ]
         .concat();
-        let out = line_anchor_shown(&packed, &view(), 1000.0, 1.0, SPACING);
-        assert_eq!(out, vec![1, 0, 1, 0, 1]);
+        assert_eq!(shown(&packed), vec![true, false, true, false, true]);
 
         // Text is measured by its full width: 4 ems at 100 px.
         let mut l = label(std::f64::consts::FRAC_PI_2, true, false);
@@ -1523,5 +1699,48 @@ mod tests {
         assert!(out[4] < 1.0, "box bottom {} lost the anchor", out[4]);
         // And it still spans the label's length.
         assert!(out[3] - out[2] > 2.0 * radius * (200.0f64 / radius).sin() - 1.0);
+    }
+
+    #[test]
+    fn a_rigid_word_on_a_tight_curve_stays_inside_its_box() {
+        // One 18-em word on a 100 m-radius bend: gentle enough within the angle
+        // window to be accepted, but the shader lays the word straight along
+        // the tangent at its centre, so its ends run ~12 m past where the road
+        // itself has curved away to.
+        let samples = 32;
+        let centre = (samples - 1) as f64 * 0.5;
+        let (radius, step) = (100.0f64, 10.0);
+        // Sampled the way the engine does, a chord of `step` apart.
+        let turn = 2.0 * (step / (2.0 * radius)).asin();
+        let path: Vec<f32> = (0..samples)
+            .flat_map(|k| {
+                let t = (k as f64 - centre) * turn;
+                [(radius * t.sin()) as f32, (radius * (1.0 - t.cos())) as f32]
+            })
+            .collect();
+        let mut l = label(std::f64::consts::FRAC_PI_2, false, false);
+        l[4] = 9.0; // 18 ems, centred
+        l[9] = step;
+        (l[13], l[14]) = (-90.0, 90.0);
+        l[21] = 18.0;
+        l[22] = 90.0;
+
+        let out = line_label_place(&l, &path, samples, &view(), 1000.0, 1.0, SPACING);
+        assert_eq!(out[1], 0.0, "the curve is gentle enough to accept");
+        // The word's ends, as the shader draws them: its centre's segment,
+        // carried 90 m either way along that segment's own direction.
+        let p = |k: usize| (path[k * 2] as f64, path[k * 2 + 1] as f64);
+        let (pa, pb) = (p(15), p(16));
+        let len = (pb.0 - pa.0).hypot(pb.1 - pa.1);
+        let dir = ((pb.0 - pa.0) / len, (pb.1 - pa.1) / len);
+        let mid = ((pa.0 + pb.0) * 0.5, (pa.1 + pb.1) * 0.5);
+        for side in [-90.0, 90.0] {
+            let (x, y) = (mid.0 + dir.0 * side, mid.1 + dir.1 * side);
+            assert!(
+                out[2] <= x && x <= out[3] && out[4] <= y && y <= out[5],
+                "word end ({x}, {y}) outside box {:?}",
+                &out[2..6]
+            );
+        }
     }
 }

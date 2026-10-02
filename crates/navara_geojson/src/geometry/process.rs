@@ -4,9 +4,7 @@ use bevy_ecs::system::Commands;
 use navara_buffer_store::BufferStore;
 use navara_core::CRS;
 use navara_feature_component::batch::BatchTable;
-use navara_geometry::{
-    Hierarchy, WindingOrder, close_flat_ring, mercator_y, mercator_y_to_lat, open_ring_len,
-};
+use navara_geometry::{Hierarchy, WindingOrder, close_flat_ring, mercator_y_to_lat, open_ring_len};
 use navara_material::{Appearance, Placement, SourceGeometryType};
 use navara_math::Vec3;
 use navara_parser::geojson::{GeoJson, Geometry, GeometryValue, Position};
@@ -243,12 +241,20 @@ fn accumulate_point_rte(
 /// Radius of the Web Mercator sphere (EPSG:3857).
 const MERCATOR_RADIUS_M: f64 = 6_378_137.0;
 
+/// Latitude, in degrees, that [`to_mercator`] holds the poles at. Web Mercator
+/// sends a pole itself to infinity, but a GeoJSON line is drawn on the globe
+/// all the way to it, so the walk must not stop at the ±85.05° that
+/// [`navara_geometry::mercator_y`] clamps tile coordinates to. A vertex on a pole moves about
+/// 0.1 m.
+const MAX_LAT_DEG: f64 = 90.0 - 1e-6;
+
 /// Web Mercator position of a longitude/latitude in degrees, in metres at the
 /// equator, with y growing southward as [`LinePath`] expects.
 fn to_mercator(lon: f64, lat: f64) -> (f64, f64) {
+    let lat = lat.clamp(-MAX_LAT_DEG, MAX_LAT_DEG).to_radians();
     (
         lon.to_radians() * MERCATOR_RADIUS_M,
-        -mercator_y(lat.to_radians()) * MERCATOR_RADIUS_M,
+        -(lat * 0.5 + std::f64::consts::FRAC_PI_4).tan().ln() * MERCATOR_RADIUS_M,
     )
 }
 
@@ -1866,6 +1872,39 @@ mod test {
                 "at {lat}°: {max}"
             );
         }
+    }
+
+    #[test]
+    fn line_placement_reaches_past_the_tile_latitude_limit() {
+        // Web tiles stop at ±85.05°, but a GeoJSON line is drawn to the pole.
+        let along = line_anchors(
+            &[[0.0, 89.0, 0.0], [1.0, 89.0, 0.0]],
+            GeometryAppearanceKind::Billboard,
+            PointPlacement::LineCenter,
+            100.0,
+        );
+        assert!(
+            (along.coords[0].y - 89.0).abs() < 1e-9,
+            "{}",
+            along.coords[0].y
+        );
+
+        let up = line_anchors(
+            &[[0.0, 86.0, 0.0], [0.0, 87.0, 0.0]],
+            GeometryAppearanceKind::Billboard,
+            PointPlacement::LineCenter,
+            100.0,
+        );
+        assert_eq!(up.coords.len(), 1);
+        assert!((86.0..87.0).contains(&up.coords[0].y), "{}", up.coords[0].y);
+
+        let to_pole = line_anchors(
+            &[[0.0, 89.0, 0.0], [0.0, 90.0, 0.0]],
+            GeometryAppearanceKind::Billboard,
+            PointPlacement::LineCenter,
+            100.0,
+        );
+        assert!(to_pole.coords[0].y.is_finite() && to_pole.coords[0].y > 89.0);
     }
 
     #[test]

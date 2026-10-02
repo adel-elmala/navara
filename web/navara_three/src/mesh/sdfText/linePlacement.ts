@@ -9,7 +9,7 @@ import { MathUtils } from "three";
  */
 
 /** `f64` values per label in the kernel's packed input. */
-export const LINE_LABEL_STRIDE = 22;
+export const LINE_LABEL_STRIDE = 23;
 
 /** `f64` values per label in the kernel's packed output: flip, rejected, the
  *  rotated box as minX/maxX/minY/maxY, then metres per pixel at the anchor. */
@@ -76,6 +76,7 @@ export type PackableLabel = {
   heightEm: number;
   minYEm: number;
   maxYEm: number;
+  maxWordHalfEm: number;
   fontSize: number;
 };
 
@@ -212,6 +213,7 @@ export function packLineLabels(
     out[o + 19] = scaleBandMin(path, label.instanceIndex);
     out[o + 20] = scaleBandMax(path, label.instanceIndex);
     out[o + 21] = label.widthEm;
+    out[o + 22] = label.maxWordHalfEm * label.fontSize;
 
     // Labels are created lazily and sparsely, so their path runs are gathered
     // into input order rather than passed as one contiguous slice.

@@ -32,11 +32,18 @@ impl PointPlacement {
 
 /// Path samples stored per along-line text anchor.
 ///
-/// The samples are uniform in arc length, which is the whole point: the vertex
-/// shader finds the segment containing a glyph with `floor(s / step)` instead
-/// of walking the path, so bending a glyph costs two texel fetches rather than
-/// a loop.
+/// Neighbouring samples are a uniform `step` apart **in a straight line**,
+/// which is the whole point: the vertex shader finds the segment containing a
+/// glyph with `floor(s / step)` instead of walking the path, so bending a glyph
+/// costs two texel fetches rather than a loop. Uniform chords rather than
+/// uniform arc length, because the shader moves along the chords: a chord
+/// across a bend is shorter than the arc it spans, and the text would run
+/// slower there than its own em ruler.
 pub const PATH_SAMPLES: usize = 32;
+
+// The anchor sits midway between the two middle samples (see
+// `LinePath::anchor_path`), which needs an even count.
+const _: () = assert!(PATH_SAMPLES.is_multiple_of(2));
 
 // The transfer attribute's `size` is a u8 holding the two-floats-per-sample
 // stride, so the count cannot exceed 127.
@@ -304,6 +311,10 @@ impl<'a> LinePath<'a> {
     /// east/north metre offsets from it, for a pattern `spacing` frame units
     /// apart — an anchor's [`LineAnchor::path_spacing`].
     ///
+    /// The two middle samples straddle the anchor half a step either side, and
+    /// from there each sample is the first point along the line a chord of
+    /// `step` away from its neighbour (see [`PATH_SAMPLES`]).
+    ///
     /// Metres rather than frame units because glyph sizes are metric
     /// downstream, and relative to the anchor so the values stay small enough
     /// for `f32` — a few hundred metres, against the ~6.4e6 of an absolute
@@ -312,11 +323,19 @@ impl<'a> LinePath<'a> {
     pub fn anchor_path(&self, s: f64, spacing: f64, meters_per_unit: f64) -> AnchorPath {
         let spacing = self.resolve_spacing(spacing);
         let step = spacing * PATH_SPAN_SPACINGS / (PATH_SAMPLES - 1) as f64;
-        let half_span = step * (PATH_SAMPLES - 1) as f64 * 0.5;
         let (origin, _) = self.sample(s);
+        let mid = PATH_SAMPLES / 2;
+        let mut arcs = [0.0; PATH_SAMPLES];
+        arcs[mid - 1] = self.chord_step(s, step * 0.5, false);
+        for k in mid..PATH_SAMPLES {
+            arcs[k] = self.chord_step(arcs[k - 1], step, true);
+        }
+        for k in (0..mid - 1).rev() {
+            arcs[k] = self.chord_step(arcs[k + 1], step, false);
+        }
         let mut samples = Vec::with_capacity(PATH_SAMPLES * 2);
-        for k in 0..PATH_SAMPLES {
-            let (p, _) = self.sample(s - half_span + step * k as f64);
+        for arc in arcs {
+            let (p, _) = self.sample(arc);
             // The frame's y grows southward, so north is the negated delta.
             samples.push(((p.0 - origin.0) * meters_per_unit) as f32);
             samples.push(((origin.1 - p.1) * meters_per_unit) as f32);
@@ -325,6 +344,55 @@ impl<'a> LinePath<'a> {
         AnchorPath {
             samples,
             meta: [(step * meters_per_unit) as f32, half_extent as f32],
+        }
+    }
+
+    /// Arc length of the first point past `s`, walking forwards or backwards,
+    /// that lies `chord` away from the point at `s` in a straight line —
+    /// extrapolated off the end like [`Self::sample`] when the line runs out.
+    ///
+    /// The path is walked one straight run at a time. Along a run the squared
+    /// distance from the start is a convex quadratic in arc length, and still
+    /// under `chord²` where the run begins, so the crossing is its root on the
+    /// walking side; a run that ends inside the circle cannot cross it.
+    fn chord_step(&self, s: f64, chord: f64, forward: bool) -> f64 {
+        let (from, _) = self.sample(s);
+        let mut lo = s;
+        loop {
+            // Where this straight run ends: the next vertex in the walking
+            // direction, or never for the extrapolation past either end.
+            // Strict comparisons skip the zero-length runs of repeated vertices.
+            let hi = if forward {
+                let i = self.cum.partition_point(|&c| c <= lo);
+                self.cum.get(i).copied().unwrap_or(f64::INFINITY)
+            } else {
+                let i = self.cum.partition_point(|&c| c < lo);
+                if i > 0 {
+                    self.cum[i - 1]
+                } else {
+                    f64::NEG_INFINITY
+                }
+            };
+            // The run is straight, so a point and tangent from inside it give
+            // every position on it: `base + (σ - mid)·tangent`.
+            let mid = if hi.is_finite() {
+                (lo + hi) * 0.5
+            } else if forward {
+                lo + 1.0
+            } else {
+                lo - 1.0
+            };
+            let (base, t) = self.sample(mid);
+            let w = (base.0 - from.0 - mid * t.0, base.1 - from.1 - mid * t.1);
+            let b = w.0 * t.0 + w.1 * t.1;
+            let root = (b * b - (w.0 * w.0 + w.1 * w.1) + chord * chord)
+                .max(0.0)
+                .sqrt();
+            let sigma = if forward { -b + root } else { -b - root };
+            if (forward && sigma <= hi) || (!forward && sigma >= hi) {
+                return sigma;
+            }
+            lo = hi;
         }
     }
 }
@@ -620,6 +688,42 @@ mod test {
         assert!((tangent_to_bearing((0.0, -1.0)) - 0.0).abs() < 1e-5);
         assert!((tangent_to_bearing((1.0, 0.0)) - 90.0).abs() < 1e-5);
         assert!((tangent_to_bearing((0.0, 1.0)) - 180.0).abs() < 1e-5);
+    }
+
+    /// Straight-line distance between neighbouring path samples.
+    fn chords(p: &AnchorPath) -> Vec<f64> {
+        p.samples
+            .chunks(2)
+            .collect::<Vec<_>>()
+            .windows(2)
+            .map(|w| ((w[1][0] - w[0][0]) as f64).hypot((w[1][1] - w[0][1]) as f64))
+            .collect()
+    }
+
+    #[test]
+    fn anchor_path_samples_are_a_step_apart_in_a_straight_line() {
+        // A right-angle bend next to the anchor, plus extrapolation past both
+        // ends: every chord is still exactly one step, which is what the
+        // shader's `floor(s / step)` walk assumes.
+        let verts = [(0.0, 0.0), (100.0, 0.0), (100.0, 37.0), (100.0, 100.0)];
+        let path = LinePath::new(&verts).unwrap();
+        let p = path.anchor_path(97.0, 40.0, 1.0);
+        let step = p.meta[0] as f64;
+        for (k, c) in chords(&p).iter().enumerate() {
+            assert!((c - step).abs() < 1e-3, "chord {k}: {c} vs {step}");
+        }
+
+        // On a straight line chords and arcs agree: samples sit at
+        // (k - 15.5) steps either side of the anchor, as before.
+        let verts = line_1000();
+        let path = LinePath::new(&verts).unwrap();
+        let p = path.anchor_path(500.0, 100.0, 1.0);
+        let step = p.meta[0] as f64;
+        for k in 0..PATH_SAMPLES {
+            let expected = (k as f64 - (PATH_SAMPLES - 1) as f64 * 0.5) * step;
+            assert!((p.samples[k * 2] as f64 - expected).abs() < 1e-3, "{k}");
+            assert_eq!(p.samples[k * 2 + 1], 0.0);
+        }
     }
 
     #[test]

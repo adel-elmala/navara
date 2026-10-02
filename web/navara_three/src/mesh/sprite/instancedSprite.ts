@@ -2,7 +2,7 @@ import {
   PointMesh as NavaraPointMesh,
   BillboardMesh as NavaraBillboardMesh,
 } from "@navaramap/engine";
-import { lineAnchorShown } from "@navaramap/engine-api";
+import { lineAnchorPlace } from "@navaramap/engine-api";
 import { degreeToRadian } from "@navaramap/three-api";
 import {
   InstancedBufferAttribute,
@@ -26,6 +26,7 @@ import {
   readBatchShowOpacity,
   registerBatchedMaterial,
   SPRITE_BATCH_SUPPORT,
+  unpackOrientation,
   updateBatchAttribute,
   type BatchAttributeDefaults,
   type BatchedAttributeName,
@@ -77,9 +78,11 @@ type PositionsInfo = {
   scaleBands: Float32Array<ArrayBufferLike> | null;
 };
 
-/** `f64` values per anchor in `lineAnchorShown`'s input. Must match
- *  `LINE_ANCHOR_STRIDE` in `crates/navara_wasm_api/src/line_label.rs`. */
-const LINE_ANCHOR_STRIDE = 8;
+/** `f64` values per anchor in `lineAnchorPlace`'s input and output. Must match
+ *  `LINE_ANCHOR_STRIDE` / `LINE_ANCHOR_RESULT_STRIDE` in
+ *  `crates/navara_wasm_api/src/line_label.rs`. */
+const LINE_ANCHOR_STRIDE = 15;
+const LINE_ANCHOR_RESULT_STRIDE = 5;
 
 type SpriteMaterial = (NavaraPointMesh | NavaraBillboardMesh)["material"];
 
@@ -228,12 +231,18 @@ export class InstancedSpriteMesh
   /** Along-line anchors' scale bands, kept from the geometry that brought
    *  them: a terrain-height update re-sends positions without them. */
   private _scaleBands: Float32Array<ArrayBufferLike> | null = null;
+  /** Along-line anchors' line bearings in radians, kept like the bands. */
+  private _bearings: Float32Array | null = null;
+  /** The last `lineAnchorPlace` result: per instance whether its level is on
+   *  screen, then the box its turned quad covers, which the declutter pass
+   *  uses in place of the unrotated one. */
+  private _linePlacement: Float64Array | null = null;
   /** The material's `spacing` the bands were built for. */
   private _spacingPx = 250;
   /** Per instance, whether the last placement pass found its level off
    *  screen. Such instances fade out and take no declutter space. */
   private _outOfBand: Uint8Array | null = null;
-  /** Reused `lineAnchorShown` input. */
+  /** Reused `lineAnchorPlace` input. */
   private _bandInput = new Float64Array(0);
   private _bandViewMatrix = new Float64Array(16);
 
@@ -284,10 +293,11 @@ export class InstancedSpriteMesh
   /**
    * Show each along-line anchor only while its level is the one on screen, so
    * `spacing` holds in screen pixels at every depth of the view. A sprite
-   * wider than about three quarters of `spacing` asks for a sparser level, as
-   * MapLibre stretches `symbol-spacing` for an icon. Runs at the placement
-   * pass's cadence, before candidates are collected, whether or not this mesh
-   * declutters.
+   * longer along its line than about three quarters of `spacing` asks for a
+   * sparser level, as MapLibre stretches `symbol-spacing` for an icon. Also
+   * resolves the box each turned quad covers on screen, for
+   * `collectDeclutterCandidates`. Runs at the placement pass's cadence,
+   * before candidates are collected, whether or not this mesh declutters.
    */
   placeLineLabels(
     camera: PerspectiveCamera,
@@ -295,11 +305,21 @@ export class InstancedSpriteMesh
     heightPx: number,
   ): void {
     const bands = this._scaleBands;
+    const bearings = this._bearings;
     const anchors = this._anchors;
     const outOfBand = this._outOfBand;
     const material = this.material as ShaderMaterial;
     const enhancer = this._enhancedMaterial;
-    if (!this.visible || !bands || !anchors || !outOfBand || !enhancer) return;
+    if (
+      !this.visible ||
+      !bands ||
+      !bearings ||
+      !anchors ||
+      !outOfBand ||
+      !enhancer
+    ) {
+      return;
+    }
 
     const count = Math.min(this._instanceCount, anchors.length / 3);
     if (this._bandInput.length < count * LINE_ANCHOR_STRIDE) {
@@ -308,8 +328,9 @@ export class InstancedSpriteMesh
     const input = this._bandInput;
     const batchIndices = this._instanceBatchIndex;
     const state = enhancer.states();
-    // The quad's width along the line: `size` times the atlas rect's aspect,
-    // as in `collectDeclutterCandidates`.
+    const cx = Math.min(Math.max(state.center[0], -0.5), 0.5);
+    const cy = Math.min(Math.max(state.center[1], -0.5), 0.5);
+    // The quad's box, as in `collectDeclutterCandidates`.
     const uvRect = state.billboard
       ? (this.geometry?.getAttribute("instanceUvRect") as
           InstancedBufferAttribute | undefined)
@@ -329,22 +350,38 @@ export class InstancedSpriteMesh
         readBatchScalar(material, batchIndex, "height") ?? state.addHeight;
       input[o + 4] = bands[i * 2];
       input[o + 5] = bands[i * 2 + 1];
-      input[o + 6] = aspect * size;
-      input[o + 7] = state.sizeInMeters ? 1 : 0;
+      input[o + 6] = state.sizeInMeters ? 1 : 0;
+      input[o + 7] = (-0.5 - cx) * aspect * size;
+      input[o + 8] = (0.5 - cx) * aspect * size;
+      input[o + 9] = (-0.5 - cy) * size;
+      input[o + 10] = (0.5 - cy) * size;
+      // Mirror of instancedSprite.vert.glsl: the batch texture's rotation and
+      // orientation, falling back to the material's, plus the bearing when
+      // the quad follows its line.
+      const rotation =
+        readBatchScalar(material, batchIndex, "rotation") ?? state.rotation;
+      input[o + 11] = state.instanceBearing ? rotation + bearings[i] : rotation;
+      input[o + 12] = bearings[i];
+      const packed = readBatchScalar(material, batchIndex, "orientation");
+      const orientation =
+        packed === undefined ? state : unpackOrientation(packed);
+      input[o + 13] = orientation.flatFacing ? 1 : 0;
+      input[o + 14] = orientation.rotateWithCamera ? 1 : 0;
     }
 
     camera.updateMatrixWorld();
     this._bandViewMatrix.set(camera.matrixWorldInverse.elements);
-    const shown = lineAnchorShown(
+    const placed = lineAnchorPlace(
       input.subarray(0, count * LINE_ANCHOR_STRIDE),
       this._bandViewMatrix,
       heightPx,
       MathUtils.degToRad(camera.fov),
       this._spacingPx,
     );
+    this._linePlacement = placed;
 
     for (let i = 0; i < count; i++) {
-      const out = shown[i] === 0 ? 1 : 0;
+      const out = placed[i * LINE_ANCHOR_RESULT_STRIDE] === 0 ? 1 : 0;
       if (outOfBand[i] === out) continue;
       outOfBand[i] = out;
       // Coming back in band, a decluttered instance waits for the pass to
@@ -374,6 +411,7 @@ export class InstancedSpriteMesh
     const overrides = this._declutterPriorityOverrides;
     const targets = this._declutterTargets;
     const outOfBand = this._outOfBand;
+    const placed = this._linePlacement;
     const count = Math.min(this._instanceCount, anchors.length / 3);
 
     for (let i = 0; i < count; i++) {
@@ -399,17 +437,19 @@ export class InstancedSpriteMesh
       if (uvRect && (rectW <= 0.0 || rectH <= 0.0)) continue;
       const aspect = uvRect ? rectW / rectH : 1.0;
 
-      // Mirror of instancedSprite.vert.glsl:122-125 — the quad spans
-      // (position.xy - center) * vec2(aspect, 1) * size around the anchor.
+      // Mirror of instancedSprite.vert.glsl — the quad spans
+      // (position.xy - center) * vec2(aspect, 1) * size around the anchor,
+      // turned as `placeLineLabels` resolved for an along-line anchor.
+      const p = i * LINE_ANCHOR_RESULT_STRIDE;
       out.push({
         anchorX: anchors[i * 3],
         anchorY: anchors[i * 3 + 1],
         anchorZ: anchors[i * 3 + 2],
         addHeight,
-        minX: (-0.5 - cx) * aspect * size,
-        maxX: (0.5 - cx) * aspect * size,
-        minY: (-0.5 - cy) * size,
-        maxY: (0.5 - cy) * size,
+        minX: placed ? placed[p + 1] : (-0.5 - cx) * aspect * size,
+        maxX: placed ? placed[p + 2] : (0.5 - cx) * aspect * size,
+        minY: placed ? placed[p + 3] : (-0.5 - cy) * size,
+        maxY: placed ? placed[p + 4] : (0.5 - cy) * size,
         sizeInMeters: state.sizeInMeters,
         // NaN-safe: an unset override falls back to the layer priority.
         priority: Number.isNaN(override) ? this._declutterPriority : override,
@@ -638,6 +678,7 @@ export class InstancedSpriteMesh
 
     const instanceCount = positionsInfo.nPositions;
     this._scaleBands = positionsInfo.scaleBands;
+    this._linePlacement = null;
     this._spacingPx = m.material.spacing ?? 250;
     // Every level of an along-line pattern arrives at once; until the first
     // placement pass picks one per anchor, showing them would flash them all.
@@ -719,15 +760,19 @@ export class InstancedSpriteMesh
     // rotation the batch texture resolves, so it must be per instance: one
     // feature owns many anchors with different bearings, while the batch
     // texture is keyed per feature.
-    if (positionsInfo.bearings && (m.material.rotateToLine ?? true)) {
+    this._bearings = null;
+    if (positionsInfo.bearings) {
       const radians = new Float32Array(positionsInfo.bearings.length);
       for (let i = 0; i < radians.length; i++) {
         radians[i] = positionsInfo.bearings[i] * MathUtils.DEG2RAD;
       }
-      instancedGeometry.setAttribute(
-        "instanceBearing",
-        new InstancedBufferAttribute(radians, 1),
-      );
+      this._bearings = radians;
+      if (m.material.rotateToLine ?? true) {
+        instancedGeometry.setAttribute(
+          "instanceBearing",
+          new InstancedBufferAttribute(radians, 1),
+        );
+      }
     }
 
     return instancedGeometry;

@@ -220,7 +220,6 @@ void main() {
     // Set by the along-line walk below; an ordinary label keeps these.
     bool nvr_alongLine = false;
     float wordCenterEm = 0.0;
-    float pathScale = 1.0;
 #ifdef NVR_LINE_PLACEMENT
     vec4 pathRow = nvr_readLabel(slot, LABEL_ROW_PATH);
     // A zero sample step marks a plain point sharing the batch with along-line
@@ -270,22 +269,10 @@ void main() {
 
         vec2 tangent = pb - pa;
         float tangentLen = length(tangent);
-        // A doubled-back hairpin can put two samples on the same point; east keeps
-        // the glyph readable rather than letting a normalize() produce NaN.
+        // Neighbouring samples are a whole step apart, so only a step too small
+        // for f32 to separate them lands here; east keeps the glyph readable
+        // rather than letting a normalize() produce NaN.
         tangent = (tangentLen > 1e-6 ? tangent / tangentLen : vec2(1.0, 0.0)) * dir;
-
-        // Samples are evenly spaced in ARC length but joined by straight chords, so
-        // a segment containing a bend covers less ground than the arc it stands
-        // for, and `mix` advances more slowly than the label's own em ruler.
-        //
-        // Placing every glyph individually hid this: all of them shrank by the same
-        // factor, so the label just came out slightly short. A rigid word does not
-        // shrink, so the whole of the discrepancy is taken out of the gaps between
-        // words instead — which is where the spaces went. Put the glyphs on the
-        // path's ruler too, and words and gaps shrink together again.
-        //
-        // Chord never exceeds arc, so the clamp only guards f32 noise.
-        pathScale = min(tangentLen / max(stepMeters, 1e-6), 1.0);
         vec2 normal = vec2(-tangent.y, tangent.x);
 
         // `scaleFactor` is metres per em, so dividing by the font size recovers
@@ -382,14 +369,8 @@ void main() {
         // the offset from the word's centre, laid along the word's single
         // tangent. Only x needs rebasing: y is still the baseline-relative
         // height the layout gave it.
-        //
-        // Split in two so `pathScale` reaches the spacing but not the
-        // letterforms: where the glyph sits inside its word rides the path's
-        // ruler, while the quad's own corners keep the glyph's true shape.
         if (nvr_alongLine) {
-            float glyphCenterEm = glyphOffset.x + glyphSize.x * 0.5 - center.x * textWidth;
-            localPos.x =
-                (glyphCenterEm - wordCenterEm) * pathScale + (localPos.x - glyphCenterEm);
+            localPos.x -= wordCenterEm;
         }
 
         // Lay the glyph out in the label's basis (see nvr_quadBasis), scaled,

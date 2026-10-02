@@ -190,6 +190,9 @@ export type LabelLayout = {
   /** Y bounds of the actual rendered glyph bboxes, for the background quad. */
   minYEm: number;
   maxYEm: number;
+  /** Half the width of the widest word: how far line placement's rigid words
+   *  can run along their own tangent from where they sit on the curve. */
+  maxWordHalfEm: number;
 };
 
 export type LayoutOptions = {
@@ -210,6 +213,7 @@ const EMPTY_LAYOUT: LabelLayout = {
   heightEm: 0,
   minYEm: 0,
   maxYEm: 1,
+  maxWordHalfEm: 0,
 };
 
 /**
@@ -218,10 +222,10 @@ const EMPTY_LAYOUT: LabelLayout = {
  *
  * Taken from the drawn extent rather than the advance width so the word sits on
  * the curve where it looks centred, not where its trailing side bearing would
- * put it.
+ * put it. Returns half that extent.
  */
-function assignWordCenter(quads: GlyphQuad[], start: number): void {
-  if (quads.length <= start) return;
+function assignWordCenter(quads: GlyphQuad[], start: number): number {
+  if (quads.length <= start) return 0;
   let minX = Infinity;
   let maxX = -Infinity;
   for (let i = start; i < quads.length; i++) {
@@ -230,6 +234,7 @@ function assignWordCenter(quads: GlyphQuad[], start: number): void {
   }
   const center = (minX + maxX) * 0.5;
   for (let i = start; i < quads.length; i++) quads[i].wordCenterEmX = center;
+  return (maxX - minX) * 0.5;
 }
 
 /**
@@ -278,6 +283,7 @@ export function buildLabelLayout(
   const glyphKeys = new Set<bigint>();
   let minYEm = Infinity;
   let maxYEm = -Infinity;
+  let maxWordHalfEm = 0;
 
   for (let li = 0; li < lines.length; li++) {
     let cursorX = (blockWidthFu - widths[li]) * options.textAlign;
@@ -318,13 +324,16 @@ export function buildLabelLayout(
           wordCenterEmX: 0,
         });
       } else if (glyph.charClass === GlyphCharClass.Whitespace) {
-        assignWordCenter(quads, wordStart);
+        maxWordHalfEm = Math.max(
+          maxWordHalfEm,
+          assignWordCenter(quads, wordStart),
+        );
         wordStart = quads.length;
       }
       cursorX += glyph.xAdvance;
       cursorY += glyph.yAdvance;
     }
-    assignWordCenter(quads, wordStart);
+    maxWordHalfEm = Math.max(maxWordHalfEm, assignWordCenter(quads, wordStart));
   }
 
   if (quads.length === 0) {
@@ -344,5 +353,6 @@ export function buildLabelLayout(
       SDF_PX_SIZE,
     minYEm,
     maxYEm,
+    maxWordHalfEm,
   };
 }

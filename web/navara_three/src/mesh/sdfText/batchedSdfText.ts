@@ -176,6 +176,8 @@ type LabelRecord = {
   heightEm: number;
   minYEm: number;
   maxYEm: number;
+  /** See `LabelLayout.maxWordHalfEm`. */
+  maxWordHalfEm: number;
   /** Current animated hide factor and the placement target it fades toward. */
   declutterHide: number;
   declutterTarget: number;
@@ -880,6 +882,7 @@ export class BatchedSdfTextMesh
       heightEm: 0,
       minYEm: 0,
       maxYEm: 1,
+      maxWordHalfEm: 0,
       // Decluttered labels start hidden and fade in once the placement pass
       // grants them space — otherwise dense tiles flash their full clutter for
       // a frame before the first pass runs.
@@ -1093,6 +1096,7 @@ export class BatchedSdfTextMesh
     record.heightEm = layout.heightEm;
     record.minYEm = layout.minYEm;
     record.maxYEm = layout.maxYEm;
+    record.maxWordHalfEm = layout.maxWordHalfEm;
     this._writeBox(record);
 
     if (layout.quads.length === 0) {

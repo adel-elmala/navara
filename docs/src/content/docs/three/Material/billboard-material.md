@@ -483,7 +483,7 @@ The billboards shown on a line are decided again as the camera moves. Pulling th
 
 A line always keeps the billboard at its halfway point, and a line shorter than `spacing` on screen gets only that one. Billboards stop filling in very close to the ground (street level) on a GeoJSON source, and when a vector tile is shown much deeper than its own zoom level (overscaled). There they sit farther apart than `spacing`.
 
-As with MapLibre's `symbol-spacing`, a billboard wider than three quarters of `spacing` spreads its repeats to its own width plus a quarter of `spacing`, and on a vector tile source each tile places billboards only inside its own bounds. Each tile spaces its own billboards, so repeats end up at most about one tile apart (512 to 1024 screen pixels) however large `spacing` is.
+As with MapLibre's `symbol-spacing`, a billboard longer along the line than three quarters of `spacing` spreads its repeats to that length plus a quarter of `spacing`. The length is measured in the billboard's own frame: with `rotateToLine` the top of the image points along the line, so its height is what counts, and `rotation` turns it from there. On a vector tile source, each tile places billboards only inside its own bounds. Each tile spaces its own billboards, so repeats end up at most about one tile apart (512 to 1024 screen pixels) however large `spacing` is.
 
 This option applies when the layer's geometry is built. `layer.update()` does not rebuild billboards that are already loaded, so remove the layer and add it again to change it.
 
