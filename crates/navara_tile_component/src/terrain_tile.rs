@@ -59,6 +59,11 @@ pub struct TerrainTile {
     pub cached_mesh_handle: Option<CachedMeshHandle>,
     /// Whether it's upsampled tile or not.
     pub upsampled: bool,
+    /// Zoom level of the ancestor the current upsampled mesh was built from
+    /// (`None` unless the mesh is upsampled). Kept so a tile that never gets a
+    /// DEM of its own can be rebuilt once a nearer source appears (see
+    /// [`Self::has_stale_upsample_source`]).
+    pub upsample_source_z: Option<usize>,
     /// The last upsample task for this tile failed (its source vanished mid
     /// flight, typically after a tiling rebuild). The tile stops counting as
     /// upsamplable and fetches its own DEM instead of retrying forever.
@@ -89,6 +94,7 @@ impl Clone for TerrainTile {
             occludee_point_in_scaled_space: self.occludee_point_in_scaled_space,
             cached_mesh_handle: self.cached_mesh_handle.clone(),
             upsampled: self.upsampled,
+            upsample_source_z: self.upsample_source_z,
             upsample_failed: self.upsample_failed,
             max_height: self.max_height,
             min_height: self.min_height,
@@ -138,8 +144,9 @@ pub const MAX_UPSAMPLE_DEPTH: usize = 2;
 /// is the walking equivalent for callers outside the traversal.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UpsampleAncestors {
-    /// Nearest ancestor whose mesh was built from real terrain data, with its
-    /// zoom level.
+    /// Nearest ancestor holding real terrain data, with its zoom level: a mesh
+    /// built from its own data, or — for raster DEM, which resamples the
+    /// source's DEM pixels rather than its mesh — its own landed DEM.
     pub real: Option<(TileHandle, usize)>,
     /// Nearest ancestor whose mesh carries heights but was itself upsampled,
     /// with its zoom level.
@@ -147,26 +154,27 @@ pub struct UpsampleAncestors {
 }
 
 impl UpsampleAncestors {
-    /// The ancestors for the children of `tile`: `tile` itself when its mesh
-    /// carries heights, the inherited ones otherwise.
-    pub fn extend_with(self, tile: &TerrainTile, handle: TileHandle) -> Self {
-        if !tile
+    /// The ancestors for the children of `tile`: `tile` itself when it holds
+    /// real data or its mesh carries heights, the inherited ones otherwise.
+    /// `dem_landed` is whether the tile's own DEM has landed, counted only for
+    /// raster DEM (see [`Self::real`]).
+    pub fn extend_with(self, tile: &TerrainTile, handle: TileHandle, dem_landed: bool) -> Self {
+        let has_heights = tile
             .cached_mesh_handle
             .as_ref()
-            .is_some_and(|m| m.heights.is_some())
-        {
-            return self;
-        }
-        if tile.upsampled {
+            .is_some_and(|m| m.heights.is_some());
+        if dem_landed || (has_heights && !tile.upsampled) {
+            Self {
+                real: Some((handle, tile.coords.z)),
+                ..self
+            }
+        } else if has_heights {
             Self {
                 upsampled: Some((handle, tile.coords.z)),
                 ..self
             }
         } else {
-            Self {
-                real: Some((handle, tile.coords.z)),
-                ..self
-            }
+            self
         }
     }
 
@@ -175,7 +183,7 @@ impl UpsampleAncestors {
     /// on the path — the nearest upsampled one. Only meshes carrying heights
     /// qualify (flat ellipsoid tiles do not). Quantized mesh clips the
     /// source's TIN, so an upsampled source works; raster DEM resamples the
-    /// source's DEM pixels, which only a real tile has.
+    /// source's DEM pixels, which only a tile whose own DEM landed has.
     ///
     /// When `bounded`, a source more than [`MAX_UPSAMPLE_DEPTH`] levels up is
     /// rejected and the tile waits for real data. A real ancestor that is too
@@ -247,6 +255,7 @@ impl TerrainTile {
             occludee_point_in_scaled_space: None,
             cached_mesh_handle: None,
             upsampled: false,
+            upsample_source_z: None,
             upsample_failed: false,
             children: Vec::with_capacity(4),
             were_children_rendered: false,
@@ -389,12 +398,17 @@ impl TerrainTile {
     }
 
     /// Walk the quadtree from the root down to this tile's parent, building
-    /// the `UpsampleAncestors` the traversal would hand down. This is a
+    /// the `UpsampleAncestors` the traversal would hand down (`dem_landed` as
+    /// in [`UpsampleAncestors::extend_with`], per ancestor). This is a
     /// quadtree lookup per level, so it is for per-event callers (starting an
     /// upsample task), not for the per-frame traversal. Ancestors on the
     /// traversal path keep their cached mesh, so a hit is the usual case for
     /// any tile whose region has terrain on screen.
-    pub fn upsample_ancestors(&self, qt: &TerrainTileQuadtree) -> UpsampleAncestors {
+    pub fn upsample_ancestors(
+        &self,
+        qt: &TerrainTileQuadtree,
+        dem_landed: impl Fn(&TerrainTile) -> bool,
+    ) -> UpsampleAncestors {
         let mut ancestors = UpsampleAncestors::default();
         for z in 0..self.coords.z {
             let Some(ancestor) = qt
@@ -407,7 +421,7 @@ impl TerrainTile {
             let Some(tile) = qt.qt.get(handle) else {
                 continue;
             };
-            ancestors = ancestors.extend_with(tile, handle);
+            ancestors = ancestors.extend_with(tile, handle, dem_landed(tile));
         }
         ancestors
     }
@@ -419,10 +433,11 @@ impl TerrainTile {
     pub fn find_upsample_source(
         &self,
         qt: &TerrainTileQuadtree,
+        dem_landed: impl Fn(&TerrainTile) -> bool,
         allow_upsampled: bool,
         bounded: bool,
     ) -> Option<TileHandle> {
-        self.upsample_ancestors(qt)
+        self.upsample_ancestors(qt, dem_landed)
             .source(allow_upsampled, self.coords.z, bounded)
     }
 
@@ -461,6 +476,40 @@ impl TerrainTile {
             .and_then(|id| source_store.get(id))
             .is_some_and(|s| s.should_overscale(self.coords.z));
         !in_overscale_band && !self.is_terrain_failed(terrain_data_requester)
+    }
+
+    /// Whether this tile's upsampled mesh is worth rebuilding from the nearest
+    /// real-data ancestor, which is nearer than the one it was built from.
+    ///
+    /// Only for tiles whose depth bound is lifted — the overscale band and a
+    /// failed DEM request — so callers pair this with
+    /// [`Self::is_upsample_depth_bounded`]: every other tile has a DEM of its
+    /// own coming that replaces the mesh outright.
+    ///
+    /// The levels above turn real one at a time, so a rebuild waits for a
+    /// source worth a worker task: one within [`MAX_UPSAMPLE_DEPTH`] of the
+    /// tile, a jump of at least that many levels, or the last one the tile
+    /// will ever get. `is_final(real_z)` answers that last question — whether
+    /// no tile between that ancestor and this one can still come to hold real
+    /// data — and is asked only when the cheaper tests fail.
+    pub fn has_stale_upsample_source(
+        &self,
+        upsample_ancestors: UpsampleAncestors,
+        is_final: impl FnOnce(usize) -> bool,
+    ) -> bool {
+        // A tile whose last upsample failed cannot be rebuilt by upsampling
+        // (`should_upsample_terrain` refuses it).
+        if self.upsample_failed {
+            return false;
+        }
+        let (Some(source_z), Some((_, real_z))) = (self.upsample_source_z, upsample_ancestors.real)
+        else {
+            return false;
+        };
+        real_z > source_z
+            && (self.coords.z - real_z <= MAX_UPSAMPLE_DEPTH
+                || real_z - source_z >= MAX_UPSAMPLE_DEPTH
+                || is_final(real_z))
     }
 
     /// Terrain-side texture readiness. Regular raster textures are owned by the
@@ -635,6 +684,7 @@ impl TerrainTile {
             t.destroy(buf);
         }
         self.upsampled = false;
+        self.upsample_source_z = None;
         self.upsample_failed = false;
     }
 }
@@ -1318,7 +1368,7 @@ mod test {
         set_mesh(&mut qt, (1, 2, 2), true, true);
         let leaf = qt.qt.get(handle_of(&qt, (3, 5, 3))).unwrap();
         assert_eq!(
-            leaf.find_upsample_source(&qt, true, true),
+            leaf.find_upsample_source(&qt, |_| false, true, true),
             Some(handle_of(&qt, (0, 1, 1)))
         );
     }
@@ -1329,10 +1379,10 @@ mod test {
         set_mesh(&mut qt, (1, 2, 2), true, true);
         let leaf = qt.qt.get(handle_of(&qt, (3, 5, 3))).unwrap();
         assert_eq!(
-            leaf.find_upsample_source(&qt, true, true),
+            leaf.find_upsample_source(&qt, |_| false, true, true),
             Some(handle_of(&qt, (1, 2, 2)))
         );
-        assert_eq!(leaf.find_upsample_source(&qt, false, true), None);
+        assert_eq!(leaf.find_upsample_source(&qt, |_| false, false, true), None);
     }
 
     /// A real ancestor exactly `MAX_UPSAMPLE_DEPTH` levels up is a source;
@@ -1347,13 +1397,13 @@ mod test {
         set_mesh(&mut qt, (0, 0, 0), true, false);
         let leaf = qt.qt.get(leaf_handle).unwrap();
         assert_eq!(
-            leaf.find_upsample_source(&qt, true, true),
+            leaf.find_upsample_source(&qt, |_| false, true, true),
             None,
             "a real ancestor {} levels up is too far while bounded",
             leaf_z
         );
         assert_eq!(
-            leaf.find_upsample_source(&qt, true, false),
+            leaf.find_upsample_source(&qt, |_| false, true, false),
             Some(handle_of(&qt, (0, 0, 0))),
             "the bound is lifted where no own DEM will ever land"
         );
@@ -1361,7 +1411,7 @@ mod test {
         set_mesh(&mut qt, (0, 0, 1), true, false);
         let leaf = qt.qt.get(leaf_handle).unwrap();
         assert_eq!(
-            leaf.find_upsample_source(&qt, true, true),
+            leaf.find_upsample_source(&qt, |_| false, true, true),
             Some(handle_of(&qt, (0, 0, 1))),
             "a real ancestor exactly MAX_UPSAMPLE_DEPTH levels up qualifies"
         );
@@ -1376,11 +1426,121 @@ mod test {
         set_mesh(&mut qt, (0, 0, 0), true, false);
         set_mesh(&mut qt, (0, 0, leaf_z - 1), true, true);
         let leaf = qt.qt.get(handle_of(&qt, (0, 0, leaf_z))).unwrap();
-        assert_eq!(leaf.find_upsample_source(&qt, true, true), None);
+        assert_eq!(leaf.find_upsample_source(&qt, |_| false, true, true), None);
         assert_eq!(
-            leaf.find_upsample_source(&qt, true, false),
+            leaf.find_upsample_source(&qt, |_| false, true, false),
             Some(handle_of(&qt, (0, 0, 0)))
         );
+    }
+
+    /// Record the source level of the mesh `coords` currently shows.
+    fn set_upsample_source_z(qt: &mut TerrainTileQuadtree, coords: Coords<usize>, source_z: usize) {
+        let handle = handle_of(qt, coords);
+        qt.qt.get_mut(handle).unwrap().upsample_source_z = Some(source_z);
+    }
+
+    /// Whether the leaf `(0, 0, leaf_z)` of a straight chain is stale, with
+    /// `is_final` answering the question the cheaper tests leave open.
+    fn leaf_is_stale(
+        qt: &TerrainTileQuadtree,
+        leaf_z: usize,
+        is_final: impl FnOnce(usize) -> bool,
+    ) -> bool {
+        let leaf = qt.qt.get(handle_of(qt, (0, 0, leaf_z))).unwrap();
+        leaf.has_stale_upsample_source(leaf.upsample_ancestors(qt, |_| false), is_final)
+    }
+
+    /// A raster-DEM ancestor whose own DEM has landed is a source before its
+    /// mesh is built: the worker resamples the DEM bytes, not the mesh.
+    #[test]
+    fn upsample_source_counts_a_landed_dem_without_a_mesh() {
+        let leaf_z = MAX_UPSAMPLE_DEPTH + 1;
+        let qt = straight_chain_qt(leaf_z);
+        let leaf = qt.qt.get(handle_of(&qt, (0, 0, leaf_z))).unwrap();
+        assert_eq!(leaf.find_upsample_source(&qt, |_| false, false, true), None);
+        assert_eq!(
+            leaf.find_upsample_source(&qt, |t| t.coords.z == 1, false, true),
+            Some(handle_of(&qt, (0, 0, 1)))
+        );
+    }
+
+    /// A mesh clipped from out of bound is stale once a nearer real-data
+    /// ancestor brings the tile within the bound, even a single level nearer.
+    #[test]
+    fn upsample_source_is_stale_once_a_nearer_ancestor_settles_the_tile() {
+        let leaf_z = MAX_UPSAMPLE_DEPTH + 2;
+        let mut qt = straight_chain_qt(leaf_z);
+        set_mesh(&mut qt, (0, 0, 1), true, false);
+        set_mesh(&mut qt, (0, 0, leaf_z), true, true);
+        set_upsample_source_z(&mut qt, (0, 0, leaf_z), 1);
+        assert!(
+            !leaf_is_stale(&qt, leaf_z, |_| unreachable!("nothing nearer to ask about")),
+            "the source is still the nearest real ancestor there is"
+        );
+
+        set_mesh(&mut qt, (0, 0, 2), true, false);
+        assert!(leaf_is_stale(&qt, leaf_z, |_| unreachable!(
+            "settled without the walk"
+        )));
+    }
+
+    /// A tile no ancestor can settle yet rebuilds on a jump of at least
+    /// `MAX_UPSAMPLE_DEPTH` levels, not on every level the frontier advances.
+    #[test]
+    fn upsample_source_out_of_bound_rebuilds_on_a_big_enough_jump() {
+        let leaf_z = MAX_UPSAMPLE_DEPTH + 4;
+        let mut qt = straight_chain_qt(leaf_z);
+        set_mesh(&mut qt, (0, 0, 0), true, false);
+        set_mesh(&mut qt, (0, 0, leaf_z), true, true);
+        set_upsample_source_z(&mut qt, (0, 0, leaf_z), 0);
+
+        set_mesh(&mut qt, (0, 0, 1), true, false);
+        assert!(
+            !leaf_is_stale(&qt, leaf_z, |_| false),
+            "one level nearer is not worth a task while more may follow"
+        );
+
+        set_mesh(&mut qt, (0, 0, MAX_UPSAMPLE_DEPTH), true, false);
+        assert!(
+            leaf_is_stale(&qt, leaf_z, |_| unreachable!("a jump needs no walk")),
+            "MAX_UPSAMPLE_DEPTH levels nearer is, though still out of bound"
+        );
+    }
+
+    /// The last source a tile will ever get is taken however small the step:
+    /// nothing better follows, so that level would otherwise separate it from
+    /// the best surface for good.
+    #[test]
+    fn upsample_source_takes_the_final_ancestor_however_small_the_step() {
+        let leaf_z = MAX_UPSAMPLE_DEPTH + 4;
+        let mut qt = straight_chain_qt(leaf_z);
+        set_mesh(&mut qt, (0, 0, 0), true, false);
+        set_mesh(&mut qt, (0, 0, 1), true, false);
+        set_mesh(&mut qt, (0, 0, leaf_z), true, true);
+        set_upsample_source_z(&mut qt, (0, 0, leaf_z), 0);
+
+        assert!(!leaf_is_stale(&qt, leaf_z, |_| false));
+        assert!(leaf_is_stale(&qt, leaf_z, |real_z| {
+            assert_eq!(real_z, 1, "asked about the nearest real ancestor");
+            true
+        }));
+    }
+
+    /// A tile whose last upsample failed is never flagged: it cannot be
+    /// rebuilt by upsampling, so the flag would have no path to consume it.
+    #[test]
+    fn upsample_source_is_not_stale_when_the_upsample_failed() {
+        let leaf_z = MAX_UPSAMPLE_DEPTH + 1;
+        let mut qt = straight_chain_qt(leaf_z);
+        set_mesh(&mut qt, (0, 0, 0), true, false);
+        set_mesh(&mut qt, (0, 0, 1), true, false);
+        set_mesh(&mut qt, (0, 0, leaf_z), true, true);
+        set_upsample_source_z(&mut qt, (0, 0, leaf_z), 0);
+        assert!(leaf_is_stale(&qt, leaf_z, |_| false));
+
+        let leaf_handle = handle_of(&qt, (0, 0, leaf_z));
+        qt.qt.get_mut(leaf_handle).unwrap().upsample_failed = true;
+        assert!(!leaf_is_stale(&qt, leaf_z, |_| true));
     }
 
     /// Extending level by level along the path must resolve exactly what the
@@ -1392,15 +1552,23 @@ mod test {
         set_mesh(&mut qt, (0, 1, 1), false, false);
         set_mesh(&mut qt, (1, 2, 2), true, true);
         let path = [(0, 0, 0), (0, 1, 1), (1, 2, 2), (3, 5, 3)];
-        let mut handed_down = UpsampleAncestors::default();
-        for coords in path {
-            let handle = handle_of(&qt, coords);
-            let tile = qt.qt.get(handle).unwrap();
-            assert_eq!(handed_down, tile.upsample_ancestors(&qt), "at {coords:?}");
-            handed_down = handed_down.extend_with(tile, handle);
+        // (0, 1, 1) has no mesh with heights; only its landed DEM makes it real.
+        for (landed, real) in [(None, (0, 0, 0)), (Some((0, 1, 1)), (0, 1, 1))] {
+            let dem_landed = |t: &TerrainTile| landed == Some((t.coords.x, t.coords.y, t.coords.z));
+            let mut handed_down = UpsampleAncestors::default();
+            for coords in path {
+                let handle = handle_of(&qt, coords);
+                let tile = qt.qt.get(handle).unwrap();
+                assert_eq!(
+                    handed_down,
+                    tile.upsample_ancestors(&qt, dem_landed),
+                    "at {coords:?}"
+                );
+                handed_down = handed_down.extend_with(tile, handle, dem_landed(tile));
+            }
+            assert_eq!(handed_down.real, Some((handle_of(&qt, real), real.2)));
+            assert_eq!(handed_down.upsampled, Some((handle_of(&qt, (1, 2, 2)), 2)));
         }
-        assert_eq!(handed_down.real, Some((handle_of(&qt, (0, 0, 0)), 0)));
-        assert_eq!(handed_down.upsampled, Some((handle_of(&qt, (1, 2, 2)), 2)));
     }
 
     #[test]
@@ -1410,7 +1578,7 @@ mod test {
         set_mesh(&mut qt, (0, 0, 0), false, false);
         set_mesh(&mut qt, (1, 2, 2), false, false);
         let leaf = qt.qt.get(handle_of(&qt, (3, 5, 3))).unwrap();
-        assert_eq!(leaf.find_upsample_source(&qt, true, true), None);
+        assert_eq!(leaf.find_upsample_source(&qt, |_| false, true, true), None);
     }
 
     #[test]
@@ -2086,7 +2254,9 @@ mod terrain_tile_tests {
                     let source_store = source_store.lock().unwrap().take().unwrap();
                     let sorted_layers: Vec<_> = tiles.iter().sort::<&Order>().collect();
                     let rs = child.is_ready(
-                        child.upsample_ancestors(&qt),
+                        child.upsample_ancestors(&qt, |t| {
+                            t.is_terrain_ready(&terrain_data_requester)
+                        }),
                         &data_requesters,
                         &terrain_data_requester,
                         &terrain_layer,
@@ -2162,7 +2332,7 @@ mod terrain_tile_tests {
             );
         }
 
-        /// Regression guard for the upsample band (max_zoom < z < overscaled_max_zoom)
+        /// Regression guard for the upsample band (max_zoom < z <= overscaled_max_zoom)
         /// with a ready parent: should still upsample without needing a Fail status.
         #[test]
         fn in_upsample_band_unchanged() {
