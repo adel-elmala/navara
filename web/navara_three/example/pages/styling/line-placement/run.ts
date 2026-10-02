@@ -24,9 +24,8 @@ import { CENTER, makeCurves } from "./data";
  * Text and sprites placed along a handful of made-up curves, for exercising
  * line placement without a real street network in the way.
  *
- * The source is plain GeoJSON, which is untiled: `spacing` is therefore in
- * metres along the ground rather than pixels at a tile's zoom, and the anchors
- * stay where they were placed as the camera moves.
+ * `spacing` is in screen pixels: anchors thin out as the camera pulls back and
+ * fill in as it closes, without ever moving.
  */
 
 /** An arrow pointing up, i.e. along the line once laid flat and turned to it. */
@@ -70,9 +69,8 @@ const labelParams = {
   /** Replaces every shape's name when non-empty. */
   text: "",
   placement: "line" as Placement,
-  // Also caps label length: a label longer than twice the spacing is dropped,
-  // and a pixel-sized label grows in metres with distance from the camera.
-  spacing: 600,
+  // A label longer than three quarters of it spreads its repeats further.
+  spacing: 250,
   maxAngle: 45,
   keepUpright: true,
   lineOffset: 0,
@@ -80,14 +78,14 @@ const labelParams = {
   size: 18,
   sizeInMeters: false,
   outlineWidth: 4,
-  declutter: true,
+  declutter: false,
   height: 0,
 };
 
 const spriteParams = {
   show: true,
   placement: "line" as Placement,
-  spacing: 120,
+  spacing: 60,
   rotateToLine: true,
   // Laid flat and frozen in the anchor's east-north-up frame, `rotation` is a
   // compass bearing — which is what the line's tangent is added to.
@@ -311,9 +309,9 @@ export const run = async (view: ThreeView) => {
     .on("change", rebuildLabels);
   labelsFolder
     .addBinding(labelParams, "spacing", {
-      label: "spacing (m)",
-      min: 50,
-      max: 2000,
+      label: "spacing (px)",
+      min: 20,
+      max: 1000,
       step: 10,
     })
     .on("change", rebuildLabels);
@@ -374,10 +372,10 @@ export const run = async (view: ThreeView) => {
     .on("change", rebuildSprites);
   spritesFolder
     .addBinding(spriteParams, "spacing", {
-      label: "spacing (m)",
-      min: 20,
-      max: 1000,
-      step: 10,
+      label: "spacing (px)",
+      min: 10,
+      max: 500,
+      step: 5,
     })
     .on("change", rebuildSprites);
   spritesFolder

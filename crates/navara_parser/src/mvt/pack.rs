@@ -11,7 +11,8 @@
 //!
 //! Segment order is fixed and must match between pack and unpack. Per group:
 //! - `f64_stream`: `coords` (flattened) | `points` | `outer_rings`, `holes`
-//! - `f32_stream`: `encoded_coords`, `bearings`, `path_samples`, `path_meta`
+//! - `f32_stream`: `encoded_coords`, `bearings`, `scale_bands`, `path_samples`,
+//!   `path_meta`
 //! - `u32_stream`: `batch_indices`, then the kind's size arrays
 //!   (`points_sizes` for polylines; `outer_ring_sizes`, `holes_total_sizes`,
 //!   `holes_sizes`, `holes_boundaries` for polygons), then
@@ -36,6 +37,8 @@ pub struct ParsedMvtSegmentLens {
     pub encoded_coords: u32,
     /// Zero unless the group's anchors were placed along a line.
     pub bearings: u32,
+    /// Filled exactly when `bearings` is.
+    pub scale_bands: u32,
     /// Zero unless the group is along-line text.
     pub path_samples: u32,
     pub path_meta: u32,
@@ -110,12 +113,16 @@ pub fn pack_parsed_mvt_groups(groups: Vec<ParsedLayerGroup>) -> PackedMvtParseRe
                 batch_indices,
                 encoded_coords,
                 bearings,
+                scale_bands,
                 path_samples,
                 path_meta,
             } => {
                 f64_cap += coords.len() * 3;
-                f32_cap +=
-                    encoded_coords.len() + bearings.len() + path_samples.len() + path_meta.len();
+                f32_cap += encoded_coords.len()
+                    + bearings.len()
+                    + scale_bands.len()
+                    + path_samples.len()
+                    + path_meta.len();
                 u32_cap += batch_indices.len();
             }
             ParsedGeometry::Polylines {
@@ -198,6 +205,7 @@ pub fn pack_parsed_mvt_groups(groups: Vec<ParsedLayerGroup>) -> PackedMvtParseRe
                 mut batch_indices,
                 mut encoded_coords,
                 mut bearings,
+                mut scale_bands,
                 mut path_samples,
                 mut path_meta,
             } => {
@@ -205,6 +213,7 @@ pub fn pack_parsed_mvt_groups(groups: Vec<ParsedLayerGroup>) -> PackedMvtParseRe
                 lens.coords = (coords.len() * 3) as u32;
                 lens.encoded_coords = encoded_coords.len() as u32;
                 lens.bearings = bearings.len() as u32;
+                lens.scale_bands = scale_bands.len() as u32;
                 lens.path_samples = path_samples.len() as u32;
                 lens.path_meta = path_meta.len() as u32;
                 result.u32_stream.append(&mut batch_indices);
@@ -215,6 +224,7 @@ pub fn pack_parsed_mvt_groups(groups: Vec<ParsedLayerGroup>) -> PackedMvtParseRe
                 }
                 result.f32_stream.append(&mut encoded_coords);
                 result.f32_stream.append(&mut bearings);
+                result.f32_stream.append(&mut scale_bands);
                 result.f32_stream.append(&mut path_samples);
                 result.f32_stream.append(&mut path_meta);
             }
@@ -412,6 +422,7 @@ impl PackedMvtStreamsCursor {
                 let coords = unflatten_vec3(self.take_f64_slice(lens.coords)?);
                 let encoded_coords = self.take_f32(lens.encoded_coords)?;
                 let bearings = self.take_f32(lens.bearings)?;
+                let scale_bands = self.take_f32(lens.scale_bands)?;
                 let path_samples = self.take_f32(lens.path_samples)?;
                 let path_meta = self.take_f32(lens.path_meta)?;
                 ParsedGeometry::Points {
@@ -419,6 +430,7 @@ impl PackedMvtStreamsCursor {
                     batch_indices,
                     encoded_coords,
                     bearings,
+                    scale_bands,
                     path_samples,
                     path_meta,
                 }
@@ -494,6 +506,7 @@ mod test {
                 // Non-empty so the round trip pins that each f32 segment is
                 // sliced back out in order, not merged into its neighbour.
                 bearings: vec![90.0, 180.0],
+                scale_bands: vec![0.0, 6.0, 7.0, 8.0],
                 path_samples: vec![0.0, 1.0, 2.0, 3.0],
                 path_meta: vec![4.0, 5.0],
             },
@@ -575,6 +588,7 @@ mod test {
                     batch_indices,
                     encoded_coords,
                     bearings,
+                    scale_bands,
                     path_samples,
                     path_meta,
                 } => ParsedGeometry::Points {
@@ -582,6 +596,7 @@ mod test {
                     batch_indices: batch_indices.clone(),
                     encoded_coords: encoded_coords.clone(),
                     bearings: bearings.clone(),
+                    scale_bands: scale_bands.clone(),
                     path_samples: path_samples.clone(),
                     path_meta: path_meta.clone(),
                 },

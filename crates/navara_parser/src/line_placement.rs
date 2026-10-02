@@ -48,11 +48,56 @@ const _: () = assert!(PATH_SAMPLES * 2 <= u8::MAX as usize);
 /// instead of being given a longer path.
 const PATH_SPAN_SPACINGS: f64 = 2.0;
 
-/// Most anchors one line may receive. `spacing` comes straight from the style,
-/// so a vanishingly small value would otherwise ask for an unbounded number of
-/// them; flooring the spacing instead of truncating the count keeps the anchors
-/// spread along the whole line.
+/// Most anchor positions one line may receive at its finest level. The finest
+/// spacing comes from the style, so a vanishingly small value would otherwise
+/// ask for an unbounded number of them; flooring the spacing instead of
+/// truncating the count keeps the anchors spread along the whole line.
 const MAX_ANCHORS_PER_LINE: f64 = 10_000.0;
+
+/// Scalars stored per anchor in the scale-band buffer: the `(min, max]` ground
+/// metres per screen pixel over which the renderer shows it.
+pub const SCALE_BAND_STRIDE: usize = 2;
+
+/// The band a plain point sharing a group with along-line anchors takes: shown
+/// at every scale.
+pub const ALWAYS_SHOWN: [f32; SCALE_BAND_STRIDE] = [0.0, f32::INFINITY];
+
+/// One anchor [`LinePath::anchors`] places, with the range of on-screen scales
+/// it is shown over.
+///
+/// The requested spacing `r` is `spacing` screen pixels expressed in frame
+/// units at the camera's current scale; the anchor shows while
+/// `min_spacing < r <= max_spacing`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LineAnchor {
+    /// Arc length along the line, in frame units.
+    pub s: f64,
+    pub min_spacing: f64,
+    /// `INFINITY` for the anchor that stays on however far the camera pulls
+    /// back: the line's midpoint.
+    pub max_spacing: f64,
+    /// Pattern spacing the anchor's path span is sized for (see
+    /// [`LinePath::anchor_path`]).
+    pub path_spacing: f64,
+}
+
+impl LineAnchor {
+    /// The shown range as ground metres per screen pixel, for a pattern
+    /// `spacing_px` pixels apart. `meters_per_unit` is the frame's ground scale
+    /// at the anchor.
+    pub fn scale_band(&self, meters_per_unit: f64, spacing_px: f64) -> [f32; SCALE_BAND_STRIDE] {
+        // An unusable spacing resolved to the lone midpoint anchor, which
+        // shows at every scale.
+        if !(spacing_px.is_finite() && spacing_px > 0.0) {
+            return ALWAYS_SHOWN;
+        }
+        let per_px = meters_per_unit / spacing_px;
+        [
+            (self.min_spacing * per_px) as f32,
+            (self.max_spacing * per_px) as f32,
+        ]
+    }
+}
 
 /// Scalars stored per anchor alongside its path samples: the metre step between
 /// samples, then the arc length of *real* line either side of the anchor.
@@ -160,35 +205,85 @@ impl<'a> LinePath<'a> {
         )
     }
 
-    /// Arc lengths of the anchors `placement` puts on this line, `spacing`
-    /// frame units apart.
+    /// The anchors `placement` puts on this line, as nested levels so the
+    /// renderer can pick the density per anchor from its on-screen scale.
     ///
-    /// A line shorter than one interval — and every `LineCenter` line — still
-    /// deserves its one anchor, at the midpoint. Otherwise the pattern starts
-    /// half an interval in and stops half an interval before the end, so an
-    /// anchor never lands on an endpoint where a label has no line left to sit
-    /// on (the renderer would reject it and the repeat would silently go
-    /// missing instead of being spaced evenly).
-    pub fn anchors(&self, placement: PointPlacement, spacing: f64) -> impl Iterator<Item = f64> {
+    /// Level `l` repeats every `finest * 2^l` frame units, centred on the
+    /// line's midpoint, and every level's positions are a subset of the level
+    /// below — so as the camera pulls back anchors only drop out, never move.
+    /// The renderer shows the level whose spacing is the smallest one at least
+    /// the requested spacing, which keeps the gap on screen between one and
+    /// two times `spacing` pixels wherever the camera is. A position sits at
+    /// least half its level's interval from either end, so an anchor never
+    /// lands on an endpoint where a label has no line left to sit on. The
+    /// midpoint belongs to every level, up to the first one whose interval
+    /// covers the whole line; it is therefore the one anchor a line always
+    /// keeps, and the only one a `LineCenter` line has.
+    ///
+    /// With `banded`, each position gets one anchor per level it belongs to,
+    /// finest first, each shown only while its own level is the one selected
+    /// and with a path sized for that level. A text path has a fixed sample
+    /// count, so a single anchor would bend a label across a coarse level's
+    /// long chords once the camera zooms in. Without it — a sprite needs no
+    /// path — each position gets one anchor, shown at every scale up to its
+    /// coarsest level.
+    pub fn anchors(&self, placement: PointPlacement, finest: f64, banded: bool) -> Vec<LineAnchor> {
         debug_assert!(placement.is_along_line());
         let total = self.length();
-        let spacing = self.resolve_spacing(spacing);
-        let single = placement == PointPlacement::LineCenter || total < spacing;
-        let count = if single {
-            1
-        } else {
-            // A line measuring a whole number of intervals must keep its last
-            // anchor, which rounding in the projected length would otherwise
-            // push a hair past the stop.
-            ((total - spacing) / spacing + 1e-6).floor() as usize + 1
+        let finest = self.resolve_spacing(finest);
+        let half = total * 0.5;
+        let top = (total / finest).log2().ceil().max(0.0) as i32;
+        let spacing = |level: i32| finest * 2f64.powi(level);
+        // A line measuring a whole number of intervals must keep its end
+        // anchors, which rounding in the projected length would otherwise push
+        // a hair past the limit.
+        let fits = |k: i64, level: i32| {
+            k.unsigned_abs() as f64 * finest + spacing(level) * 0.5 <= half + finest * 1e-6
         };
-        (0..count).map(move |i| {
-            if single {
-                total * 0.5
+        let reach = match placement {
+            PointPlacement::LineCenter => 0,
+            _ => ((half - finest * 0.5) / finest + 1e-6).floor().max(0.0) as i64,
+        };
+
+        let mut out = Vec::new();
+        for k in -reach..=reach {
+            // `reach` already keeps every position clear of the ends at level 0.
+            let coarsest = if k == 0 {
+                top
             } else {
-                spacing * (0.5 + i as f64)
+                let mut level = 0;
+                while level < k.trailing_zeros() as i32 && fits(k, level + 1) {
+                    level += 1;
+                }
+                level
+            };
+            let s = half + k as f64 * finest;
+            let max_spacing = |level: i32| {
+                if k == 0 && level == top {
+                    f64::INFINITY
+                } else {
+                    spacing(level)
+                }
+            };
+            if banded {
+                for level in 0..=coarsest {
+                    out.push(LineAnchor {
+                        s,
+                        min_spacing: if level == 0 { 0.0 } else { spacing(level - 1) },
+                        max_spacing: max_spacing(level),
+                        path_spacing: spacing(level),
+                    });
+                }
+            } else {
+                out.push(LineAnchor {
+                    s,
+                    min_spacing: 0.0,
+                    max_spacing: max_spacing(coarsest),
+                    path_spacing: spacing(coarsest),
+                });
             }
-        })
+        }
+        out
     }
 
     /// The spacing the resampler actually uses, given the style's.
@@ -207,10 +302,7 @@ impl<'a> LinePath<'a> {
 
     /// [`PATH_SAMPLES`] points centred on the anchor at arc length `s`, as
     /// east/north metre offsets from it, for a pattern `spacing` frame units
-    /// apart. `spacing` also bounds the sampled span for
-    /// [`PointPlacement::LineCenter`], whose single anchor otherwise ignores it:
-    /// the sample count is fixed, so sampling a long line whole would coarsen
-    /// the path under a short label to a few straight chords.
+    /// apart — an anchor's [`LineAnchor::path_spacing`].
     ///
     /// Metres rather than frame units because glyph sizes are metric
     /// downstream, and relative to the anchor so the values stay small enough
@@ -237,6 +329,17 @@ impl<'a> LinePath<'a> {
     }
 }
 
+/// What an anchor placed along a line carries beyond its position.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AlongLine {
+    /// The line's tangent, in degrees clockwise from north.
+    pub bearing: f32,
+    /// See [`LineAnchor::scale_band`].
+    pub scale_band: [f32; SCALE_BAND_STRIDE],
+    /// The sampled line under it; text only.
+    pub path: Option<AnchorPath>,
+}
+
 /// Append one point's along-line data to a point group's buffers, keeping them
 /// one entry per point.
 ///
@@ -244,22 +347,31 @@ impl<'a> LinePath<'a> {
 /// `geometryTypes: ["point", "line"]` puts both in one batch — while the
 /// renderer indexes every buffer by instance. So once any point in the group
 /// carries a bearing or a path, every point does: the ones without get a
-/// bearing of `0.0` (no rotation added) and a path whose sample step is `0.0`,
-/// which is how the renderer tells them apart. Points pushed before the
-/// group's first along-line anchor are backfilled the same way.
+/// bearing of `0.0` (no rotation added), the [`ALWAYS_SHOWN`] band, and a path
+/// whose sample step is `0.0`, which is how the renderer tells them apart.
+/// Points pushed before the group's first along-line anchor are backfilled the
+/// same way.
 ///
 /// `points_before` is the number of points already in the group.
 pub fn push_anchor_line_data(
     points_before: usize,
     bearings: &mut Vec<f32>,
+    scale_bands: &mut Vec<f32>,
     path_samples: &mut Vec<f32>,
     path_meta: &mut Vec<f32>,
-    bearing: Option<f32>,
-    path: Option<AnchorPath>,
+    line: Option<AlongLine>,
 ) {
+    let (bearing, band, path) = match line {
+        Some(l) => (Some(l.bearing), Some(l.scale_band), l.path),
+        None => (None, None, None),
+    };
     if bearing.is_some() || !bearings.is_empty() {
         bearings.resize(points_before, 0.0);
         bearings.push(bearing.unwrap_or(0.0));
+        for _ in scale_bands.len() / SCALE_BAND_STRIDE..points_before {
+            scale_bands.extend_from_slice(&ALWAYS_SHOWN);
+        }
+        scale_bands.extend_from_slice(&band.unwrap_or(ALWAYS_SHOWN));
     }
     if path.is_some() || !path_meta.is_empty() {
         path_samples.resize(points_before * PATH_SAMPLES * 2, 0.0);
@@ -305,31 +417,99 @@ mod test {
         assert_eq!(path.segment_at(100.0), (1, 1.0));
     }
 
-    #[test]
-    fn anchors_are_centred_on_the_line() {
-        let verts = [(0.0, 0.0), (1000.0, 0.0)];
-        let path = LinePath::new(&verts).unwrap();
-        let line: Vec<f64> = path.anchors(PointPlacement::Line, 100.0).collect();
-        assert_eq!(line.len(), 10);
-        assert_eq!(line[0], 50.0);
-        assert_eq!(line[9], 950.0);
+    /// Arc lengths of the anchors shown when the requested spacing is `r`.
+    fn shown(anchors: &[LineAnchor], r: f64) -> Vec<f64> {
+        anchors
+            .iter()
+            .filter(|a| a.min_spacing < r && r <= a.max_spacing)
+            .map(|a| a.s)
+            .collect()
+    }
 
-        let center: Vec<f64> = path.anchors(PointPlacement::LineCenter, 100.0).collect();
-        assert_eq!(center, vec![500.0]);
+    fn line_1000() -> [(f64, f64); 2] {
+        [(0.0, 0.0), (1000.0, 0.0)]
+    }
+
+    #[test]
+    fn levels_are_centred_and_thin_out_without_moving() {
+        let verts = line_1000();
+        let path = LinePath::new(&verts).unwrap();
+        let anchors = path.anchors(PointPlacement::Line, 100.0, false);
+
+        // Finer than the finest level: every position, still 100 apart.
+        let all: Vec<f64> = (1..=9).map(|i| i as f64 * 100.0).collect();
+        assert_eq!(shown(&anchors, 50.0), all);
+        assert_eq!(shown(&anchors, 100.0), all);
+        // One level up: every other position, 200 apart — within [r, 2r).
+        assert_eq!(
+            shown(&anchors, 150.0),
+            vec![100.0, 300.0, 500.0, 700.0, 900.0]
+        );
+        // 100 and 900 are only 100 from the ends, too close for a 400 interval.
+        assert_eq!(shown(&anchors, 300.0), vec![500.0]);
+        // Pulled far back, the midpoint is all that is left.
+        assert_eq!(shown(&anchors, 1e9), vec![500.0]);
+    }
+
+    #[test]
+    fn banded_anchors_show_each_position_once_with_a_path_for_its_level() {
+        let verts = line_1000();
+        let path = LinePath::new(&verts).unwrap();
+        let single = path.anchors(PointPlacement::Line, 100.0, false);
+        let banded = path.anchors(PointPlacement::Line, 100.0, true);
+        for r in [10.0, 100.0, 120.0, 200.0, 250.0, 799.0, 1600.0, 1e6] {
+            // Same positions as the unbanded pattern, none of them twice.
+            assert_eq!(shown(&banded, r), shown(&single, r), "r {r}");
+            for a in banded
+                .iter()
+                .filter(|a| a.min_spacing < r && r <= a.max_spacing)
+            {
+                // Sized for the level on screen: never shorter than asked,
+                // and under twice it once the finest level is left behind.
+                assert!(a.path_spacing >= r.min(100.0), "r {r}: {a:?}");
+                if r > 100.0 && a.max_spacing.is_finite() {
+                    assert!(a.path_spacing < 2.0 * r, "r {r}: {a:?}");
+                }
+            }
+        }
+        // A position's anchors are adjacent, finest first.
+        let at_500: Vec<&LineAnchor> = banded.iter().filter(|a| a.s == 500.0).collect();
+        assert!(
+            at_500
+                .windows(2)
+                .all(|w| w[0].max_spacing == w[1].min_spacing)
+        );
+        assert_eq!(at_500.last().unwrap().max_spacing, f64::INFINITY);
+    }
+
+    #[test]
+    fn line_center_and_short_lines_keep_their_midpoint() {
+        let verts = line_1000();
+        let path = LinePath::new(&verts).unwrap();
+        let center = path.anchors(PointPlacement::LineCenter, 100.0, false);
+        assert_eq!(center.len(), 1);
+        assert_eq!((center[0].s, center[0].min_spacing), (500.0, 0.0));
+        assert_eq!(center[0].max_spacing, f64::INFINITY);
+        // Banded, it is a stack at the midpoint, each level's path its own.
+        let stack = path.anchors(PointPlacement::LineCenter, 100.0, true);
+        assert!(stack.len() > 1 && stack.iter().all(|a| a.s == 500.0));
 
         // Shorter than one interval: one anchor at the midpoint, not none.
-        let short: Vec<f64> = path.anchors(PointPlacement::Line, 5000.0).collect();
-        assert_eq!(short, vec![500.0]);
+        let short = path.anchors(PointPlacement::Line, 5000.0, false);
+        assert_eq!(shown(&short, 1.0), vec![500.0]);
+        assert_eq!(shown(&short, 1e9), vec![500.0]);
     }
 
     #[test]
     fn invalid_spacing_gives_one_anchor_rather_than_unbounded_many() {
-        let verts = [(0.0, 0.0), (1000.0, 0.0)];
+        let verts = line_1000();
         let path = LinePath::new(&verts).unwrap();
         for spacing in [0.0, -5.0, f64::NAN, f64::INFINITY] {
-            let anchors: Vec<f64> = path.anchors(PointPlacement::Line, spacing).collect();
-            assert_eq!(anchors, vec![500.0], "spacing {spacing}");
-            let p = path.anchor_path(500.0, spacing, 1.0);
+            let anchors = path.anchors(PointPlacement::Line, spacing, true);
+            assert_eq!(anchors.len(), 1, "spacing {spacing}");
+            assert_eq!(anchors[0].s, 500.0, "spacing {spacing}");
+            assert_eq!(anchors[0].scale_band(1.0, spacing), ALWAYS_SHOWN);
+            let p = path.anchor_path(500.0, anchors[0].path_spacing, 1.0);
             assert!(
                 p.meta[0].is_finite() && p.meta[0] > 0.0,
                 "spacing {spacing}"
@@ -337,9 +517,21 @@ mod test {
             assert!(p.samples.iter().all(|v| v.is_finite()), "spacing {spacing}");
         }
         // Valid but absurdly dense: capped, and still spread over the line.
-        let dense: Vec<f64> = path.anchors(PointPlacement::Line, 1e-12).collect();
-        assert!(dense.len() <= MAX_ANCHORS_PER_LINE as usize);
-        assert!(*dense.last().unwrap() > 999.0);
+        let dense = path.anchors(PointPlacement::Line, 1e-12, false);
+        assert!(dense.len() <= MAX_ANCHORS_PER_LINE as usize + 1);
+        assert!(dense.last().unwrap().s > 999.0);
+    }
+
+    #[test]
+    fn scale_bands_are_ground_metres_per_pixel() {
+        let a = LineAnchor {
+            s: 0.0,
+            min_spacing: 100.0,
+            max_spacing: 200.0,
+            path_spacing: 200.0,
+        };
+        // 2 m per unit, 50 px apart: 200 m .. 400 m, so 4 .. 8 m per pixel.
+        assert_eq!(a.scale_band(2.0, 50.0), [4.0, 8.0]);
     }
 
     #[test]
@@ -381,20 +573,26 @@ mod test {
     fn mixed_groups_keep_one_entry_per_point() {
         // native, anchor, native: the leading native point is backfilled when
         // the anchor arrives, the trailing one padded as it is pushed.
-        let (mut b, mut s, mut m) = (Vec::new(), Vec::new(), Vec::new());
-        let anchor = AnchorPath {
-            samples: vec![1.0; PATH_SAMPLES * 2],
-            meta: [2.0, 3.0],
+        let (mut b, mut z, mut s, mut m) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let anchor = AlongLine {
+            bearing: 90.0,
+            scale_band: [1.0, 2.0],
+            path: Some(AnchorPath {
+                samples: vec![1.0; PATH_SAMPLES * 2],
+                meta: [2.0, 3.0],
+            }),
         };
-        push_anchor_line_data(0, &mut b, &mut s, &mut m, None, None);
+        push_anchor_line_data(0, &mut b, &mut z, &mut s, &mut m, None);
         assert!(
-            b.is_empty() && m.is_empty(),
+            b.is_empty() && z.is_empty() && m.is_empty(),
             "no line data until an anchor needs it"
         );
-        push_anchor_line_data(1, &mut b, &mut s, &mut m, Some(90.0), Some(anchor));
-        push_anchor_line_data(2, &mut b, &mut s, &mut m, None, None);
+        push_anchor_line_data(1, &mut b, &mut z, &mut s, &mut m, Some(anchor));
+        push_anchor_line_data(2, &mut b, &mut z, &mut s, &mut m, None);
 
         assert_eq!(b, vec![0.0, 90.0, 0.0]);
+        let inf = f32::INFINITY;
+        assert_eq!(z, vec![0.0, inf, 1.0, 2.0, 0.0, inf]);
         assert_eq!(s.len(), 3 * PATH_SAMPLES * 2);
         assert_eq!(m, vec![0.0, 0.0, 2.0, 3.0, 0.0, 0.0]);
         assert!(
@@ -403,11 +601,17 @@ mod test {
                 .all(|&v| v == 1.0)
         );
 
-        // A sprite group carries bearings but never paths.
-        let (mut b, mut s, mut m) = (Vec::new(), Vec::new(), Vec::new());
-        push_anchor_line_data(0, &mut b, &mut s, &mut m, Some(45.0), None);
-        push_anchor_line_data(1, &mut b, &mut s, &mut m, None, None);
+        // A sprite group carries bearings and bands but never paths.
+        let (mut b, mut z, mut s, mut m) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let sprite = AlongLine {
+            bearing: 45.0,
+            scale_band: [0.0, 5.0],
+            path: None,
+        };
+        push_anchor_line_data(0, &mut b, &mut z, &mut s, &mut m, Some(sprite));
+        push_anchor_line_data(1, &mut b, &mut z, &mut s, &mut m, None);
         assert_eq!(b, vec![45.0, 0.0]);
+        assert_eq!(z, vec![0.0, 5.0, 0.0, inf]);
         assert!(s.is_empty() && m.is_empty());
     }
 

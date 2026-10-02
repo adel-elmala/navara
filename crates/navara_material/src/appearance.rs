@@ -208,8 +208,7 @@ pub struct PointMaterial {
     /// How anchors are derived from line geometry. See
     /// [`TextMaterial::placement`]. Default [`Placement::Point`].
     pub placement: Placement,
-    /// Distance between repeated anchors along a line: pixels at the tile's
-    /// own zoom for vector tiles, metres for GeoJSON. See
+    /// Distance between repeated anchors along a line, in screen pixels. See
     /// [`TextMaterial::spacing`]. Default `250.0`.
     pub spacing: f32,
     /// Add the line's tangent bearing at the anchor to `rotation`, so the
@@ -304,8 +303,7 @@ pub struct BillboardMaterial {
     /// How anchors are derived from line geometry. See
     /// [`TextMaterial::placement`]. Default [`Placement::Point`].
     pub placement: Placement,
-    /// Distance between repeated anchors along a line: pixels at the tile's
-    /// own zoom for vector tiles, metres for GeoJSON. See
+    /// Distance between repeated anchors along a line, in screen pixels. See
     /// [`TextMaterial::spacing`]. Default `250.0`.
     pub spacing: f32,
     /// Add the line's tangent bearing at the anchor to `rotation`, so the
@@ -418,15 +416,14 @@ pub struct TextMaterial {
     /// `geometry_types` to include `Line`; ignored otherwise. Default
     /// [`Placement::Point`].
     pub placement: Placement,
-    /// Distance between repeated anchors along a line, in pixels at the tile's
-    /// own zoom. Because tiles are re-requested as the camera zooms, a fixed
-    /// value yields more repeats per line the further in you go, at roughly
-    /// constant on-screen spacing. An untiled GeoJSON source has no zoom, so
-    /// there it is metres along the ground and the anchors stay put. Also sets
-    /// the length of line sampled under each label (twice the spacing), so a
-    /// label longer than that is dropped — under [`Placement::LineCenter`] too,
-    /// where it bounds the sampled length though not the anchor's position.
-    /// Default `250.0`, matching MapLibre's `symbol-spacing`.
+    /// Distance between repeated anchors along a line, in screen pixels, for
+    /// every source. The line gets nested levels of anchors and the renderer
+    /// shows, per anchor, the level whose spacing on screen is the smallest at
+    /// least this — see `navara_parser::line_placement`. A symbol longer than
+    /// three quarters of it asks for its own length plus a quarter of it
+    /// instead, and text also drops a repeat of the same name within half of
+    /// it, both as MapLibre resolves `symbol-spacing`. Default `250.0`,
+    /// matching MapLibre's default.
     pub spacing: f32,
     /// Largest turn, in degrees, the line may make under the label within a
     /// window of about one and a half ems before the label is dropped as

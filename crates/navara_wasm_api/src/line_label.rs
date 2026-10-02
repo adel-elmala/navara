@@ -16,6 +16,12 @@
 //!   zoomed out.
 //! - **angle** — whether the line bends too sharply under the label to stay
 //!   readable (`maxAngle`).
+//! - **scale** — whether the anchor's level is the one on screen: along-line
+//!   anchors are nested levels of density, each shown over a band of ground
+//!   metres per pixel, so `spacing` holds in screen pixels wherever the camera
+//!   is (see `navara_parser::line_placement`). A symbol longer than about
+//!   three quarters of `spacing` asks for a sparser level, as MapLibre stretches
+//!   `symbol-spacing` (see [`requested_meters_per_px`]).
 //!
 //! ## Label layout
 //!
@@ -39,6 +45,8 @@
 //! | 15,16  | minY/maxY | the same across it, +Y up, in the font's own units |
 //! | 17     | lineOffset | shift off the line along its ground normal, in the font's own units |
 //! | 18     | flatFacing | `0.0` = upright, non-zero = flat, as resolved for this label |
+//! | 19,20  | minMpp/maxMpp | the `(min, max]` ground metres per pixel the anchor shows over |
+//! | 21     | widthEm | the label's full length along the line, in ems |
 //!
 //! `reachEm` rather than the width because the anchor need not be the text's
 //! centre: with `center.x = 0` the whole label runs off one side of it, and it
@@ -56,13 +64,15 @@
 //! | offset | field |
 //! |--------|-------|
 //! | 0      | flip — walk the path backwards |
-//! | 1      | rejected — does not fit, or bends too far |
+//! | 1      | rejected — out of its scale band, does not fit, or bends too far |
 //! | 2,3,4,5| minX/maxX/minY/maxY of the *rotated* box, +Y up |
+//! | 6      | ground metres per screen pixel at the anchor, for the caller's repeat test |
 //!
 //! ## Two phases
 //!
 //! The fit test needs no path samples at all — only the anchor, the label's
-//! width and the length of line under it — while the samples are by far the
+//! width, the length of line under it and its scale band — while the samples
+//! are by far the
 //! largest thing crossing the boundary (32 points per label against 17
 //! scalars). On a dense city view roughly four labels in five are rejected for
 //! fit, so sending every label's path and then discarding most of the work is
@@ -78,7 +88,7 @@
 use wasm_bindgen::prelude::*;
 
 /// Number of `f64` values per label in the packed input slice.
-pub const LINE_LABEL_STRIDE: usize = 19;
+pub const LINE_LABEL_STRIDE: usize = 22;
 
 /// Number of `f64` values per label in [`line_label_fit`]'s packed input.
 ///
@@ -90,13 +100,26 @@ pub const LINE_LABEL_STRIDE: usize = 19;
 /// | 5      | fontSize — px or metres, per `sizeInMeters` |
 /// | 6      | sizeInMeters — `0.0` = px, non-zero = metres |
 /// | 7      | halfExtentMeters — real line either side of the anchor |
+/// | 8,9    | minMpp/maxMpp — the anchor's scale band |
+/// | 10     | widthEm — the label's full length along the line, in ems |
 ///
 /// Offsets 0–6 are the full layout's, so a fit row is a prefix of a full row
-/// plus its extent.
-pub const LINE_LABEL_FIT_STRIDE: usize = 8;
+/// plus its extent, band and width.
+pub const LINE_LABEL_FIT_STRIDE: usize = 11;
+
+/// Number of `f64` values per anchor in [`line_anchor_shown`]'s packed input.
+///
+/// | offset | field |
+/// |--------|-------|
+/// | 0,1,2  | anchorX/Y/Z — ECEF metres, before the height offset |
+/// | 3      | addHeight — surface-normal height offset (metres) |
+/// | 4,5    | minMpp/maxMpp — the anchor's scale band |
+/// | 6      | length — the symbol's extent along the line, px or metres per `sizeInMeters` |
+/// | 7      | sizeInMeters — `0.0` = px, non-zero = metres |
+pub const LINE_ANCHOR_STRIDE: usize = 8;
 
 /// Number of `f64` values per label in the packed output slice.
-pub const LINE_LABEL_RESULT_STRIDE: usize = 6;
+pub const LINE_LABEL_RESULT_STRIDE: usize = 7;
 
 /// How far the sliding angle window reaches, as a multiple of the font size.
 ///
@@ -131,7 +154,7 @@ const FLIP_HYSTERESIS: f64 = 0.08;
 /// column-major 4x4 matrices.
 ///
 /// Returns `n * LINE_LABEL_RESULT_STRIDE` values per label, in input order; see
-/// the module docs for the layout.
+/// the module docs for the layout. `spacing_px` is the layer's `spacing`.
 #[allow(clippy::too_many_arguments)]
 #[wasm_bindgen(js_name = lineLabelPlace)]
 pub fn line_label_place(
@@ -141,6 +164,7 @@ pub fn line_label_place(
     view: &[f64],
     height_px: f64,
     fov_rad: f64,
+    spacing_px: f64,
 ) -> Vec<f64> {
     let cam = CameraView {
         view,
@@ -158,6 +182,8 @@ pub fn line_label_place(
         let path = &paths[i * samples_per_label * 2..(i + 1) * samples_per_label * 2];
 
         let (reach, half_extent, meters_per_em) = fit_lengths(l, l[10], &cam);
+        let m = meters_per_px((l[0], l[1], l[2]), l[3], &cam);
+        let shown = in_scale_band(m, (l[19], l[20]), label_length(l, l[21]), spacing_px);
 
         // The arc the text actually covers, in metres along the path from the
         // anchor. The box's baseline extent is exactly that in font units, and
@@ -185,7 +211,8 @@ pub fn line_label_place(
         // The fit test is repeated here rather than trusted from phase one, so
         // this stays correct when called with labels that never went through
         // it.
-        let rejected = reach <= 0.0
+        let rejected = !shown
+            || reach <= 0.0
             || reach > half_extent
             || exceeds_max_angle(path, samples_per_label, l[9], arc, meters_per_em, l[7]);
 
@@ -202,6 +229,7 @@ pub fn line_label_place(
         out[o + 3] = bx1;
         out[o + 4] = by0;
         out[o + 5] = by1;
+        out[o + 6] = m;
     }
 
     out
@@ -219,13 +247,7 @@ struct CameraView<'a> {
 /// Metres one em of the label spans on the ground.
 ///
 /// Mirrors `sdfText.vert.glsl`'s `scaleFactor`: metres directly when the font
-/// size is metric, otherwise `nvr_pxToWorld` at the anchor's view depth —
-/// including its `|viewZ|` approximation of distance, so the CPU and the shader
-/// cannot disagree about how long a label is.
-///
-/// The depth is taken at the anchor *raised by `addHeight`*, as the shader
-/// applies `mvr_getMvHeightOffset` before reading `mvPosition.z` — and along
-/// the same geocentric normal, which is also what the declutter kernel uses.
+/// size is metric, otherwise [`meters_per_px`] times the pixel size.
 fn em_to_meters(
     anchor: (f64, f64, f64),
     add_height: f64,
@@ -234,8 +256,20 @@ fn em_to_meters(
     cam: &CameraView<'_>,
 ) -> f64 {
     if size_in_meters {
-        return font_size;
+        font_size
+    } else {
+        font_size * meters_per_px(anchor, add_height, cam)
     }
+}
+
+/// Ground metres one screen pixel spans at the anchor: `nvr_pxToWorld` at its
+/// view depth — including its `|viewZ|` approximation of distance, so the CPU
+/// and the shaders cannot disagree about how long a label is.
+///
+/// The depth is taken at the anchor *raised by `addHeight`*, as the shaders
+/// apply `mvr_getMvHeightOffset` before reading `mvPosition.z` — and along
+/// the same geocentric normal, which is also what the declutter kernel uses.
+fn meters_per_px(anchor: (f64, f64, f64), add_height: f64, cam: &CameraView<'_>) -> f64 {
     let (mut x, mut y, mut z) = anchor;
     let len = (x * x + y * y + z * z).sqrt();
     if add_height != 0.0 && len > 0.0 {
@@ -251,7 +285,39 @@ fn em_to_meters(
         // pass will drop the label anyway.
         return 0.0;
     }
-    font_size * (2.0 * (cam.fov_rad / 2.0).tan() * -vz) / cam.height_px
+    (2.0 * (cam.fov_rad / 2.0).tan() * -vz) / cam.height_px
+}
+
+/// A symbol's extent along its line: `(length, in metres)`, the length in
+/// pixels unless the flag says metres. For text it is the label's full width,
+/// whichever side of the anchor it runs; `row` is either text layout, whose
+/// offsets 5–6 are the font size and its unit.
+fn label_length(row: &[f64], width_em: f64) -> (f64, bool) {
+    (width_em * row[5], row[6] != 0.0)
+}
+
+/// The ground spacing a symbol asks for, as metres per pixel, at an anchor
+/// where one pixel spans `m` metres.
+///
+/// `spacing_px` itself, unless the symbol is too long for it: MapLibre then
+/// stretches `symbol-spacing` to the symbol's length plus a quarter of the
+/// spacing, so repeats keep at least that gap between their ends rather than
+/// being dropped (`getAnchors` in `get_anchors.ts`). The result is a factor on
+/// `m`, compared against bands that were resolved for `spacing_px`.
+fn requested_meters_per_px(m: f64, (length, metric): (f64, bool), spacing_px: f64) -> f64 {
+    if !(spacing_px.is_finite() && spacing_px > 0.0) || m <= 0.0 {
+        return m;
+    }
+    let length_px = if metric { length / m } else { length };
+    m * (length_px + spacing_px * 0.25).max(spacing_px) / spacing_px
+}
+
+/// Whether the level an anchor belongs to is the one on screen: the requested
+/// scale falls in its `(min, max]` band. `m` is [`meters_per_px`] at the
+/// anchor; `0.0` (behind the camera) is never in band.
+fn in_scale_band(m: f64, (min, max): (f64, f64), length: (f64, bool), spacing_px: f64) -> bool {
+    let r = requested_meters_per_px(m, length, spacing_px);
+    m > 0.0 && min < r && r <= max
 }
 
 /// How far the label runs from its anchor along the line, and how much line
@@ -274,7 +340,13 @@ fn fit_lengths(row: &[f64], half_extent: f64, cam: &CameraView<'_>) -> (f64, f64
 /// Returns one byte per label: `1` fits, `0` does not. See the module docs for
 /// why this is worth a phase of its own.
 #[wasm_bindgen(js_name = lineLabelFit)]
-pub fn line_label_fit(labels: &[f64], view: &[f64], height_px: f64, fov_rad: f64) -> Vec<u8> {
+pub fn line_label_fit(
+    labels: &[f64],
+    view: &[f64],
+    height_px: f64,
+    fov_rad: f64,
+    spacing_px: f64,
+) -> Vec<u8> {
     let cam = CameraView {
         view,
         height_px,
@@ -285,9 +357,45 @@ pub fn line_label_fit(labels: &[f64], view: &[f64], height_px: f64, fov_rad: f64
     for i in 0..n {
         let l = &labels[i * LINE_LABEL_FIT_STRIDE..(i + 1) * LINE_LABEL_FIT_STRIDE];
         let (reach, half_extent, _) = fit_lengths(l, l[7], &cam);
-        out[i] = u8::from(reach > 0.0 && reach <= half_extent);
+        let m = meters_per_px((l[0], l[1], l[2]), l[3], &cam);
+        let shown = in_scale_band(m, (l[8], l[9]), label_length(l, l[10]), spacing_px);
+        out[i] = u8::from(shown && reach > 0.0 && reach <= half_extent);
     }
     out
+}
+
+/// Whether each along-line anchor's level is the one on screen, for meshes
+/// that place no label along the line — a sprite is one quad at its anchor.
+///
+/// `anchors` is packed [`LINE_ANCHOR_STRIDE`] values per anchor. Returns one
+/// byte per anchor: `1` shown, `0` not.
+#[wasm_bindgen(js_name = lineAnchorShown)]
+pub fn line_anchor_shown(
+    anchors: &[f64],
+    view: &[f64],
+    height_px: f64,
+    fov_rad: f64,
+    spacing_px: f64,
+) -> Vec<u8> {
+    let cam = CameraView {
+        view,
+        height_px,
+        fov_rad,
+    };
+    anchors
+        .as_chunks::<LINE_ANCHOR_STRIDE>()
+        .0
+        .iter()
+        .map(|a| {
+            let m = meters_per_px((a[0], a[1], a[2]), a[3], &cam);
+            u8::from(in_scale_band(
+                m,
+                (a[4], a[5]),
+                (a[6], a[7] != 0.0),
+                spacing_px,
+            ))
+        })
+        .collect()
 }
 
 /// The anchor's east, north and up unit vectors, as view-space x/y.
@@ -710,6 +818,9 @@ mod tests {
             10.0,
             0.0, // lineOffset
             1.0, // flatFacing: lying on the ground, like the top-down camera sees it
+            0.0, // minMpp
+            f64::INFINITY,
+            4.0, // widthEm
         ]
     }
 
@@ -739,6 +850,9 @@ mod tests {
 
     const WGS84_EQ: f64 = 6378137.0;
 
+    /// The layer's `spacing`, in pixels.
+    const SPACING: f64 = 250.0;
+
     /// A dead-straight path through the anchor, running east.
     fn straight_path(samples: usize, step: f64) -> Vec<f32> {
         directed_path(samples, step, (1.0, 0.0))
@@ -763,7 +877,7 @@ mod tests {
         // Bearing 90 deg = due east, which reads left-to-right on this camera.
         let l = label(std::f64::consts::FRAC_PI_2, true, false);
         let path = straight_path(32, 1.0);
-        let out = line_label_place(&l, &path, 32, &view(), 1000.0, 1.0);
+        let out = line_label_place(&l, &path, 32, &view(), 1000.0, 1.0, SPACING);
         assert_eq!(out[0], 0.0, "flip");
         assert_eq!(out[1], 0.0, "rejected");
     }
@@ -774,10 +888,26 @@ mod tests {
         let west = 3.0 * std::f64::consts::FRAC_PI_2;
         let path = directed_path(32, 1.0, (-1.0, 0.0));
 
-        let on = line_label_place(&label(west, true, false), &path, 32, &view(), 1000.0, 1.0);
+        let on = line_label_place(
+            &label(west, true, false),
+            &path,
+            32,
+            &view(),
+            1000.0,
+            1.0,
+            SPACING,
+        );
         assert_eq!(on[0], 1.0, "should flip");
 
-        let off = line_label_place(&label(west, false, false), &path, 32, &view(), 1000.0, 1.0);
+        let off = line_label_place(
+            &label(west, false, false),
+            &path,
+            32,
+            &view(),
+            1000.0,
+            1.0,
+            SPACING,
+        );
         assert_eq!(off[0], 0.0, "keepUpright off must never flip");
     }
 
@@ -795,6 +925,7 @@ mod tests {
             &view(),
             1000.0,
             1.0,
+            SPACING,
         );
         assert_eq!(up[0], 0.0, "already reads bottom-to-top");
 
@@ -805,6 +936,7 @@ mod tests {
             &view(),
             1000.0,
             1.0,
+            SPACING,
         );
         assert_eq!(down[0], 1.0, "should be turned to read bottom-to-top");
     }
@@ -819,10 +951,24 @@ mod tests {
         let len = (dir.0 * dir.0 + dir.1 * dir.1).sqrt();
         let path = directed_path(32, 1.0, (dir.0 / len, dir.1 / len));
 
-        let was_upright =
-            line_label_place(&label(0.0, true, false), &path, 32, &view(), 1000.0, 1.0);
-        let was_flipped =
-            line_label_place(&label(0.0, true, true), &path, 32, &view(), 1000.0, 1.0);
+        let was_upright = line_label_place(
+            &label(0.0, true, false),
+            &path,
+            32,
+            &view(),
+            1000.0,
+            1.0,
+            SPACING,
+        );
+        let was_flipped = line_label_place(
+            &label(0.0, true, true),
+            &path,
+            32,
+            &view(),
+            1000.0,
+            1.0,
+            SPACING,
+        );
 
         assert_eq!(was_upright[0], 0.0);
         assert_eq!(was_flipped[0], 1.0);
@@ -846,12 +992,12 @@ mod tests {
             .collect();
         let mut l = label(std::f64::consts::FRAC_PI_2, true, false);
         l[9] = 10.0;
-        let out = line_label_place(&l, &path, samples, &view(), 1000.0, 1.0);
+        let out = line_label_place(&l, &path, samples, &view(), 1000.0, 1.0, SPACING);
         assert_eq!(out[0], 0.0, "a symmetric V has no net direction to flip");
 
         // Now a plain westward road whose anchor bearing wrongly claims east.
         let west_path = directed_path(samples, 10.0, (-1.0, 0.0));
-        let out = line_label_place(&l, &west_path, samples, &view(), 1000.0, 1.0);
+        let out = line_label_place(&l, &west_path, samples, &view(), 1000.0, 1.0, SPACING);
         assert_eq!(out[0], 1.0, "the chord should win over the bearing");
     }
 
@@ -866,7 +1012,15 @@ mod tests {
         let mut l = label(std::f64::consts::FRAC_PI_2, false, false);
         l[9] = 10.0;
 
-        let east = line_label_place(&l, &straight_path(32, 10.0), 32, &view(), 1000.0, 1.0);
+        let east = line_label_place(
+            &l,
+            &straight_path(32, 10.0),
+            32,
+            &view(),
+            1000.0,
+            1.0,
+            SPACING,
+        );
         let (ew, eh) = (east[3] - east[2], east[5] - east[4]);
         assert!((ew - 40.0).abs() < 1e-6, "east width {ew}");
         assert!((eh - 10.0).abs() < 1e-6, "east height {eh}");
@@ -878,6 +1032,7 @@ mod tests {
             &view(),
             1000.0,
             1.0,
+            SPACING,
         );
         let (nw, nh) = (north[3] - north[2], north[5] - north[4]);
         assert!((nw - 10.0).abs() < 1e-6, "north width {nw}");
@@ -897,7 +1052,7 @@ mod tests {
             l[9] = 10.0;
             l[17] = 5.0;
             l[18] = if flat { 1.0 } else { 0.0 };
-            let out = line_label_place(&l, &path, 32, view, 1000.0, 1.0);
+            let out = line_label_place(&l, &path, 32, view, 1000.0, 1.0, SPACING);
             (out[3] - out[2], out[4], out[5])
         };
         let (above, level) = (top_down_view(500.0), level_view_north(500.0));
@@ -949,7 +1104,7 @@ mod tests {
         l[9] = step;
         l[13] = 0.0;
         l[14] = 40.0;
-        let out = line_label_place(&l, &path, samples, &view(), 1000.0, 1.0);
+        let out = line_label_place(&l, &path, samples, &view(), 1000.0, 1.0, SPACING);
         assert_eq!(out[0], 1.0, "text on the westward leg should flip");
     }
 
@@ -976,9 +1131,9 @@ mod tests {
             .collect();
         for max_angle in [0.0, -1.0] {
             l[7] = max_angle;
-            let out = line_label_place(&l, &straight, 32, &view(), 1000.0, 1.0);
+            let out = line_label_place(&l, &straight, 32, &view(), 1000.0, 1.0, SPACING);
             assert_eq!(out[1], 0.0, "max {max_angle}: straight road fits");
-            let out = line_label_place(&l, &bent, 32, &view(), 1000.0, 1.0);
+            let out = line_label_place(&l, &bent, 32, &view(), 1000.0, 1.0, SPACING);
             assert_eq!(out[1], 1.0, "max {max_angle}: a bend is rejected");
         }
     }
@@ -990,7 +1145,7 @@ mod tests {
         // enough to hold it.
         l[10] = 15.0;
         let path = straight_path(32, 1.0);
-        let out = line_label_place(&l, &path, 32, &view(), 1000.0, 1.0);
+        let out = line_label_place(&l, &path, 32, &view(), 1000.0, 1.0, SPACING);
         assert_eq!(out[1], 1.0, "should be rejected");
     }
 
@@ -1016,6 +1171,7 @@ mod tests {
             &view(),
             1000.0,
             1.0,
+            SPACING,
         );
         assert_eq!(out[1], 1.0, "sharp kink should be rejected");
     }
@@ -1036,7 +1192,7 @@ mod tests {
             .collect();
         let mut l = label(std::f64::consts::FRAC_PI_2, true, false);
         l[9] = radius * std::f64::consts::FRAC_PI_2 / samples as f64; // step
-        let out = line_label_place(&l, &path, samples, &view(), 1000.0, 1.0);
+        let out = line_label_place(&l, &path, samples, &view(), 1000.0, 1.0, SPACING);
         assert_eq!(out[1], 0.0, "gentle curve should be accepted");
     }
 
@@ -1053,8 +1209,8 @@ mod tests {
         let near_view = top_down_view(500.0);
         let far_view = top_down_view(20_000.0);
 
-        let near = line_label_place(&l, &path, 32, &near_view, 1000.0, 1.0);
-        let far = line_label_place(&l, &path, 32, &far_view, 1000.0, 1.0);
+        let near = line_label_place(&l, &path, 32, &near_view, 1000.0, 1.0, SPACING);
+        let far = line_label_place(&l, &path, 32, &far_view, 1000.0, 1.0, SPACING);
         assert_eq!(near[1], 0.0, "close camera: label fits");
         assert_eq!(far[1], 1.0, "far camera: label overruns the road");
     }
@@ -1063,7 +1219,9 @@ mod tests {
     /// so the two strides are pinned against each other by a test rather than
     /// by comment alone.
     fn fit_row(l: &[f64]) -> [f64; LINE_LABEL_FIT_STRIDE] {
-        [l[0], l[1], l[2], l[3], l[4], l[5], l[6], l[10]]
+        [
+            l[0], l[1], l[2], l[3], l[4], l[5], l[6], l[10], l[19], l[20], l[21],
+        ]
     }
 
     #[test]
@@ -1071,30 +1229,38 @@ mod tests {
         // The whole point of the split is that phase one can reject a label
         // without its path. That is only safe while the two phases decide
         // identically, so sweep the axes the test depends on — label width,
-        // road length, camera distance and metric-vs-pixel sizing — against a
-        // straight path, which can never be rejected for angle.
+        // road length, camera distance, metric-vs-pixel sizing and scale band
+        // — against a straight path, which can never be rejected for angle.
         let path = straight_path(32, 10.0);
+        let bands = [(0.0, f64::INFINITY), (0.0, 1.0), (1.0, f64::INFINITY)];
         for &reach_em in &[0.0, 0.5, 2.0, 20.0, 200.0] {
             for &half_extent in &[0.0, 5.0, 60.0, 1000.0] {
                 for &distance in &[500.0, 20_000.0] {
                     for &metric in &[0.0, 1.0] {
                         for &add_height in &[0.0, 400.0] {
-                            let mut l = label(std::f64::consts::FRAC_PI_2, true, false);
-                            l[3] = add_height;
-                            l[4] = reach_em;
-                            l[6] = metric;
-                            l[10] = half_extent;
-                            let view = top_down_view(distance);
+                            for &(min, max) in &bands {
+                                let mut l = label(std::f64::consts::FRAC_PI_2, true, false);
+                                l[3] = add_height;
+                                l[4] = reach_em;
+                                l[6] = metric;
+                                l[10] = half_extent;
+                                l[19] = min;
+                                l[20] = max;
+                                let view = top_down_view(distance);
 
-                            let placed = line_label_place(&l, &path, 32, &view, 1000.0, 1.0);
-                            let fits = line_label_fit(&fit_row(&l), &view, 1000.0, 1.0);
+                                let placed =
+                                    line_label_place(&l, &path, 32, &view, 1000.0, 1.0, SPACING);
+                                let fits =
+                                    line_label_fit(&fit_row(&l), &view, 1000.0, 1.0, SPACING);
 
-                            assert_eq!(
-                                fits[0] == 0,
-                                placed[1] == 1.0,
-                                "reach {reach_em}, extent {half_extent}, distance {distance}, \
-                                 metric {metric}, height {add_height}: phases disagree",
-                            );
+                                assert_eq!(
+                                    fits[0] == 0,
+                                    placed[1] == 1.0,
+                                    "reach {reach_em}, extent {half_extent}, distance \
+                                     {distance}, metric {metric}, height {add_height}, \
+                                     band ({min}, {max}): phases disagree",
+                                );
+                            }
                         }
                     }
                 }
@@ -1119,7 +1285,7 @@ mod tests {
             .copied()
             .collect();
 
-        let out = line_label_fit(&packed, &view(), 1000.0, 1.0);
+        let out = line_label_fit(&packed, &view(), 1000.0, 1.0, SPACING);
         assert_eq!(out, vec![1, 0, 1]);
     }
 
@@ -1133,7 +1299,7 @@ mod tests {
         l[7] = 100.0; // 100 m of road either side; the label needs 2 * 10 = 20 m
 
         for &distance in &[10.0, 500.0, 1_000_000.0] {
-            let out = line_label_fit(&l, &top_down_view(distance), 1000.0, 1.0);
+            let out = line_label_fit(&l, &top_down_view(distance), 1000.0, 1.0, SPACING);
             assert_eq!(out[0], 1, "distance {distance}: metric label still fits");
         }
     }
@@ -1191,13 +1357,80 @@ mod tests {
     }
 
     #[test]
+    fn an_anchor_shows_only_inside_its_scale_band() {
+        // Looking straight down from 500 m with a one-radian field of view
+        // over 1000 px: 2 * tan(0.5) * 500 / 1000 ≈ 0.546 m per pixel.
+        let mpp = 2.0 * 0.5f64.tan() * 500.0 / 1000.0;
+        let anchor = |min: f64, max: f64| [WGS84_EQ, 0.0, 0.0, 0.0, min, max, 20.0, 0.0];
+        let packed: Vec<f64> = [
+            anchor(0.0, f64::INFINITY),
+            anchor(0.0, mpp * 1.01),
+            anchor(mpp * 0.99, mpp * 1.01),
+            // Too coarse a level for this view, and too fine.
+            anchor(mpp * 1.01, f64::INFINITY),
+            anchor(0.0, mpp * 0.99),
+        ]
+        .concat();
+        let out = line_anchor_shown(&packed, &view(), 1000.0, 1.0, SPACING);
+        assert_eq!(out, vec![1, 1, 1, 0, 0]);
+
+        // Text runs the same test before anything else.
+        let mut l = label(std::f64::consts::FRAC_PI_2, true, false);
+        l[19] = mpp * 1.01;
+        assert_eq!(
+            line_label_fit(&fit_row(&l), &view(), 1000.0, 1.0, SPACING)[0],
+            0
+        );
+    }
+
+    #[test]
+    fn a_symbol_longer_than_its_spacing_asks_for_a_sparser_level() {
+        // MapLibre's rule: past three quarters of the spacing, the spacing
+        // becomes the symbol's length plus a quarter of it. At 0.546 m/px a
+        // 400 px sprite asks for (400 + 62.5) / 250 = 1.85 times the scale.
+        let mpp = 2.0 * 0.5f64.tan() * 500.0 / 1000.0;
+        let anchor = |max: f64, length: f64, metric: f64| {
+            [WGS84_EQ, 0.0, 0.0, 0.0, 0.0, max, length, metric]
+        };
+        let packed: Vec<f64> = [
+            // Short: the plain spacing, so a band just above the scale holds.
+            anchor(mpp * 1.01, 150.0, 0.0),
+            // Long: the level that fits it is 1.85 times coarser.
+            anchor(mpp * 1.84, 400.0, 0.0),
+            anchor(mpp * 1.86, 400.0, 0.0),
+            // The same length in metres, converted at the anchor's scale.
+            anchor(mpp * 1.84, 400.0 * mpp, 1.0),
+            anchor(mpp * 1.86, 400.0 * mpp, 1.0),
+        ]
+        .concat();
+        let out = line_anchor_shown(&packed, &view(), 1000.0, 1.0, SPACING);
+        assert_eq!(out, vec![1, 0, 1, 0, 1]);
+
+        // Text is measured by its full width: 4 ems at 100 px.
+        let mut l = label(std::f64::consts::FRAC_PI_2, true, false);
+        l[5] = 100.0;
+        l[6] = 0.0;
+        l[20] = mpp * 1.84;
+        assert_eq!(
+            line_label_fit(&fit_row(&l), &view(), 1000.0, 1.0, SPACING)[0],
+            0
+        );
+        l[20] = mpp * 1.86;
+        l[10] = 1e6; // plenty of road, so only the band decides
+        assert_eq!(
+            line_label_fit(&fit_row(&l), &view(), 1000.0, 1.0, SPACING)[0],
+            1
+        );
+    }
+
+    #[test]
     fn a_label_with_no_width_is_rejected_rather_than_placed() {
         // A label whose text has not been shaped yet has zero width. It must
         // not slip through phase one as "fits trivially" — it draws nothing,
         // and letting it through would have it claim declutter space.
         let mut l = fit_row(&label(0.0, true, false));
         l[4] = 0.0;
-        assert_eq!(line_label_fit(&l, &view(), 1000.0, 1.0)[0], 0);
+        assert_eq!(line_label_fit(&l, &view(), 1000.0, 1.0, SPACING)[0], 0);
     }
 
     #[test]
@@ -1210,9 +1443,17 @@ mod tests {
         l[6] = 0.0; // pixel-sized
         l[7] = 60.0;
         let far = top_down_view(20_000.0);
-        assert_eq!(line_label_fit(&l, &far, 1000.0, 1.0)[0], 0, "on the ground");
+        assert_eq!(
+            line_label_fit(&l, &far, 1000.0, 1.0, SPACING)[0],
+            0,
+            "on the ground"
+        );
         l[3] = 19_700.0;
-        assert_eq!(line_label_fit(&l, &far, 1000.0, 1.0)[0], 1, "raised");
+        assert_eq!(
+            line_label_fit(&l, &far, 1000.0, 1.0, SPACING)[0],
+            1,
+            "raised"
+        );
     }
 
     #[test]
@@ -1237,7 +1478,7 @@ mod tests {
 
         l[13] = 0.0;
         l[14] = 40.0;
-        let ahead = line_label_place(&l, &path, samples, &view(), 1000.0, 1.0);
+        let ahead = line_label_place(&l, &path, samples, &view(), 1000.0, 1.0, SPACING);
         assert_eq!(
             ahead[1], 0.0,
             "text ahead of the anchor never meets the kink"
@@ -1245,7 +1486,7 @@ mod tests {
 
         l[13] = -40.0;
         l[14] = 0.0;
-        let behind = line_label_place(&l, &path, samples, &view(), 1000.0, 1.0);
+        let behind = line_label_place(&l, &path, samples, &view(), 1000.0, 1.0, SPACING);
         assert_eq!(behind[1], 1.0, "text behind the anchor runs over it");
     }
 
@@ -1271,7 +1512,7 @@ mod tests {
         l[13] = -200.0;
         l[14] = 200.0;
 
-        let out = line_label_place(&l, &path, samples, &view(), 1000.0, 1.0);
+        let out = line_label_place(&l, &path, samples, &view(), 1000.0, 1.0, SPACING);
         assert_eq!(out[1], 0.0, "a gentle curve is accepted");
         let sagitta = radius * (1.0 - (200.0f64 / radius).cos());
         assert!(

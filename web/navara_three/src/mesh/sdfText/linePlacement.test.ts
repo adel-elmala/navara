@@ -4,6 +4,8 @@ import {
   LINE_LABEL_FIT_STRIDE,
   LINE_LABEL_STRIDE,
   PATH_META_STRIDE,
+  SCALE_BAND_STRIDE,
+  findRepeatedLabels,
   type LinePath,
   type PackableLabel,
   packLineLabelFits,
@@ -28,6 +30,7 @@ function path(stepMeters: number, realLineMeters: number): LinePath {
     stride: SAMPLES * 2,
     meta,
     bearings: new Float32Array([0]),
+    scaleBands: new Float32Array([0, Infinity]),
   };
 }
 
@@ -113,6 +116,7 @@ describe("usable half extent", () => {
       stride: SAMPLES * 2,
       meta,
       bearings: new Float32Array([0, 0, 0]),
+      scaleBands: null,
     };
 
     const fit = packLineLabelFits([label({ instanceIndex: 2 })], p, options);
@@ -125,8 +129,76 @@ describe("usable half extent", () => {
       stride: SAMPLES * 2,
       meta: null,
       bearings: null,
+      scaleBands: null,
     };
     expect(packLineLabelFits([label()], p, options)[7]).toBe(0);
+  });
+});
+
+describe("scale band", () => {
+  it("sends the label's own anchor's band to both phases", () => {
+    // Text stacks one anchor per level on a position, so a label reading its
+    // neighbour's band would show at the wrong zoom.
+    const bands = new Float32Array(SCALE_BAND_STRIDE * 3);
+    bands.set([0, 1, 1, 2, 2, Infinity]);
+    const p: LinePath = { ...path(10, 500), scaleBands: bands };
+    const l = label({ instanceIndex: 1 });
+
+    expect([...packLineLabelFits([l], p, options).slice(8, 10)]).toEqual([
+      1, 2,
+    ]);
+    expect([...packLineLabels([l], p, options).labels.slice(19, 21)]).toEqual([
+      1, 2,
+    ]);
+  });
+});
+
+describe("label width", () => {
+  it("sends the full width to both phases, whatever the anchor offset", () => {
+    // The kernel stretches the spacing for a label longer than it, measured
+    // end to end as MapLibre does — not by the side that reaches furthest.
+    const p = path(10, 500);
+    const l = label({ widthEm: 7 });
+    const offCentre = { ...options, center: [0, 0] as const };
+    expect(packLineLabelFits([l], p, offCentre)[10]).toBe(7);
+    expect(packLineLabels([l], p, offCentre).labels[21]).toBe(7);
+  });
+});
+
+describe("findRepeatedLabels", () => {
+  const at = (instanceIndex: number, text: string, x: number) => ({
+    instanceIndex,
+    text,
+    anchor: new Float64Array([x, 0, 0]),
+  });
+
+  it("drops a same-text label closer than half the spacing", () => {
+    // 250 px at 2 m/px: repeats closer than 250 m are dropped.
+    const labels = [at(0, "Main St", 0), at(1, "Main St", 200)];
+    expect(findRepeatedLabels(labels, [2, 2], 250)).toEqual([1]);
+    const apart = [at(0, "Main St", 0), at(1, "Main St", 300)];
+    expect(findRepeatedLabels(apart, [2, 2], 250)).toEqual([]);
+  });
+
+  it("never compares different text", () => {
+    const labels = [at(0, "Main St", 0), at(1, "High St", 1)];
+    expect(findRepeatedLabels(labels, [2, 2], 250)).toEqual([]);
+  });
+
+  it("keeps the earlier anchor, whatever order the labels arrive in", () => {
+    // Slots are handed out lazily, so the pass's order is not anchor order.
+    const labels = [at(5, "Main St", 0), at(2, "Main St", 10)];
+    expect(findRepeatedLabels(labels, [2, 2], 250)).toEqual([0]);
+  });
+
+  it("measures against kept labels only", () => {
+    // B is dropped for A; C is far enough from A, so B must not hide it.
+    const labels = [
+      at(0, "Main St", 0),
+      at(1, "Main St", 200),
+      at(2, "Main St", 400),
+    ];
+    expect(findRepeatedLabels(labels, [2, 2, 2], 250)).toEqual([1]);
   });
 });
 
@@ -207,6 +279,7 @@ describe("takeLinePath", () => {
         pathStride: 0,
         pathMeta: null,
         bearings: null,
+        scaleBands: null,
       }),
     ).toBeNull();
   });
@@ -218,6 +291,7 @@ describe("takeLinePath", () => {
       pathStride: 4,
       pathMeta: null,
       bearings: null,
+      scaleBands: null,
     });
     expect(lifted?.samples).toBe(samples);
     expect(lifted?.stride).toBe(4);

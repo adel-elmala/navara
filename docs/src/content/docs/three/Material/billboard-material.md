@@ -312,7 +312,7 @@ This option applies when the layer's geometry is built: set it at layer creation
     url: "/icons/arrow.png",
     geometryTypes: ["line"],
     placement: "line",
-    spacing: 120, // Meters on a GeoJSON source
+    spacing: 120, // Screen pixels
     billboardFacing: "flat",
     rotateWithCamera: false, // Arrows lie on the surface and point along the line
     clampToGround: true
@@ -477,12 +477,13 @@ Can also be set per feature from a [feature evaluator](../../api/feature-evaluat
 
 **Type:** `number | undefined`
 
-**Description:** The distance between repeated billboards when [`placement`](#placement) is `"line"`. The unit depends on the source:
+**Description:** The distance between repeated billboards when [`placement`](#placement) is `"line"`, in screen pixels. The unit is the same on `geojson` and `vector-tile` sources.
 
-- **`vector-tile` sources**: pixels at the tile's own zoom level. Tiles are loaded again as the camera zooms, so billboards repeat more often per line as you zoom in and stay roughly the same distance apart on screen.
-- **`geojson` sources**: meters along the ground. A GeoJSON source is not split into tiles, so the billboards stay where they were placed as the camera moves.
+The billboards shown on a line are decided again as the camera moves. Pulling the camera back thins them out, and moving closer fills in more billboards between them. Billboards never slide along the line: they only appear or disappear. The gap on screen stays between one and two times `spacing`, also in a tilted view, where the near and far parts of the view each get their own density.
 
-A line shorter than `spacing` still gets one billboard, at its halfway point.
+A line always keeps the billboard at its halfway point, and a line shorter than `spacing` on screen gets only that one. Billboards stop filling in very close to the ground (street level) on a GeoJSON source, and when a vector tile is shown much deeper than its own zoom level (overscaled). There they sit farther apart than `spacing`.
+
+As with MapLibre's `symbol-spacing`, a billboard wider than three quarters of `spacing` spreads its repeats to its own width plus a quarter of `spacing`, and on a vector tile source each tile places billboards only inside its own bounds. Each tile spaces its own billboards, so repeats end up at most about one tile apart (512 to 1024 screen pixels) however large `spacing` is.
 
 This option applies when the layer's geometry is built. `layer.update()` does not rebuild billboards that are already loaded, so remove the layer and add it again to change it.
 

@@ -630,6 +630,9 @@ pub struct TransferablePointGeometry {
     /// Per-anchor tangent bearing in degrees clockwise from north. `None`
     /// unless the anchors were placed along a line.
     pub bearings: Option<TransferableFloatAttribute>,
+    /// Per-anchor `(min, max]` ground metres per screen pixel over which the
+    /// renderer shows it; `size` is the stride. Set exactly when `bearings` is.
+    pub scale_bands: Option<TransferableFloatAttribute>,
     /// Per-anchor east/north path samples for bending glyphs along the line;
     /// `size` is the stride (two floats per sample). `None` unless along-line
     /// text.
@@ -664,6 +667,7 @@ impl TransferablePointGeometry {
                 size: 1,
             },
             bearings: None,
+            scale_bands: None,
             path_samples: None,
             path_meta: None,
         }
@@ -699,6 +703,7 @@ impl TransferablePointGeometry {
                 size: 1,
             },
             bearings: None,
+            scale_bands: None,
             path_samples: None,
             path_meta: None,
         }
@@ -715,9 +720,14 @@ impl TransferablePointGeometry {
         if let Some(position_3d_low) = &self.position_3d_low {
             buf.remove(&position_3d_low.data);
         }
-        for attr in [&self.bearings, &self.path_samples, &self.path_meta]
-            .into_iter()
-            .flatten()
+        for attr in [
+            &self.bearings,
+            &self.scale_bands,
+            &self.path_samples,
+            &self.path_meta,
+        ]
+        .into_iter()
+        .flatten()
         {
             buf.remove(&attr.data);
         }
@@ -738,6 +748,10 @@ impl From<&crate::batched_geometry::BatchedPointGeometry> for TransferablePointG
         let bearings = geom
             .bearings
             .map(|data| TransferableFloatAttribute { data, size: 1 });
+        let scale_bands = geom.scale_bands.map(|data| TransferableFloatAttribute {
+            data,
+            size: navara_parser::line_placement::SCALE_BAND_STRIDE as u8,
+        });
         let path_samples = geom.path_samples.map(|data| TransferableFloatAttribute {
             data,
             // `size` is a u8, so the sample count can never exceed 127.
@@ -764,6 +778,7 @@ impl From<&crate::batched_geometry::BatchedPointGeometry> for TransferablePointG
                     size: 1,
                 },
                 bearings,
+                scale_bands,
                 path_samples,
                 path_meta,
             },
@@ -786,6 +801,7 @@ impl From<&crate::batched_geometry::BatchedPointGeometry> for TransferablePointG
                     size: 1,
                 },
                 bearings,
+                scale_bands,
                 path_samples,
                 path_meta,
             },

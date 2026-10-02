@@ -156,11 +156,10 @@ pub fn construct_geometry_multi_layer(
 
     let configs: Vec<LayerParseConfig> = matched_layers.iter().map(layer_parse_config).collect();
 
+    // A tile with nothing for these layers is still parsed: `Some` of no
+    // features, never `None`, which the traversal reads as "still pending" and
+    // would then keep the parent tile on screen in its place forever.
     let parsed = parse_mvt_tile(&mvt_bin, xyz, rtc_center, &configs);
-    if parsed.is_empty() {
-        return None;
-    }
-
     let mut result = Vec::new();
     for group in parsed {
         // Each group carries the target layer it was emitted for; recover that
@@ -188,11 +187,7 @@ pub fn construct_geometry_multi_layer(
         result.extend(entities);
     }
 
-    if result.is_empty() {
-        None
-    } else {
-        Some(result)
-    }
+    Some(result)
 }
 
 /// Convert one parsed group into a batched entity: assign batch ids, build the
@@ -262,6 +257,7 @@ pub(crate) fn build_accumulated_geometry(
             batch_indices,
             encoded_coords,
             bearings,
+            scale_bands,
             path_samples,
             path_meta,
         } => {
@@ -277,6 +273,7 @@ pub(crate) fn build_accumulated_geometry(
                 batch_ids,
                 transform: Transform::default(),
                 bearings,
+                scale_bands,
                 path_samples,
                 path_meta,
             })
@@ -1044,13 +1041,15 @@ mod test {
     }
 
     #[test]
-    fn empty_tile_returns_none() {
+    fn empty_tile_is_parsed_with_no_features() {
+        // `Some(empty)`, not `None`: `None` means "not parsed yet", and a
+        // parent waits for every child to be parsed before handing over.
         let mvt_bin = encode_tile(vec![]);
 
         let app = run_mvt_construct(mvt_bin, vec![Appearance::Point(PointMaterial::default())]);
 
         let output = app.world().resource::<MvtTestOutput>();
-        assert!(output.0.is_none());
+        assert_eq!(output.0.as_deref(), Some(&[][..]));
     }
 
     #[test]

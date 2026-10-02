@@ -94,6 +94,10 @@ pub struct PointGeometryAccumulator {
     /// unless some anchor was placed along a line, and then as long as
     /// `coords`, with `0.0` for plain points (see `push_anchor_line_data`).
     pub bearings: Vec<f32>,
+    /// `SCALE_BAND_STRIDE` (two) scalars per anchor: the `(min, max]` ground
+    /// metres per screen pixel over which the renderer shows it. Filled exactly
+    /// when `bearings` is, with the always-shown band for plain points.
+    pub scale_bands: Vec<f32>,
     /// East/north metre offsets sampling the line around each anchor, at a
     /// fixed stride per anchor. Empty unless this is along-line text, and then
     /// one run per point, zeros for plain points.
@@ -115,6 +119,7 @@ impl PointGeometryAccumulator {
             batch_ids: Vec::new(),
             transform: Transform::default(),
             bearings: Vec::new(),
+            scale_bands: Vec::new(),
             path_samples: Vec::new(),
             path_meta: Vec::new(),
         }
@@ -128,6 +133,7 @@ impl PointGeometryAccumulator {
         // An empty bearing list is the common case (point placement), and a
         // zero-length buffer would still cost a handle and a GPU attribute.
         let bearings = (!self.bearings.is_empty()).then(|| buf.new_f32(self.bearings));
+        let scale_bands = (!self.scale_bands.is_empty()).then(|| buf.new_f32(self.scale_bands));
         let path_samples = (!self.path_samples.is_empty()).then(|| buf.new_f32(self.path_samples));
         let path_meta = (!self.path_meta.is_empty()).then(|| buf.new_f32(self.path_meta));
         BatchedPointGeometry {
@@ -140,6 +146,7 @@ impl PointGeometryAccumulator {
             encoded_a,
             encoded_b,
             bearings,
+            scale_bands,
             path_samples,
             path_meta,
         }
@@ -294,6 +301,9 @@ pub struct BatchedPointGeometry {
     /// Per-anchor tangent bearing in degrees clockwise from north; `None`
     /// unless the anchors were placed along a line.
     pub(crate) bearings: Option<Handle>,
+    /// Per-anchor `(min, max]` metres per screen pixel it is shown over; set
+    /// exactly when `bearings` is.
+    pub(crate) scale_bands: Option<Handle>,
     /// Per-anchor east/north path samples; `None` unless along-line text.
     pub(crate) path_samples: Option<Handle>,
     /// Per-anchor metres between adjacent path samples.
@@ -314,9 +324,14 @@ impl BatchedPointGeometry {
         if let Some(encoded_b) = &self.encoded_b {
             buf.remove(encoded_b);
         }
-        for handle in [&self.bearings, &self.path_samples, &self.path_meta]
-            .into_iter()
-            .flatten()
+        for handle in [
+            &self.bearings,
+            &self.scale_bands,
+            &self.path_samples,
+            &self.path_meta,
+        ]
+        .into_iter()
+        .flatten()
         {
             buf.remove(handle);
         }

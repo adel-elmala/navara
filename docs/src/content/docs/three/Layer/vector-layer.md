@@ -136,7 +136,7 @@ With `"line"` in `geometryTypes`, the `point`, `billboard`, and `text` materials
 
 Text placed along a line follows the curve word by word, like a street name: each word turns to match the line under it, and the letters within a word stay straight. A label that would overrun its line or bend more than `maxAngle` is hidden, and a label that would read upside down is flipped unless `keepUpright` is `false`. Both are decided again as the camera moves. Billboards and points turn to the line's direction through `rotateToLine`.
 
-The unit of `spacing` depends on the source. On a vector tile source it is pixels at the tile's zoom level, so the on-screen spacing stays roughly constant as tiles reload while you zoom. On a GeoJSON source, which is not split into tiles, it is meters along the ground.
+`spacing` is in screen pixels on both vector tile and GeoJSON sources. Objects thin out as the camera pulls back and fill in as it moves closer, so the gap on screen stays between one and two times `spacing`. Objects never slide along the line: they only appear or disappear.
 
 ```typescript
 // Street names along road lines from a vector tile source
@@ -147,7 +147,7 @@ view.addLayer({
     font: "Arsenal",
     geometryTypes: ["line"],
     placement: "line",
-    spacing: 250, // Pixels at the tile's zoom level
+    spacing: 250, // Screen pixels
     textFacing: "flat",
     size: 14,
     sizeInMeters: false,

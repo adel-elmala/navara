@@ -554,11 +554,10 @@ import { Color } from "@navaramap/three";
 
 A label along a line is hidden instead of drawn when it would not read well:
 
-- it is longer than the line left on either side of its anchor,
-- it is longer than twice `spacing`, which is how much of the line is stored under each label, or
+- it is longer than the line left on either side of its anchor, or
 - it bends through more than [`maxAngle`](#maxangle).
 
-These checks run again as the camera moves, because a label sized in pixels covers more ground the farther away the camera is. On a GeoJSON source, where `spacing` is in meters, distant labels therefore disappear as the camera pulls back. Raise `spacing` if they vanish too early.
+These checks run again as the camera moves.
 
 Along-line labels also accept [`keepUpright`](#keepupright) and [`lineOffset`](#lineoffset). They are usually combined with `textFacing: "flat"` so the text lies on the surface along the line.
 
@@ -612,7 +611,7 @@ const streets = view.addLayer({
     font: "Arsenal",
     geometryTypes: ["line"],
     placement: "line",
-    spacing: 600, // Meters, because GeoJSON sources are untiled
+    spacing: 250, // Screen pixels
     textFacing: "flat",
     size: 18,
     sizeInMeters: false,
@@ -757,12 +756,17 @@ Can also be set per feature from a [feature evaluator](../../api/feature-evaluat
 
 **Type:** `number | undefined`
 
-**Description:** The distance between repeated labels when [`placement`](#placement) is `"line"`. The unit depends on the source:
+**Description:** The distance between repeated labels when [`placement`](#placement) is `"line"`, in screen pixels. The unit is the same on `geojson` and `vector-tile` sources.
 
-- **`vector-tile` sources**: pixels at the tile's own zoom level. Tiles are loaded again as the camera zooms, so labels repeat more often per line as you zoom in and stay roughly the same distance apart on screen.
-- **`geojson` sources**: meters along the ground. A GeoJSON source is not split into tiles, so the labels stay where they were placed as the camera moves.
+The labels shown on a line are decided again as the camera moves. Pulling the camera back thins them out, and moving closer fills in more labels between them. Labels never slide along the line: they only appear or disappear. The gap on screen stays between one and two times `spacing`, also in a tilted view, where the near and far parts of the view each get their own density.
 
-A line shorter than `spacing` still gets one label, at its halfway point. `spacing` also sets how much of the line is stored under each label (twice `spacing`), so a label longer than that is hidden. This applies to `"line-center"` as well.
+A line always keeps the label at its halfway point, and a line shorter than `spacing` on screen gets only that one. Labels stop filling in very close to the ground (street level) on a GeoJSON source, and when a vector tile is shown much deeper than its own zoom level (overscaled). There they sit farther apart than `spacing`.
+
+Three more rules follow MapLibre's `symbol-spacing`:
+
+- A label longer than three quarters of `spacing` spreads its repeats to its own length plus a quarter of `spacing`, so long names are spaced out instead of hidden.
+- A label closer than half of `spacing` to an earlier label with the same text in the same tile is hidden, so a road split into several lines, or two carriageways with one name, is not labeled twice in the same spot.
+- On a vector tile source, each tile places labels only inside its own bounds. Each tile spaces its own labels, so repeats end up at most about one tile apart (512 to 1024 screen pixels) however large `spacing` is.
 
 This option applies when the layer's geometry is built. `layer.update()` does not rebuild labels that are already loaded, so remove the layer and add it again to change it.
 

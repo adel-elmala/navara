@@ -56,7 +56,9 @@ import {
 import { ALIGN_FACTORS, buildLabelLayout, type LayoutOptions } from "./layout";
 import {
   LINE_LABEL_RESULT_STRIDE,
+  type LinePath,
   PATH_META_STRIDE,
+  findRepeatedLabels,
   packLineLabelFits,
   packLineLabels,
   takeLinePath,
@@ -92,6 +94,9 @@ type PositionsInfoBase = {
   pathMeta: Float32Array<ArrayBufferLike> | null;
   /** Per-anchor tangent bearing in degrees clockwise from north. */
   bearings: Float32Array<ArrayBufferLike> | null;
+  /** Per-anchor `(min, max]` ground metres per screen pixel it is shown over,
+   *  `SCALE_BAND_STRIDE` floats each. Present exactly when `bearings` is. */
+  scaleBands: Float32Array<ArrayBufferLike> | null;
 };
 
 type PositionsInfo = PositionsInfoBase &
@@ -265,21 +270,19 @@ export class BatchedSdfTextMesh
    * when an update actually brings a new one. Losing it would leave every label
    * unvalidated, and therefore culled, for the life of the batch.
    */
-  private _path: {
-    samples: Float32Array<ArrayBufferLike>;
-    stride: number;
-    meta: Float32Array<ArrayBufferLike> | null;
-    bearings: Float32Array<ArrayBufferLike> | null;
-  } | null = null;
+  private _path: LinePath | null = null;
   /** Per-label screen-space collision box from the last placement pass, four
    *  values per slot (minX, maxX, minY, maxY). A line label is turned to follow
    *  its road, so the unrotated block metrics would model a north-south street
    *  name as a wide horizontal box and let its neighbours sit on top of it. */
   private _lineBoxes: Float64Array | null = null;
-  /** Per-label rejection from the same pass: the label does not fit its road,
-   *  or the road bends too far under it. Such labels draw nothing, so they must
-   *  not claim declutter space either. */
+  /** Per-label rejection from the same pass: the label's level is not the one
+   *  on screen, it does not fit its road, or the road bends too far under it.
+   *  Such labels draw nothing, so they must not claim declutter space either. */
   private _lineRejected: Uint8Array | null = null;
+  /** {@link _lineRejected} as the previous pass left it, to tell which labels a
+   *  pass turned on or off. */
+  private _linePrevRejected: Uint8Array | null = null;
   /** Reused gather buffer for the labels a placement pass actually has to
    *  judge, so the filter below costs no allocation per pass. */
   private _linePlaceable: LabelRecord[] = [];
@@ -513,6 +516,11 @@ export class BatchedSdfTextMesh
    * labels in five, so it runs first over a compact array; only survivors have
    * their 32 path points gathered and sent. See the "Two phases" section of
    * `line_label.rs`.
+   *
+   * The fit test also rejects every anchor whose level is not the one on
+   * screen. Each position along a line carries one anchor per level, each with
+   * a path sized for it, so zooming across a level boundary retires one label
+   * and admits its stack-mate at the same spot — see {@link _handOffLineLabel}.
    */
   placeLineLabels(
     camera: PerspectiveCamera,
@@ -539,13 +547,20 @@ export class BatchedSdfTextMesh
     const slotCount = this._labels.length;
     if ((this._lineBoxes?.length ?? 0) < slotCount * 4) {
       this._lineBoxes = new Float64Array(slotCount * 4);
-      this._lineRejected = new Uint8Array(slotCount);
+      // Kept across the grow: the next pass compares against it.
+      const grown = new Uint8Array(slotCount);
+      if (this._lineRejected) grown.set(this._lineRejected);
+      this._lineRejected = grown;
+      this._linePrevRejected = new Uint8Array(slotCount);
     }
     const boxes = this._lineBoxes;
     const rejected = this._lineRejected;
-    invariant(boxes && rejected, "line placement buffers");
+    const prevRejected = this._linePrevRejected;
+    invariant(boxes && rejected && prevRejected, "line placement buffers");
+    prevRejected.set(rejected);
 
     const sizeInMeters = this._material.sizeInMeters ?? true;
+    const spacingPx = this._material.spacing ?? 250;
     const fovRad = MathUtils.degToRad(camera.fov);
     camera.updateMatrixWorld();
     const view = this._lineViewMatrix;
@@ -563,6 +578,7 @@ export class BatchedSdfTextMesh
       view,
       heightPx,
       fovRad,
+      spacingPx,
     );
 
     const survivors = this._linePlaceSurvivors;
@@ -578,21 +594,55 @@ export class BatchedSdfTextMesh
       // culls them, so nothing reads it.
       this._labelData.setComponent(slot, LabelRow.PATH, 3, 1);
       rejected[slot] = 1;
-      this._hideRejectedLineLabel(placeable[i]);
     }
-    if (survivors.length === 0) return;
+    if (survivors.length > 0)
+      this._placeLineSurvivors(survivors, view, {
+        heightPx,
+        fovRad,
+        spacingPx,
+        sizeInMeters,
+        center,
+        lineOffset: state.lineOffset,
+        flatFacing: state.flatFacing,
+      });
 
-    // Phase two: reading direction, curvature and the collision box — all of
-    // which need the path.
+    for (const record of placeable) {
+      if (!rejected[record.slot]) continue;
+      if (!prevRejected[record.slot]) this._handOffLineLabel(record);
+      this._hideRejectedLineLabel(record);
+    }
+  }
+
+  /** Phase two of {@link placeLineLabels}: reading direction, curvature and
+   *  the collision box — all of which need the path — then the repeat test. */
+  private _placeLineSurvivors(
+    survivors: LabelRecord[],
+    view: Float64Array,
+    pass: {
+      heightPx: number;
+      fovRad: number;
+      spacingPx: number;
+      sizeInMeters: boolean;
+      center: readonly [number, number];
+      lineOffset: number;
+      flatFacing: boolean;
+    },
+  ): void {
+    const line = this._path;
+    const boxes = this._lineBoxes;
+    const rejected = this._lineRejected;
+    invariant(line && boxes && rejected, "line placement buffers");
+    const { heightPx, fovRad, spacingPx, sizeInMeters, center } = pass;
+
     const packed = packLineLabels(survivors, line, {
       sizeInMeters,
       maxAngleDeg: this._material.maxAngle ?? 45,
       keepUpright: this._material.keepUpright ?? true,
       center,
-      lineOffset: state.lineOffset,
+      lineOffset: pass.lineOffset,
       readFlip: (slot) =>
         this._labelData.getComponent(slot, LabelRow.PATH, 2) !== 0,
-      readFlatFacing: (slot) => this._resolveFlatFacing(slot, state.flatFacing),
+      readFlatFacing: (slot) => this._resolveFlatFacing(slot, pass.flatFacing),
     });
 
     const result = lineLabelPlace(
@@ -602,19 +652,33 @@ export class BatchedSdfTextMesh
       view,
       heightPx,
       fovRad,
+      spacingPx,
     );
 
+    const accepted: LabelRecord[] = [];
+    const metersPerPx: number[] = [];
     for (let i = 0; i < survivors.length; i++) {
       const slot = survivors[i].slot;
       const r = i * LINE_LABEL_RESULT_STRIDE;
       this._labelData.setComponent(slot, LabelRow.PATH, 2, result[r]);
       this._labelData.setComponent(slot, LabelRow.PATH, 3, result[r + 1]);
       rejected[slot] = result[r + 1] > 0.5 ? 1 : 0;
-      if (rejected[slot]) this._hideRejectedLineLabel(survivors[i]);
       boxes[slot * 4] = result[r + 2];
       boxes[slot * 4 + 1] = result[r + 3];
       boxes[slot * 4 + 2] = result[r + 4];
       boxes[slot * 4 + 3] = result[r + 5];
+      if (!rejected[slot]) {
+        accepted.push(survivors[i]);
+        metersPerPx.push(result[r + 6]);
+      }
+    }
+
+    // Last, as in MapLibre: a label dropped for its angle must not have hidden
+    // a same-name neighbour first.
+    for (const i of findRepeatedLabels(accepted, metersPerPx, spacingPx)) {
+      const slot = accepted[i].slot;
+      this._labelData.setComponent(slot, LabelRow.PATH, 3, 1);
+      rejected[slot] = 1;
     }
   }
 
@@ -627,6 +691,45 @@ export class BatchedSdfTextMesh
   private _isAlongLine(record: LabelRecord): boolean {
     const meta = this._path?.meta;
     return (meta?.[record.instanceIndex * PATH_META_STRIDE] ?? 0) > 0;
+  }
+
+  /**
+   * Pass a label's declutter state to the stack-mate that takes over its
+   * position, when a placement pass has just rejected it.
+   *
+   * Crossing a level boundary retires the anchor sized for the old level and
+   * admits the one sized for the new, at the same spot with the same text.
+   * Left alone the newcomer would enter declutter as a fresh candidate and fade
+   * in while the label it replaces snaps out — a blink along every line on
+   * screen at once. The stack's anchors are adjacent instances sharing one
+   * anchor point.
+   */
+  private _handOffLineLabel(from: LabelRecord): void {
+    if (!this._declutter) return;
+    const rejected = this._lineRejected;
+    const prevRejected = this._linePrevRejected;
+    invariant(rejected && prevRejected, "line placement buffers");
+    const [x, y, z] = from.anchor;
+    for (const direction of [-1, 1]) {
+      for (let i = from.instanceIndex + direction; ; i += direction) {
+        const to = this._labelByInstance[i];
+        if (
+          !to ||
+          to.anchor[0] !== x ||
+          to.anchor[1] !== y ||
+          to.anchor[2] !== z
+        )
+          break;
+        if (rejected[to.slot] || !prevRejected[to.slot]) continue;
+        to.declutterHide = from.declutterHide;
+        to.declutterTarget = from.declutterTarget;
+        this._writeDeclutterHide(to);
+        if (to.declutterHide !== to.declutterTarget) {
+          this._declutterAnimating = true;
+        }
+        return;
+      }
+    }
   }
 
   /**
@@ -1337,6 +1440,7 @@ export class BatchedSdfTextMesh
     const pathStride = pathSamplesData?.size ?? 0;
     const pathMeta = g.path_meta ? buf.removeF32(g.path_meta.data) : null;
     const bearings = g.bearings ? buf.removeF32(g.bearings.data) : null;
+    const scaleBands = g.scale_bands ? buf.removeF32(g.scale_bands.data) : null;
 
     const positionData = g.position;
     const position = positionData
@@ -1358,6 +1462,7 @@ export class BatchedSdfTextMesh
         pathStride,
         pathMeta,
         bearings,
+        scaleBands,
       };
     }
 
@@ -1391,6 +1496,7 @@ export class BatchedSdfTextMesh
         pathStride,
         pathMeta,
         bearings,
+        scaleBands,
       };
     }
 

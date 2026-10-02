@@ -10,7 +10,7 @@ use navara_geometry::{
 use navara_material::{Appearance, Placement, SourceGeometryType};
 use navara_math::Vec3;
 use navara_parser::geojson::{GeoJson, Geometry, GeometryValue, Position};
-use navara_parser::line_placement::{LinePath, PointPlacement, tangent_to_bearing};
+use navara_parser::line_placement::{AlongLine, LinePath, PointPlacement, tangent_to_bearing};
 
 use super::builder::{GeometryAppearanceKind, GeometryBuilder};
 
@@ -169,7 +169,7 @@ fn process_geometry(
 /// `geometry_types` opts the point-like appearance into deriving a point per
 /// line-string vertex and/or polygon-ring vertex (closing duplicates skipped).
 /// `placement` then decides whether a line-string gives one anchor per vertex
-/// or anchors spaced `spacing` metres apart along it.
+/// or anchors spaced `spacing` screen pixels apart along it.
 fn accumulate_point_rte(
     builder: &mut GeometryBuilder,
     geometry: &Geometry,
@@ -282,48 +282,55 @@ fn wrap_lon(lon: f64) -> f64 {
     (lon + 180.0).rem_euclid(360.0) - 180.0
 }
 
-/// Anchors spaced along one line-string, `spacing_m` metres apart.
+/// Ground metres per screen pixel of the closest view along-line anchors are
+/// generated for: roughly a street-level camera. Nearer than this the pattern
+/// stops densifying, and anchors sit further apart on screen than `spacing`
+/// asks. Halving it doubles the anchor count.
+const FINEST_METERS_PER_PX: f64 = 0.15;
+
+/// Anchors spaced along one line-string, `spacing_px` screen pixels apart.
 ///
 /// The walk runs in Web Mercator: it is conformal, so tangent bearings come out
 /// exact, and one of its units covers `cos(lat)` metres of ground.
 ///
-/// An untiled source has no zoom to turn a pixel spacing into a ground
-/// distance, so spacing here is in metres. It converts to Mercator units at the
-/// line's midpoint, since the walk needs one constant step per line; the path
-/// samples convert at each anchor's own latitude.
+/// An untiled source has no zoom of its own, so the finest level is sized for
+/// [`FINEST_METERS_PER_PX`] and the renderer picks the level per anchor. The
+/// level spacing converts to Mercator units at the line's midpoint, since the
+/// walk needs one constant step per line; bands and path samples convert at
+/// each anchor's own latitude.
 fn add_line_anchors(
     builder: &mut GeometryBuilder,
     line: &[Position],
     kind: GeometryAppearanceKind,
     height: f32,
     placement: PointPlacement,
-    spacing_m: f32,
+    spacing_px: f32,
 ) {
     let projected = project_unwrapped(line);
     let Some(path) = LinePath::new(&projected) else {
         return; // Degenerate: fewer than two vertices, or all coincide.
     };
+    let spacing_px = spacing_px as f64;
     let (mid, _) = path.sample(path.length() * 0.5);
-    let spacing = spacing_m as f64 / mercator_lat(mid.1).to_radians().cos();
+    let finest = spacing_px * FINEST_METERS_PER_PX / mercator_lat(mid.1).to_radians().cos();
     // Only text bends its glyphs along the line; a sprite is one quad at the
     // anchor and needs nothing but the tangent bearing.
     let wants_path = kind == GeometryAppearanceKind::Text;
 
-    for s in path.anchors(placement, spacing) {
-        let (pos, tangent) = path.sample(s);
+    for a in path.anchors(placement, finest, wants_path) {
+        let (pos, tangent) = path.sample(a.s);
         let lat = mercator_lat(pos.1);
-        let (seg, t) = path.segment_at(s);
+        let (seg, t) = path.segment_at(a.s);
         let z0 = coords(&line[seg]).z;
         let z = z0 + (coords(&line[seg + 1]).z - z0) * t;
         let anchor = Vec3::new(wrap_lon((pos.0 / MERCATOR_RADIUS_M).to_degrees()), lat, z);
-        let anchor_path = wants_path.then(|| path.anchor_path(s, spacing, lat.to_radians().cos()));
-        builder.add_line_anchor(
-            kind,
-            anchor,
-            height,
-            tangent_to_bearing(tangent),
-            anchor_path,
-        );
+        let meters_per_unit = lat.to_radians().cos();
+        let along = AlongLine {
+            bearing: tangent_to_bearing(tangent),
+            scale_band: a.scale_band(meters_per_unit, spacing_px),
+            path: wants_path.then(|| path.anchor_path(a.s, a.path_spacing, meters_per_unit)),
+        };
+        builder.add_line_anchor(kind, anchor, height, along);
     }
 }
 
@@ -1745,9 +1752,9 @@ mod test {
     #[test]
     fn a_line_crossing_the_antimeridian_takes_the_short_way() {
         // 179 E to 179 W is a 2 deg hop across the seam, not 358 deg the long
-        // way round. At 50 km spacing that is a handful of anchors, all within
-        // a degree of the seam and heading east — not thousands spread over
-        // the globe heading west.
+        // way round. At a 50 km finest level that is a handful of anchors, all
+        // within a degree of the seam and heading east — not thousands spread
+        // over the globe heading west.
         let acc = line_anchors(
             &[[179.0, 0.0, 0.0], [-179.0, 0.0, 0.0]],
             GeometryAppearanceKind::Point,
@@ -1772,7 +1779,9 @@ mod test {
         // Every per-anchor buffer has to stay one entry per point, or the
         // renderer reads a neighbour's path and bearing (or past the end).
         use navara_feature_component::geometry_builder::AccumulatedGeometry;
-        use navara_parser::line_placement::{PATH_META_STRIDE, PATH_SAMPLES};
+        use navara_parser::line_placement::{
+            ALWAYS_SHOWN, PATH_META_STRIDE, PATH_SAMPLES, SCALE_BAND_STRIDE,
+        };
         let kind = GeometryAppearanceKind::Text;
         let mut batch_table = BatchTable::default();
         let mut builder = GeometryBuilder::new(&mut batch_table, "l");
@@ -1792,6 +1801,7 @@ mod test {
         let n = acc.coords.len();
         assert!(n >= 3, "{n} points");
         assert_eq!(acc.bearings.len(), n);
+        assert_eq!(acc.scale_bands.len(), n * SCALE_BAND_STRIDE);
         assert_eq!(acc.path_samples.len(), n * PATH_SAMPLES * 2);
         assert_eq!(acc.path_meta.len(), n * PATH_META_STRIDE);
         // The native points are marked by a zero step; the anchors are not.
@@ -1800,21 +1810,27 @@ mod test {
         assert_eq!(step(n - 1), 0.0);
         assert!((1..n - 1).all(|i| step(i) > 0.0));
         assert_eq!((acc.bearings[0], acc.bearings[n - 1]), (0.0, 0.0));
+        // And shown at every scale, like any plain point.
+        assert_eq!(acc.scale_bands[..SCALE_BAND_STRIDE], ALWAYS_SHOWN);
+        assert_eq!(acc.scale_bands[(n - 1) * SCALE_BAND_STRIDE..], ALWAYS_SHOWN);
     }
 
-    /// Run [`add_line_anchors`] over one line and return the resulting points.
+    /// Run [`add_line_anchors`] over one line and return the resulting points,
+    /// with the spacing chosen so the finest level repeats every `finest_m`
+    /// metres.
     fn line_anchors(
         line: &[[f64; 3]],
         kind: GeometryAppearanceKind,
         placement: PointPlacement,
-        spacing_m: f32,
+        finest_m: f64,
     ) -> navara_feature_component::batched_geometry::PointGeometryAccumulator {
+        let spacing_px = (finest_m / FINEST_METERS_PER_PX) as f32;
         use navara_feature_component::geometry_builder::AccumulatedGeometry;
         let line: Vec<Position> = line.iter().map(|p| Position::from(*p)).collect();
         let mut batch_table = BatchTable::default();
         let mut builder = GeometryBuilder::new(&mut batch_table, "l");
         builder.begin_feature(&None);
-        add_line_anchors(&mut builder, &line, kind, 0.0, placement, spacing_m);
+        add_line_anchors(&mut builder, &line, kind, 0.0, placement, spacing_px);
         match builder.groups.groups.pop().map(|g| g.accumulated) {
             Some(AccumulatedGeometry::Points(acc)) => acc,
             _ => panic!("expected points"),
@@ -1825,8 +1841,8 @@ mod test {
     const M_PER_DEG: f64 = MERCATOR_RADIUS_M * std::f64::consts::PI / 180.0;
 
     #[test]
-    fn line_placement_spaces_anchors_in_ground_metres() {
-        // 1000 m of line due east. Spacing is metric for an untiled source, so
+    fn line_placement_sizes_levels_in_ground_metres() {
+        // 1000 m of line due east. The finest level is a ground distance, so
         // the count must not depend on latitude even though a degree of
         // longitude covers half the ground at 60°N.
         for lat in [0.0, 60.0] {
@@ -1837,11 +1853,18 @@ mod test {
                 PointPlacement::Line,
                 100.0,
             );
-            // Centred on the line: 50, 150, ... 950 m.
-            assert_eq!(acc.coords.len(), 10, "at {lat}°");
+            // Centred on the line: 100, 200, ... 900 m.
+            assert_eq!(acc.coords.len(), 9, "at {lat}°");
             let first_m = acc.coords[0].x * M_PER_DEG * f64::to_radians(lat).cos();
-            assert!((first_m - 50.0).abs() < 0.5, "first anchor at {first_m} m");
+            assert!((first_m - 100.0).abs() < 0.5, "first anchor at {first_m} m");
             assert!((acc.coords[0].y - lat).abs() < 1e-9);
+            // The 200 m anchor is finest-level only: shown up to the closest
+            // view the levels are sized for, wherever on the globe.
+            let max = acc.scale_bands[3] as f64;
+            assert!(
+                (max - FINEST_METERS_PER_PX).abs() < 1e-4,
+                "at {lat}°: {max}"
+            );
         }
     }
 
@@ -1892,7 +1915,7 @@ mod test {
         assert_eq!(text.bearings.len(), n);
         assert_eq!(text.path_samples.len(), n * 2 * PATH_SAMPLES);
         assert_eq!(text.path_meta.len(), n * PATH_META_STRIDE);
-        // Metres per sample step: two spacings across the whole path.
+        // Metres per sample step: two finest spacings across the first path.
         let step = 2.0 * 500.0 / (PATH_SAMPLES - 1) as f32;
         assert!((text.path_meta[0] - step).abs() < step * 1e-3);
         // Due east: every sample on the east axis.
@@ -1906,7 +1929,8 @@ mod test {
             PointPlacement::Line,
             500.0,
         );
-        assert_eq!(sprite.bearings.len(), n);
+        // One sprite per position; text stacks an anchor per level on each.
+        assert!(sprite.bearings.len() > 1 && sprite.bearings.len() < n);
         assert!(sprite.path_samples.is_empty());
         assert!(sprite.path_meta.is_empty());
     }
@@ -1949,6 +1973,8 @@ mod test {
             .world_mut()
             .query_filtered::<&BatchedPointGeometry, With<TextMarker>>();
         let geoms: Vec<_> = geom_query.iter(app.world()).collect();
-        assert_eq!(geoms[0].coords.len(), 1);
+        // One position, the midpoint: text stacks an anchor there per level.
+        let coords = &geoms[0].coords;
+        assert!(coords.iter().all(|c| *c == coords[0]), "{coords:?}");
     }
 }

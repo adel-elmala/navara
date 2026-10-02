@@ -7,7 +7,7 @@ use navara_geometry::{Hierarchy, WindingOrder};
 use navara_layer::LayerId;
 use navara_material::Appearance;
 use navara_math::{Transform, Vec3};
-use navara_parser::line_placement::{AnchorPath, push_anchor_line_data};
+use navara_parser::line_placement::{AlongLine, push_anchor_line_data};
 
 use crate::{
     BatchedFeatureMarker,
@@ -165,9 +165,9 @@ impl GeometryGroups {
         push_anchor_line_data(
             geom.coords.len(),
             &mut geom.bearings,
+            &mut geom.scale_bands,
             &mut geom.path_samples,
             &mut geom.path_meta,
-            None,
             None,
         );
         geom.coords.push(coords);
@@ -180,7 +180,7 @@ impl GeometryGroups {
 
     /// Accumulate a point with RTE-encoded position.
     /// `high`/`low`: pre-computed `EncodedVec3` f32 triplets.
-    /// `bearing` and `path` are set only for anchors placed along a line; see
+    /// `line` is set only for anchors placed along a line; see
     /// [`push_anchor_line_data`] for how a group mixing them with plain points
     /// stays aligned.
     /// Returns `(batch_index, commit_batch_id)`.
@@ -193,8 +193,7 @@ impl GeometryGroups {
         high: [f32; 3],
         low: [f32; 3],
         global_batch_id: u32,
-        bearing: Option<f32>,
-        path: Option<AnchorPath>,
+        line: Option<AlongLine>,
     ) -> (u32, Option<u32>) {
         let group = self.groups.iter_mut().find(|g| g.kind == kind).unwrap();
         let (batch_index, commit_batch_id) = Self::advance_feature(group, global_batch_id);
@@ -206,10 +205,10 @@ impl GeometryGroups {
         push_anchor_line_data(
             geom.coords.len(),
             &mut geom.bearings,
+            &mut geom.scale_bands,
             &mut geom.path_samples,
             &mut geom.path_meta,
-            bearing,
-            path,
+            line,
         );
         geom.coords.push(coords);
         geom.batch_indices.push(batch_index);
@@ -595,7 +594,6 @@ mod test {
             [0.; 3],
             100,
             None,
-            None,
         );
         assert_eq!(idx0, 0);
         assert_eq!(commit0, Some(42));
@@ -608,7 +606,6 @@ mod test {
             [0.; 3],
             [0.; 3],
             101,
-            None,
             None,
         );
         assert_eq!(idx1, 1);
@@ -643,7 +640,6 @@ mod test {
             [0.; 3],
             10,
             None,
-            None,
         );
         assert_eq!(idx0, 0);
         assert_eq!(commit0, Some(1));
@@ -655,7 +651,6 @@ mod test {
             [0.; 3],
             [0.; 3],
             11,
-            None,
             None,
         );
         assert_eq!(idx0b, 0); // same batch index for same feature
@@ -670,7 +665,6 @@ mod test {
             [0.; 3],
             [0.; 3],
             12,
-            None,
             None,
         );
         assert_eq!(idx1, 1);
@@ -740,7 +734,6 @@ mod test {
             [1.0, 2.0, 3.0],
             [0.1, 0.2, 0.3],
             100,
-            None,
             None,
         );
 
@@ -883,7 +876,6 @@ mod test {
                     [0.; 3],
                     100,
                     None,
-                    None,
                 );
 
                 groups.begin_feature();
@@ -894,7 +886,6 @@ mod test {
                     [0.; 3],
                     [0.; 3],
                     101,
-                    None,
                     None,
                 );
 
@@ -946,7 +937,6 @@ mod test {
                         [0.; 3],
                         id,
                         None,
-                        None,
                     );
                 }
                 groups.begin_feature();
@@ -957,7 +947,6 @@ mod test {
                     [0.; 3],
                     [0.; 3],
                     102,
-                    None,
                     None,
                 );
 
@@ -1007,7 +996,6 @@ mod test {
                         [0.; 3],
                         [0.; 3],
                         id,
-                        None,
                         None,
                     );
                 }

@@ -2,6 +2,7 @@ import {
   PointMesh as NavaraPointMesh,
   BillboardMesh as NavaraBillboardMesh,
 } from "@navaramap/engine";
+import { lineAnchorShown } from "@navaramap/engine-api";
 import { degreeToRadian } from "@navaramap/three-api";
 import {
   InstancedBufferAttribute,
@@ -71,7 +72,14 @@ type PositionsInfo = {
   /** Per-anchor tangent bearing in degrees clockwise from north, present only
    *  when the engine placed these anchors along a line. */
   bearings: Float32Array<ArrayBufferLike> | null;
+  /** Per-anchor `(min, max]` ground metres per screen pixel it is shown over,
+   *  two floats each. Present exactly when `bearings` is. */
+  scaleBands: Float32Array<ArrayBufferLike> | null;
 };
+
+/** `f64` values per anchor in `lineAnchorShown`'s input. Must match
+ *  `LINE_ANCHOR_STRIDE` in `crates/navara_wasm_api/src/line_label.rs`. */
+const LINE_ANCHOR_STRIDE = 8;
 
 type SpriteMaterial = (NavaraPointMesh | NavaraBillboardMesh)["material"];
 
@@ -217,6 +225,17 @@ export class InstancedSpriteMesh
   private _declutterTargets: Float32Array | null = null;
   /** True while any instance's hide factor may differ from its target. */
   private _declutterAnimating = false;
+  /** Along-line anchors' scale bands, kept from the geometry that brought
+   *  them: a terrain-height update re-sends positions without them. */
+  private _scaleBands: Float32Array<ArrayBufferLike> | null = null;
+  /** The material's `spacing` the bands were built for. */
+  private _spacingPx = 250;
+  /** Per instance, whether the last placement pass found its level off
+   *  screen. Such instances fade out and take no declutter space. */
+  private _outOfBand: Uint8Array | null = null;
+  /** Reused `lineAnchorShown` input. */
+  private _bandInput = new Float64Array(0);
+  private _bandViewMatrix = new Float64Array(16);
 
   constructor(options: InstancedSpriteOptions) {
     super();
@@ -262,6 +281,78 @@ export class InstancedSpriteMesh
 
   // --- DeclutterParticipant ---
 
+  /**
+   * Show each along-line anchor only while its level is the one on screen, so
+   * `spacing` holds in screen pixels at every depth of the view. A sprite
+   * wider than about three quarters of `spacing` asks for a sparser level, as
+   * MapLibre stretches `symbol-spacing` for an icon. Runs at the placement
+   * pass's cadence, before candidates are collected, whether or not this mesh
+   * declutters.
+   */
+  placeLineLabels(
+    camera: PerspectiveCamera,
+    _widthPx: number,
+    heightPx: number,
+  ): void {
+    const bands = this._scaleBands;
+    const anchors = this._anchors;
+    const outOfBand = this._outOfBand;
+    const material = this.material as ShaderMaterial;
+    const enhancer = this._enhancedMaterial;
+    if (!this.visible || !bands || !anchors || !outOfBand || !enhancer) return;
+
+    const count = Math.min(this._instanceCount, anchors.length / 3);
+    if (this._bandInput.length < count * LINE_ANCHOR_STRIDE) {
+      this._bandInput = new Float64Array(count * LINE_ANCHOR_STRIDE);
+    }
+    const input = this._bandInput;
+    const batchIndices = this._instanceBatchIndex;
+    const state = enhancer.states();
+    // The quad's width along the line: `size` times the atlas rect's aspect,
+    // as in `collectDeclutterCandidates`.
+    const uvRect = state.billboard
+      ? (this.geometry?.getAttribute("instanceUvRect") as
+          InstancedBufferAttribute | undefined)
+      : undefined;
+    for (let i = 0; i < count; i++) {
+      const o = i * LINE_ANCHOR_STRIDE;
+      const batchIndex = batchIndices ? batchIndices[i] : i;
+      const batchSize = readBatchScalar(material, batchIndex, "size");
+      const size =
+        batchSize !== undefined && batchSize >= 0.0 ? batchSize : state.scale;
+      const rectH = uvRect ? uvRect.getW(i) : 0;
+      const aspect = uvRect && rectH > 0 ? uvRect.getZ(i) / rectH : 1.0;
+      input[o] = anchors[i * 3];
+      input[o + 1] = anchors[i * 3 + 1];
+      input[o + 2] = anchors[i * 3 + 2];
+      input[o + 3] =
+        readBatchScalar(material, batchIndex, "height") ?? state.addHeight;
+      input[o + 4] = bands[i * 2];
+      input[o + 5] = bands[i * 2 + 1];
+      input[o + 6] = aspect * size;
+      input[o + 7] = state.sizeInMeters ? 1 : 0;
+    }
+
+    camera.updateMatrixWorld();
+    this._bandViewMatrix.set(camera.matrixWorldInverse.elements);
+    const shown = lineAnchorShown(
+      input.subarray(0, count * LINE_ANCHOR_STRIDE),
+      this._bandViewMatrix,
+      heightPx,
+      MathUtils.degToRad(camera.fov),
+      this._spacingPx,
+    );
+
+    for (let i = 0; i < count; i++) {
+      const out = shown[i] === 0 ? 1 : 0;
+      if (outOfBand[i] === out) continue;
+      outOfBand[i] = out;
+      // Coming back in band, a decluttered instance waits for the pass to
+      // grant it space like any fresh candidate.
+      if (out || !this._declutter) this.setDeclutterHiddenByInstance(i, !!out);
+    }
+  }
+
   collectDeclutterCandidates(out: DeclutterCandidate[]): void {
     if (!this.visible || !this._declutter || !this._anchors) return;
     const enhancer = this._enhancedMaterial;
@@ -282,9 +373,11 @@ export class InstancedSpriteMesh
     const batchIndices = this._instanceBatchIndex;
     const overrides = this._declutterPriorityOverrides;
     const targets = this._declutterTargets;
+    const outOfBand = this._outOfBand;
     const count = Math.min(this._instanceCount, anchors.length / 3);
 
     for (let i = 0; i < count; i++) {
+      if (outOfBand?.[i]) continue;
       // Style values mirror the shader: read the batch data texture, falling
       // back to the material-level state where a slot was never allocated.
       const batchIndex = batchIndices ? batchIndices[i] : i;
@@ -376,7 +469,8 @@ export class InstancedSpriteMesh
   private _clearDeclutterHidden(): void {
     const targets = this._declutterTargets;
     if (!targets) return;
-    targets.fill(0.0);
+    const outOfBand = this._outOfBand;
+    for (let i = 0; i < targets.length; i++) targets[i] = outOfBand?.[i] ?? 0;
     // Everything fades back in from wherever its hide factor currently is.
     this._declutterAnimating = true;
   }
@@ -543,6 +637,13 @@ export class InstancedSpriteMesh
     invariant(positionsInfo.batchIDs, "Batch IDs not found!");
 
     const instanceCount = positionsInfo.nPositions;
+    this._scaleBands = positionsInfo.scaleBands;
+    this._spacingPx = m.material.spacing ?? 250;
+    // Every level of an along-line pattern arrives at once; until the first
+    // placement pass picks one per anchor, showing them would flash them all.
+    this._outOfBand = positionsInfo.scaleBands
+      ? new Uint8Array(instanceCount).fill(1)
+      : null;
 
     // Create the Instanced Mesh
     // We use InstancedBufferGeometry to inject our custom attributes
@@ -600,7 +701,7 @@ export class InstancedSpriteMesh
     // Declutter hide factors (0 = shown … 1 = hidden). Decluttered instances
     // start hidden and fade in once the placement pass grants them space, so
     // dense tiles don't flash their full clutter before the first pass runs.
-    const initialHide = this._declutter ? 1.0 : 0.0;
+    const initialHide = this._declutter || this._outOfBand ? 1.0 : 0.0;
     const declutterBuffer = new Float32Array(instanceCount).fill(initialHide);
     this._declutterTargets = new Float32Array(instanceCount).fill(initialHide);
     instancedGeometry.setAttribute(
@@ -755,8 +856,9 @@ export class InstancedSpriteMesh
     const batchIDSize = batchIdsData.size;
 
     // Only present for along-line placement, where the engine resampled the
-    // line and knows each anchor's tangent.
+    // line and knows each anchor's tangent and scale band.
     const bearings = g.bearings ? buf.removeF32(g.bearings.data) : null;
+    const scaleBands = g.scale_bands ? buf.removeF32(g.scale_bands.data) : null;
 
     const positionData = g.position;
     const position = positionData
@@ -775,6 +877,7 @@ export class InstancedSpriteMesh
         nPositions,
         RTE: false,
         bearings,
+        scaleBands,
       };
     }
 
@@ -805,6 +908,7 @@ export class InstancedSpriteMesh
         nPositions,
         RTE: true,
         bearings,
+        scaleBands,
       };
     }
 

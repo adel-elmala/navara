@@ -95,10 +95,14 @@ pub struct PointMaterial {
     /// midpoint. Requires `geometryTypes` to include `"line"`.
     #[wasm_bindgen(getter_with_clone)]
     pub placement: Option<String>,
-    /// Distance between repeated anchors along a line. For `vector-tile`
-    /// sources it is in pixels at the tile's own zoom, so the on-screen spacing
-    /// stays roughly constant as you zoom; a `geojson` source has no zoom, so
-    /// there it is in metres along the ground. Only used by
+    /// Distance between repeated anchors along a line, in screen pixels, for
+    /// `vector-tile` and `geojson` sources alike. Resolved per anchor as the
+    /// camera moves: anchors thin out as it pulls back and fill in as it
+    /// closes, never moving, so the gap on screen stays between one and two
+    /// times `spacing` across a pitched view. As MapLibre does with
+    /// `symbol-spacing`, a sprite wider than three quarters of the spacing
+    /// spreads its repeats to its width plus a quarter of the spacing, and a
+    /// vector tile places anchors only inside its own bounds. Only used by
     /// `placement: "line"`. Defaults to `250.0`.
     pub spacing: Option<f32>,
     /// Add the line's tangent bearing at the anchor to `rotation`, so the
@@ -296,10 +300,14 @@ pub struct BillboardMaterial {
     /// midpoint. Requires `geometryTypes` to include `"line"`.
     #[wasm_bindgen(getter_with_clone)]
     pub placement: Option<String>,
-    /// Distance between repeated anchors along a line. For `vector-tile`
-    /// sources it is in pixels at the tile's own zoom, so the on-screen spacing
-    /// stays roughly constant as you zoom; a `geojson` source has no zoom, so
-    /// there it is in metres along the ground. Only used by
+    /// Distance between repeated anchors along a line, in screen pixels, for
+    /// `vector-tile` and `geojson` sources alike. Resolved per anchor as the
+    /// camera moves: anchors thin out as it pulls back and fill in as it
+    /// closes, never moving, so the gap on screen stays between one and two
+    /// times `spacing` across a pitched view. As MapLibre does with
+    /// `symbol-spacing`, a sprite wider than three quarters of the spacing
+    /// spreads its repeats to its width plus a quarter of the spacing, and a
+    /// vector tile places anchors only inside its own bounds. Only used by
     /// `placement: "line"`. Defaults to `250.0`.
     pub spacing: Option<f32>,
     /// Add the line's tangent bearing at the anchor to `rotation`, so the
@@ -511,13 +519,16 @@ pub struct TextMaterial {
     /// to include `"line"`.
     #[wasm_bindgen(getter_with_clone)]
     pub placement: Option<String>,
-    /// Distance between repeated labels along a line. For `vector-tile`
-    /// sources it is in pixels at the tile's own zoom, so the on-screen spacing
-    /// stays roughly constant as you zoom; a `geojson` source has no zoom, so
-    /// there it is in metres along the ground. A label longer than twice the
-    /// spacing is dropped, with `placement: "line-center"` too, where the
-    /// spacing bounds the length of line sampled under the label but not
-    /// where it sits. Defaults to `250.0`.
+    /// Distance between repeated labels along a line, in screen pixels, for
+    /// `vector-tile` and `geojson` sources alike. Resolved per label as the
+    /// camera moves: labels thin out as it pulls back and fill in as it
+    /// closes, never moving, so the gap on screen stays between one and two
+    /// times `spacing` across a pitched view. As MapLibre does with
+    /// `symbol-spacing`, a label longer than three quarters of the spacing
+    /// spreads its repeats to its own length plus a quarter of the spacing, a
+    /// label within half the spacing of an earlier one with the same text is
+    /// dropped, and a vector tile places labels only inside its own bounds.
+    /// Defaults to `250.0`.
     pub spacing: Option<f32>,
     /// Largest turn, in degrees, the line may make under a label within a
     /// window of about one and a half ems before the label is dropped as

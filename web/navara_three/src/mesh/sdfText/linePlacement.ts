@@ -9,17 +9,22 @@ import { MathUtils } from "three";
  */
 
 /** `f64` values per label in the kernel's packed input. */
-export const LINE_LABEL_STRIDE = 19;
+export const LINE_LABEL_STRIDE = 22;
 
-/** `f64` values per label in the kernel's packed output: flip, rejected, then
- *  the rotated box as minX/maxX/minY/maxY. */
-export const LINE_LABEL_RESULT_STRIDE = 6;
+/** `f64` values per label in the kernel's packed output: flip, rejected, the
+ *  rotated box as minX/maxX/minY/maxY, then metres per pixel at the anchor. */
+export const LINE_LABEL_RESULT_STRIDE = 7;
 
 /** `f64` values per label in the `lineLabelFit` pre-pass's packed input. */
-export const LINE_LABEL_FIT_STRIDE = 8;
+export const LINE_LABEL_FIT_STRIDE = 11;
 
 /** Scalars the engine sends per anchor alongside its path samples. */
 export const PATH_META_STRIDE = 2;
+
+/** Scalars per anchor in the engine's scale-band buffer: the `(min, max]`
+ *  ground metres per screen pixel over which it is shown. Must match
+ *  `SCALE_BAND_STRIDE` in `crates/navara_parser/src/line_placement.rs`. */
+export const SCALE_BAND_STRIDE = 2;
 
 /**
  * How much line a label may occupy either side of its anchor, in metres.
@@ -52,6 +57,15 @@ function usableHalfExtentMeters(path: LinePath, instanceIndex: number): number {
   return Math.min(realLine, sampledSpan);
 }
 
+/** Bounds of the anchor's scale band; a path always comes with one. */
+function scaleBandMin(path: LinePath, instanceIndex: number): number {
+  return path.scaleBands?.[instanceIndex * SCALE_BAND_STRIDE] ?? 0;
+}
+
+function scaleBandMax(path: LinePath, instanceIndex: number): number {
+  return path.scaleBands?.[instanceIndex * SCALE_BAND_STRIDE + 1] ?? Infinity;
+}
+
 /** The subset of a label record this packing reads. */
 export type PackableLabel = {
   slot: number;
@@ -75,6 +89,8 @@ export type LinePath = {
   meta: Float32Array<ArrayBufferLike> | null;
   /** Per-anchor tangent bearing in degrees clockwise from north. */
   bearings: Float32Array<ArrayBufferLike> | null;
+  /** Per-anchor scale band, {@link SCALE_BAND_STRIDE} floats each. */
+  scaleBands: Float32Array<ArrayBufferLike> | null;
 };
 
 export type LinePlacementOptions = {
@@ -108,11 +124,12 @@ function reachEm(label: PackableLabel, centerX: number): number {
  * Flatten labels into the fit pre-pass's compact input.
  *
  * Deliberately carries no path samples: whether a label is short enough to sit
- * on its line depends only on the anchor, the label's width and the length of
- * line under it. Those are 7 scalars against the 32 path points the full pass
- * needs, and on a dense view most labels fail this test — so running it first,
- * over this array, keeps the large payload off the boundary for the labels that
- * were never going to be placed.
+ * on its line, and whether its level is the one on screen, depend only on the
+ * anchor, the label's width, the length of line under it and its scale band.
+ * Those are 11 scalars against the 32 path points the full pass needs, and on a
+ * dense view most labels fail this test — so running it first, over this
+ * array, keeps the large payload off the boundary for the labels that were
+ * never going to be placed.
  *
  * Field order must match `LINE_LABEL_FIT_STRIDE`'s table in `line_label.rs`.
  */
@@ -134,6 +151,9 @@ export function packLineLabelFits(
     out[o + 5] = label.fontSize;
     out[o + 6] = metric;
     out[o + 7] = usableHalfExtentMeters(path, label.instanceIndex);
+    out[o + 8] = scaleBandMin(path, label.instanceIndex);
+    out[o + 9] = scaleBandMax(path, label.instanceIndex);
+    out[o + 10] = label.widthEm;
   }
   return out;
 }
@@ -189,6 +209,9 @@ export function packLineLabels(
     out[o + 16] = (label.maxYEm - cy * h) * label.fontSize;
     out[o + 17] = options.lineOffset;
     out[o + 18] = options.readFlatFacing(label.slot) ? 1 : 0;
+    out[o + 19] = scaleBandMin(path, label.instanceIndex);
+    out[o + 20] = scaleBandMax(path, label.instanceIndex);
+    out[o + 21] = label.widthEm;
 
     // Labels are created lazily and sparsely, so their path runs are gathered
     // into input order rather than passed as one contiguous slice.
@@ -218,6 +241,7 @@ export function takeLinePath(
     pathStride: number;
     pathMeta: Float32Array<ArrayBufferLike> | null;
     bearings: Float32Array<ArrayBufferLike> | null;
+    scaleBands: Float32Array<ArrayBufferLike> | null;
   } | null,
 ): LinePath | null {
   if (!info?.pathSamples || info.pathStride <= 0) return null;
@@ -226,5 +250,56 @@ export function takeLinePath(
     stride: info.pathStride,
     meta: info.pathMeta,
     bearings: info.bearings,
+    scaleBands: info.scaleBands,
   };
+}
+
+/** What {@link findRepeatedLabels} reads of a placed label. */
+export type RepeatableLabel = {
+  instanceIndex: number;
+  text: string;
+  anchor: Float64Array;
+};
+
+/**
+ * MapLibre's text repeat test (`anchorIsTooClose` in `symbol_layout.ts`): a
+ * label whose text already has a placed anchor in the same batch closer than
+ * half the spacing is dropped. It keeps two carriageways of one road, or a
+ * road split into several features, from labelling the same spot twice. A
+ * single line's own repeats are at least `spacing` apart, so never trip it.
+ *
+ * `labels` are the labels the placement pass accepted and `metersPerPx` their
+ * scale at the anchor, in the same order. Labels are judged in anchor order,
+ * as MapLibre walks a tile's features, so the first of a pair is kept. Returns
+ * the indices, into `labels`, of the ones to drop.
+ */
+export function findRepeatedLabels(
+  labels: readonly RepeatableLabel[],
+  metersPerPx: ArrayLike<number>,
+  spacingPx: number,
+): number[] {
+  const order = labels.map((_, i) => i);
+  order.sort((a, b) => labels[a].instanceIndex - labels[b].instanceIndex);
+  const kept = new Map<string, Float64Array[]>();
+  const repeated: number[] = [];
+  for (const i of order) {
+    const { text, anchor } = labels[i];
+    const limit = 0.5 * spacingPx * metersPerPx[i];
+    const others = kept.get(text);
+    const tooClose = others?.some(
+      (o) =>
+        (o[0] - anchor[0]) ** 2 +
+          (o[1] - anchor[1]) ** 2 +
+          (o[2] - anchor[2]) ** 2 <
+        limit * limit,
+    );
+    if (tooClose) {
+      repeated.push(i);
+    } else if (others) {
+      others.push(anchor);
+    } else {
+      kept.set(text, [anchor]);
+    }
+  }
+  return repeated;
 }

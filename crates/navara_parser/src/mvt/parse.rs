@@ -18,7 +18,7 @@ use navara_math::{FloatType, Vec3};
 
 use super::config::{LayerParseConfig, LayerParseKind, PointEmitter};
 use super::pos_converter::PosConverter;
-use crate::line_placement::{AnchorPath, LinePath, push_anchor_line_data, tangent_to_bearing};
+use crate::line_placement::{AlongLine, LinePath, push_anchor_line_data, tangent_to_bearing};
 
 // ============================================================================
 // Output types
@@ -39,6 +39,8 @@ pub enum ParsedGeometry {
         /// Tangent bearing at each anchor, in degrees clockwise from north.
         /// Empty unless the emitter placed its anchors along a line.
         bearings: Vec<f32>,
+        /// `SCALE_BAND_STRIDE` scalars per anchor — see the `GeomBuf` variant.
+        scale_bands: Vec<f32>,
         /// `PATH_SAMPLES` east/north metre offsets per anchor (stride
         /// `2 * PATH_SAMPLES`). Empty unless this is along-line text.
         path_samples: Vec<f32>,
@@ -142,6 +144,10 @@ enum GeomBuf {
         /// same length as `coords` — a group's emitter has one placement mode,
         /// never both.
         bearings: Vec<f32>,
+        /// `SCALE_BAND_STRIDE` scalars per anchor: the `(min, max]` ground
+        /// metres per screen pixel over which it is shown. Filled exactly when
+        /// `bearings` is.
+        scale_bands: Vec<f32>,
         /// `PATH_SAMPLES` east/north metre offsets per anchor (stride
         /// `2 * PATH_SAMPLES`), for bending glyphs along the line. Text only.
         path_samples: Vec<f32>,
@@ -177,6 +183,7 @@ impl GeomBuf {
                     batch_indices: Vec::new(),
                     encoded_coords: Vec::new(),
                     bearings: Vec::new(),
+                    scale_bands: Vec::new(),
                     path_samples: Vec::new(),
                     path_meta: Vec::new(),
                 }
@@ -207,6 +214,7 @@ impl GeomBuf {
                 batch_indices,
                 encoded_coords,
                 bearings,
+                scale_bands,
                 path_samples,
                 path_meta,
             } => ParsedGeometry::Points {
@@ -214,6 +222,7 @@ impl GeomBuf {
                 batch_indices,
                 encoded_coords,
                 bearings,
+                scale_bands,
                 path_samples,
                 path_meta,
             },
@@ -353,9 +362,18 @@ fn projection_of(config: &LayerParseConfig) -> usize {
 /// Nominal CSS pixels across a vector tile. MVT geometry arrives in `extent`
 /// units, so `extent / TILE_SIZE_PX` turns a pixel spacing into tile units —
 /// the ratio MapLibre calls `tilePixelRatio` when resolving `symbol-spacing`.
-/// Overscaled tiles are not compensated for, so a tile drawn beyond its own
-/// zoom spaces its anchors further apart on screen than nominal.
 const TILE_SIZE_PX: f64 = 512.0;
+
+/// Zoom levels past the tile's own for which along-line anchors are generated.
+///
+/// Spacing is resolved on screen, per anchor, so a tile needs anchors dense
+/// enough for the closest it is drawn: up to a zoom or so past its own in a
+/// flat view, further in a pitched one, and at any depth once overscaled past
+/// the source's `maxZoom`. The gap on screen stays under twice `spacing` while
+/// the tile is drawn no more than `FINER_LEVELS + 1` zooms past its own;
+/// beyond that anchors sit further apart than `spacing` asks. Each level
+/// doubles the anchor count.
+const FINER_LEVELS: i32 = 2;
 
 /// Vertex buffers for a single projection mode, shared by every layer using it.
 #[derive(Default)]
@@ -521,8 +539,7 @@ impl<'a> MvtFeatureProcessor<'a> {
         kind: LayerParseKind,
         coords: Vec3,
         world_pos: Vec3,
-        bearing: Option<f32>,
-        path: Option<AnchorPath>,
+        line: Option<AlongLine>,
     ) {
         let rtc = [
             (world_pos.x - self.rtc_center.x) as f32,
@@ -535,11 +552,19 @@ impl<'a> MvtFeatureProcessor<'a> {
             batch_indices,
             encoded_coords,
             bearings,
+            scale_bands,
             path_samples,
             path_meta,
         } = &mut self.layers[index].groups[group_index].geom
         {
-            push_anchor_line_data(c.len(), bearings, path_samples, path_meta, bearing, path);
+            push_anchor_line_data(
+                c.len(),
+                bearings,
+                scale_bands,
+                path_samples,
+                path_meta,
+                line,
+            );
             c.push(coords);
             batch_indices.push(batch_index);
             encoded_coords.extend_from_slice(&rtc);
@@ -590,7 +615,7 @@ impl<'a> MvtFeatureProcessor<'a> {
                     world_pos
                 }
             };
-            self.push_point(index, emitter.kind, coords, world_pos, None, None);
+            self.push_point(index, emitter.kind, coords, world_pos, None);
         }
     }
 
@@ -638,8 +663,8 @@ impl<'a> MvtFeatureProcessor<'a> {
             return; // Degenerate: fewer than two vertices, or all coincide.
         };
 
-        // `spacing` is in pixels at this tile's own zoom, so it converts to tile
-        // units by the same ratio MapLibre calls `tilePixelRatio`.
+        // A pixel at this tile's own zoom is `extent / TILE_SIZE_PX` tile units,
+        // the ratio MapLibre calls `tilePixelRatio`.
         let tile_px_ratio = self.converter.extent() / TILE_SIZE_PX;
 
         for i in 0..self.emitters.len() {
@@ -647,13 +672,22 @@ impl<'a> MvtFeatureProcessor<'a> {
             if !emitter.from_lines || !emitter.placement.is_along_line() {
                 continue;
             }
-            let spacing = emitter.spacing_px as f64 * tile_px_ratio;
+            let spacing_px = emitter.spacing_px as f64;
+            let finest = spacing_px * tile_px_ratio / 2f64.powi(FINER_LEVELS);
             // Only text bends its glyphs along the line; a sprite is one quad
             // at the anchor and needs nothing but the tangent bearing.
             let wants_path = emitter.kind == LayerParseKind::Text;
 
-            for s in path.anchors(emitter.placement, spacing) {
-                let (pos, tangent) = path.sample(s);
+            for anchor in path.anchors(emitter.placement, finest, wants_path) {
+                let (pos, tangent) = path.sample(anchor.s);
+                // An anchor in the tile's buffer belongs to the neighbouring
+                // tile, which holds the same stretch of line and places it
+                // itself; keeping it would draw the symbol twice. MapLibre
+                // drops these the same way (`addSymbolAtAnchor`).
+                let extent = self.converter.extent();
+                if !(0.0..extent).contains(&pos.0) || !(0.0..extent).contains(&pos.1) {
+                    continue;
+                }
                 let (px, py) = self.converter.project_point(pos.0, pos.1);
                 let coords = Vec3::new(px, py, 0.0 as FloatType);
                 let world_pos = CRS::Geographic.to_vec3(WGS84_64, coords, emitter.height);
@@ -661,18 +695,14 @@ impl<'a> MvtFeatureProcessor<'a> {
                 // Mercator's scale distortion is latitude-dependent, so the
                 // conversion uses this anchor's own latitude rather than the
                 // tile's — a tile spans several degrees at low zoom.
-                let anchor_path = wants_path.then(|| {
-                    path.anchor_path(s, spacing, self.converter.ground_meters_per_unit(coords.y))
-                });
-
-                self.push_point(
-                    index,
-                    emitter.kind,
-                    coords,
-                    world_pos,
-                    Some(tangent_to_bearing(tangent)),
-                    anchor_path,
-                );
+                let meters_per_unit = self.converter.ground_meters_per_unit(coords.y);
+                let line = AlongLine {
+                    bearing: tangent_to_bearing(tangent),
+                    scale_band: anchor.scale_band(meters_per_unit, spacing_px),
+                    path: wants_path
+                        .then(|| path.anchor_path(anchor.s, anchor.path_spacing, meters_per_unit)),
+                };
+                self.push_point(index, emitter.kind, coords, world_pos, Some(line));
             }
         }
     }
@@ -1702,25 +1732,26 @@ mod test {
         }
     }
 
-    /// A config whose single emitter places anchors along lines. `spacing_px`
-    /// is scaled so one interval is `spacing_tile` tile units at the test tile's
-    /// extent (4096 over a nominal 512px tile, i.e. 8 tile units per pixel).
-    fn line_placed_config(placement: PointPlacement, spacing_tile: f64) -> LayerParseConfig {
+    /// A config whose single emitter places anchors along lines, with
+    /// `spacing_px` scaled so the finest level repeats every `finest_tile` tile
+    /// units at the test tile's extent (4096 over a nominal 512px tile, i.e. 8
+    /// tile units per pixel).
+    fn line_placed_config(placement: PointPlacement, finest_tile: f64) -> LayerParseConfig {
         let mut config = point_config();
         config.point_emitters[0].from_points = false;
         config.point_emitters[0].from_lines = true;
         config.point_emitters[0].placement = placement;
-        config.point_emitters[0].spacing_px = (spacing_tile / 8.0) as f32;
+        config.point_emitters[0].spacing_px = (finest_tile * 2f64.powi(FINER_LEVELS) / 8.0) as f32;
         config
     }
 
     #[test]
-    fn line_placement_spaces_anchors_evenly() {
-        // 1000 tile units long, one anchor every 100: the pattern starts half an
-        // interval in, so anchors land at 50, 150, ... 950.
+    fn line_placement_nests_anchors_around_the_midpoint() {
+        // 1000 tile units along the equator, finest level every 100: positions
+        // at 100..900, each shown up to the coarsest level it belongs to.
         let bin = encode_tile(vec![make_layer(
             "l",
-            vec![linestring_feature(&[(0, 0), (1000, 0)], vec![])],
+            vec![linestring_feature(&[(0, 2048), (1000, 2048)], vec![])],
         )]);
         let groups = parse_mvt_tile(
             &bin,
@@ -1730,7 +1761,50 @@ mod test {
         );
         assert_eq!(groups.len(), 1);
         match &groups[0].geometry {
-            ParsedGeometry::Points { coords, .. } => assert_eq!(coords.len(), 10),
+            ParsedGeometry::Points {
+                coords,
+                scale_bands,
+                ..
+            } => {
+                assert_eq!(coords.len(), 9);
+                let max: Vec<f32> = (0..9).map(|a| scale_bands[a * 2 + 1]).collect();
+                assert!((0..9).all(|a| scale_bands[a * 2] == 0.0));
+                // The finest level is `FINER_LEVELS` zooms past the tile's
+                // own, in ground metres per pixel at the equator.
+                let finest = (40_075_016.685_578_49 / 512.0 / 2f64.powi(FINER_LEVELS)) as f32;
+                for a in [1, 3, 5, 7] {
+                    assert!((max[a] - finest).abs() < finest * 1e-4, "{max:?}");
+                }
+                for a in [0, 2, 6, 8] {
+                    assert!((max[a] - 2.0 * finest).abs() < finest * 1e-4, "{max:?}");
+                }
+                assert_eq!(max[4], f32::INFINITY);
+            }
+            _ => panic!("expected points"),
+        }
+    }
+
+    #[test]
+    fn line_placement_drops_anchors_in_the_tile_buffer() {
+        // The line starts 64 units into the left neighbour's side of the
+        // buffer. Of the 21 positions every 50 units along its 1064, the first
+        // lands at x = -32: the neighbouring tile's to draw, not this one's.
+        let bin = encode_tile(vec![make_layer(
+            "l",
+            vec![linestring_feature(&[(-64, 100), (1000, 100)], vec![])],
+        )]);
+        let groups = parse_mvt_tile(
+            &bin,
+            xyz(),
+            Vec3::ZERO,
+            &[line_placed_config(PointPlacement::Line, 50.0)],
+        );
+        match &groups[0].geometry {
+            ParsedGeometry::Points { coords, .. } => {
+                assert_eq!(coords.len(), 20);
+                // Tile x 0 is longitude -180 at z0.
+                assert!(coords.iter().all(|c| c.x > -180.0), "{coords:?}");
+            }
             _ => panic!("expected points"),
         }
     }
@@ -1806,7 +1880,7 @@ mod test {
         let bin = encode_tile(vec![make_layer(
             "l",
             vec![linestring_feature(
-                &[(0, 0), (1000, 0), (1000, 1000)],
+                &[(0, 0), (1000, 0), (1000, 600)],
                 vec![],
             )],
         )]);
@@ -1814,19 +1888,18 @@ mod test {
             &bin,
             xyz(),
             Vec3::ZERO,
-            &[line_placed_config(PointPlacement::Line, 500.0)],
+            &[line_placed_config(PointPlacement::Line, 400.0)],
         );
         match &groups[0].geometry {
             ParsedGeometry::Points {
                 coords, bearings, ..
             } => {
-                // Anchors at arc length 250, 750, 1250, 1750 of 2000.
-                assert_eq!(coords.len(), 4);
-                assert_eq!(bearings.len(), 4);
+                // Anchors at arc length 400, 800, 1200 of 1600.
+                assert_eq!(coords.len(), 3);
+                assert_eq!(bearings.len(), 3);
                 assert!((bearings[0] - 90.0).abs() < 1e-3, "{:?}", bearings);
                 assert!((bearings[1] - 90.0).abs() < 1e-3, "{:?}", bearings);
                 assert!((bearings[2] - 180.0).abs() < 1e-3, "{:?}", bearings);
-                assert!((bearings[3] - 180.0).abs() < 1e-3, "{:?}", bearings);
             }
             _ => panic!("expected points"),
         }
@@ -1870,9 +1943,11 @@ mod test {
                 path_meta,
                 ..
             } => {
-                assert_eq!(coords.len(), 4);
-                assert_eq!(path_meta.len(), 4 * PATH_META_STRIDE);
-                assert_eq!(path_samples.len(), 4 * 2 * PATH_SAMPLES);
+                // Positions at 500/1000/1500; the midpoint belongs to three
+                // levels, and gets an anchor with its own path for each.
+                assert_eq!(coords.len(), 5);
+                assert_eq!(path_meta.len(), 5 * PATH_META_STRIDE);
+                assert_eq!(path_samples.len(), 5 * 2 * PATH_SAMPLES);
                 // The line runs due east, so every sample sits on the east
                 // axis with zero northing, and the eastings increase by one
                 // step. Samples are relative to the anchor, so the middle pair
@@ -1890,16 +1965,20 @@ mod test {
                         "spacing at {k}: {d} vs {step}"
                     );
                 }
-                // Anchors sit at 250/750/1250/1750 along a 2000-unit line, so
-                // the distance to the nearer end runs 250/750/750/250 — the
-                // outer two have far less room for a label than the inner two.
-                let extent: Vec<f32> = (0..4)
+                // The distance to the nearer end runs 500/1000/1000/1000/500
+                // — the outer two have half the room for a label.
+                let extent: Vec<f32> = (0..5)
                     .map(|a| path_meta[a * PATH_META_STRIDE + 1])
                     .collect();
                 assert!(extent[0] > 0.0);
-                assert!((extent[0] - extent[3]).abs() < extent[0] * 1e-3);
-                assert!((extent[1] - extent[2]).abs() < extent[1] * 1e-3);
-                assert!((extent[1] - extent[0] * 3.0).abs() < extent[0] * 1e-3);
+                assert!((extent[0] - extent[4]).abs() < extent[0] * 1e-3);
+                for a in 1..4 {
+                    assert!((extent[a] - extent[0] * 2.0).abs() < extent[0] * 1e-3);
+                }
+                // Each midpoint anchor's path spans its own level: 1x, 2x, 4x.
+                let steps: Vec<f32> = (1..4).map(|a| path_meta[a * PATH_META_STRIDE]).collect();
+                assert!((steps[1] - steps[0] * 2.0).abs() < steps[0] * 1e-3);
+                assert!((steps[2] - steps[0] * 4.0).abs() < steps[0] * 1e-3);
             }
             _ => panic!("expected points"),
         }
@@ -1915,7 +1994,7 @@ mod test {
                 path_meta,
                 ..
             } => {
-                assert_eq!(bearings.len(), 4);
+                assert_eq!(bearings.len(), 3);
                 assert!(path_samples.is_empty());
                 assert!(path_meta.is_empty());
             }

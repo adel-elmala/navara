@@ -367,6 +367,10 @@ pub struct TransferablePointGeometry {
     /// when the anchors were placed along a line.
     #[wasm_bindgen(getter_with_clone)]
     pub bearings: Option<TransferableFloatAttribute>,
+    /// Per-anchor `(min, max]` ground metres per screen pixel over which it is
+    /// shown; `size` is the stride. Present exactly when `bearings` is.
+    #[wasm_bindgen(getter_with_clone)]
+    pub scale_bands: Option<TransferableFloatAttribute>,
     /// Per-anchor east/north samples of the line, for bending glyphs along it.
     /// `size` is the stride: two floats per sample.
     #[wasm_bindgen(getter_with_clone)]
@@ -387,6 +391,7 @@ impl From<TransferablePointGeometry>
             batch_ids: val.batch_ids.into(),
             batch_index: val.batch_index.into(),
             bearings: val.bearings.map(|b| b.into()),
+            scale_bands: val.scale_bands.map(|b| b.into()),
             path_samples: val.path_samples.map(|b| b.into()),
             path_meta: val.path_meta.map(|b| b.into()),
         }
@@ -404,6 +409,7 @@ impl<'a> From<&'a navara_feature_component::render::TransferablePointGeometry>
             batch_ids: (&val.batch_ids).into(),
             batch_index: (&val.batch_index).into(),
             bearings: val.bearings.as_ref().map(|b| b.into()),
+            scale_bands: val.scale_bands.as_ref().map(|b| b.into()),
             path_samples: val.path_samples.as_ref().map(|b| b.into()),
             path_meta: val.path_meta.as_ref().map(|b| b.into()),
         }
