@@ -219,7 +219,7 @@ import { Color } from "@navaramap/three";
 
 **Type:** `("point" | "line" | "polygon")[] | undefined`
 
-**Description:** Source geometry categories this material consumes. Adding `"line"` emits one billboard per line-string vertex by default. Set [`placement`](#placement) to repeat billboards along the line instead. Adding `"polygon"` emits one billboard per polygon-ring vertex (the closing duplicate vertex is skipped). Setting the array replaces the default, so include `"point"` when point geometry should keep rendering. This option applies when the layer's geometry is built: set it at layer creation. `layer.update()` applies a new value only to tiles loaded afterwards, so already-loaded tiles keep their previous geometry until the layer is re-created.
+**Description:** Source geometry categories this material consumes. Adding `"line"` emits one billboard per line-string vertex by default. Set [`placement`](#placement) to repeat billboards along the line instead. Adding `"polygon"` emits one billboard per polygon, placed inside it at the point farthest from its edges (each part of a MultiPolygon gets its own), or along its rings with [`placement`](#placement). Setting the array replaces the default, so include `"point"` when point geometry should keep rendering. This option applies when the layer's geometry is built: set it at layer creation. `layer.update()` applies a new value only to tiles loaded afterwards, so already-loaded tiles keep their previous geometry until the layer is re-created.
 
 **Default:** `["point"]`
 
@@ -292,11 +292,11 @@ import { Color } from "@navaramap/three";
 
 **Type:** `"point" | "line" | "line-center" | undefined`
 
-**Description:** How billboards are placed on line geometry. Only takes effect when [`geometryTypes`](#geometrytypes) includes `"line"`. Point geometry is always placed at the point itself, and polygon rings always get one billboard per vertex.
+**Description:** How billboards are placed on line and polygon geometry. Only takes effect when [`geometryTypes`](#geometrytypes) includes `"line"` or `"polygon"`. Point geometry is always placed at the point itself.
 
-- `"point"`: one billboard per line-string vertex.
-- `"line"`: billboards repeat along the line every [`spacing`](#spacing), evenly spaced regardless of where the line's vertices are.
-- `"line-center"`: a single billboard at the halfway point along each line string.
+- `"point"`: one billboard per line-string vertex, and one billboard per polygon, inside it at the point farthest from its edges.
+- `"line"`: billboards repeat along the line every [`spacing`](#spacing), evenly spaced regardless of where the line's vertices are. Polygon boundary rings, holes included, are followed the same way.
+- `"line-center"`: a single billboard at the halfway point along each line string or polygon ring.
 
 With `"line"` and `"line-center"`, each billboard is also turned to the direction of the line where it sits (see [`rotateToLine`](#rotatetoline)).
 

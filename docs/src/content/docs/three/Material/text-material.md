@@ -302,7 +302,7 @@ view.addFontFamily({
 
 **Type:** `("point" | "line" | "polygon")[] | undefined`
 
-**Description:** Source geometry categories this material consumes. Adding `"line"` emits one label per line-string vertex by default. Set [`placement`](#placement) to lay labels along the line instead. Adding `"polygon"` emits one label per polygon-ring vertex (the closing duplicate vertex is skipped). Setting the array replaces the default, so include `"point"` when point geometry should keep rendering. This option applies when the layer's geometry is built: set it at layer creation. `layer.update()` applies a new value only to tiles loaded afterwards, so already-loaded tiles keep their previous geometry until the layer is re-created.
+**Description:** Source geometry categories this material consumes. Adding `"line"` emits one label per line-string vertex by default. Set [`placement`](#placement) to lay labels along the line instead. Adding `"polygon"` emits one label per polygon, placed inside it at the point farthest from its edges (each part of a MultiPolygon gets its own), or along its rings with [`placement`](#placement). Setting the array replaces the default, so include `"point"` when point geometry should keep rendering. This option applies when the layer's geometry is built: set it at layer creation. `layer.update()` applies a new value only to tiles loaded afterwards, so already-loaded tiles keep their previous geometry until the layer is re-created.
 
 **Default:** `["point"]`
 
@@ -546,11 +546,11 @@ import { Color } from "@navaramap/three";
 
 **Type:** `"point" | "line" | "line-center" | undefined`
 
-**Description:** How labels are placed on line geometry. Only takes effect when [`geometryTypes`](#geometrytypes) includes `"line"`. Point geometry is always labeled at the point itself, and polygon rings always get one label per vertex.
+**Description:** How labels are placed on line and polygon geometry. Only takes effect when [`geometryTypes`](#geometrytypes) includes `"line"` or `"polygon"`. Point geometry is always labeled at the point itself.
 
-- `"point"`: one label per line-string vertex.
-- `"line"`: labels repeat along the line every [`spacing`](#spacing) and follow its curve word by word, like a street name on a map. Each word turns to match the line under it, and the letters within a word stay straight.
-- `"line-center"`: a single label at the halfway point along each line string, bent along the line in the same way.
+- `"point"`: one label per line-string vertex, and one label per polygon, inside it at the point farthest from its edges.
+- `"line"`: labels repeat along the line every [`spacing`](#spacing) and follow its curve word by word, like a street name on a map. Each word turns to match the line under it, and the letters within a word stay straight. Polygon boundary rings, holes included, are followed the same way.
+- `"line-center"`: a single label at the halfway point along each line string or polygon ring, bent along it in the same way.
 
 A label along a line is hidden instead of drawn when it would not read well:
 

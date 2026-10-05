@@ -4,11 +4,16 @@ use bevy_ecs::system::Commands;
 use navara_buffer_store::BufferStore;
 use navara_core::CRS;
 use navara_feature_component::batch::BatchTable;
-use navara_geometry::{Hierarchy, WindingOrder, close_flat_ring, mercator_y_to_lat, open_ring_len};
+use navara_geometry::{
+    Hierarchy, WindingOrder, close_flat_ring, mercator_y_to_lat, open_ring_len,
+    pole_of_inaccessibility,
+};
 use navara_material::{Appearance, Placement, SourceGeometryType};
 use navara_math::Vec3;
 use navara_parser::geojson::{GeoJson, Geometry, GeometryValue, Position};
-use navara_parser::line_placement::{AlongLine, LinePath, PointPlacement, tangent_to_bearing};
+use navara_parser::line_placement::{
+    AlongLine, LinePath, PointPlacement, PolygonAnchors, tangent_to_bearing,
+};
 
 use super::builder::{GeometryAppearanceKind, GeometryBuilder};
 
@@ -164,10 +169,10 @@ fn process_geometry(
 
 /// Accumulate point geometry with RTE encoding (GeoJSON direct path).
 ///
-/// `geometry_types` opts the point-like appearance into deriving a point per
-/// line-string vertex and/or polygon-ring vertex (closing duplicates skipped).
-/// `placement` then decides whether a line-string gives one anchor per vertex
-/// or anchors spaced `spacing` screen pixels apart along it.
+/// `geometry_types` opts the point-like appearance into deriving anchors from
+/// line-strings and/or polygons. `placement` then decides whether a line-string
+/// gives one anchor per vertex or anchors spaced `spacing` screen pixels apart
+/// along it, and what a polygon gives (see [`PolygonAnchors`]).
 fn accumulate_point_rte(
     builder: &mut GeometryBuilder,
     geometry: &Geometry,
@@ -192,6 +197,31 @@ fn accumulate_point_rte(
             add_line_anchors(builder, ps, kind, height, placement, spacing);
         } else {
             add_vertices(builder, ps);
+        }
+    };
+    let polygon_anchors = placement.polygon_anchors(kind != GeometryAppearanceKind::Point);
+    let add_polygon = |builder: &mut GeometryBuilder, rings: &[Vec<Position>]| {
+        match polygon_anchors {
+            PolygonAnchors::Vertices => {
+                for ring in rings {
+                    add_vertices(builder, ring_vertices(ring));
+                }
+            }
+            PolygonAnchors::AlongRings => {
+                for ring in rings {
+                    // The walk must come back to the start to cover the
+                    // closing edge, which an open ring leaves implicit.
+                    let closed;
+                    let ring = if open_ring_len(ring, |p| (p[0], p[1])) == ring.len() {
+                        closed = [ring.as_slice(), &ring[..1]].concat();
+                        &closed
+                    } else {
+                        ring
+                    };
+                    add_line_anchors(builder, ring, kind, height, placement, spacing);
+                }
+            }
+            PolygonAnchors::LabelPoint => add_label_point(builder, rings, kind, height),
         }
     };
 
@@ -221,21 +251,68 @@ fn accumulate_point_rte(
         GeometryValue::Polygon { coordinates: rings }
             if geometry_types.contains(&SourceGeometryType::Polygon) =>
         {
-            for ring in rings {
-                add_vertices(builder, ring_vertices(ring));
-            }
+            add_polygon(builder, rings);
         }
         GeometryValue::MultiPolygon { coordinates: fs }
             if geometry_types.contains(&SourceGeometryType::Polygon) =>
         {
             for rings in fs {
-                for ring in rings {
-                    add_vertices(builder, ring_vertices(ring));
-                }
+                add_polygon(builder, rings);
             }
         }
         _ => {}
     }
+}
+
+/// Precision of a polygon's label point, as a fraction of the polygon's larger
+/// side: below a pixel until the polygon spans a thousand pixels on screen.
+const LABEL_POINT_PRECISION: f64 = 1e-3;
+
+/// One anchor for a whole polygon, at its pole of inaccessibility.
+///
+/// The search runs in Web Mercator, where distances keep their proportions
+/// locally. Holes are unwrapped onto the outer ring's side of the antimeridian
+/// so a polygon crossing it stays one shape. The anchor takes the outer ring's
+/// mean height.
+fn add_label_point(
+    builder: &mut GeometryBuilder,
+    rings: &[Vec<Position>],
+    kind: GeometryAppearanceKind,
+    height: f32,
+) {
+    let world = 2.0 * std::f64::consts::PI * MERCATOR_RADIUS_M;
+    let mut projected: Vec<Vec<(f64, f64)>> = rings.iter().map(|r| project_unwrapped(r)).collect();
+    let Some(&(origin, _)) = projected.first().and_then(|outer| outer.first()) else {
+        return;
+    };
+    for ring in projected.iter_mut().skip(1) {
+        let Some(&(x, _)) = ring.first() else {
+            continue;
+        };
+        let shift = ((x - origin) / world).round() * world;
+        for p in ring.iter_mut() {
+            p.0 -= shift;
+        }
+    }
+
+    let outer = &projected[0];
+    let (mut min, mut max) = (outer[0], outer[0]);
+    for &(x, y) in outer {
+        min = (min.0.min(x), min.1.min(y));
+        max = (max.0.max(x), max.1.max(y));
+    }
+    let precision = (max.0 - min.0).max(max.1 - min.1) * LABEL_POINT_PRECISION;
+    let (x, y) =
+        pole_of_inaccessibility(&projected, precision).expect("the outer ring has a vertex");
+
+    let vertices = ring_vertices(&rings[0]);
+    let z = vertices.iter().map(|p| coords(p).z).sum::<f64>() / vertices.len() as f64;
+    let anchor = Vec3::new(
+        wrap_lon((x / MERCATOR_RADIUS_M).to_degrees()),
+        mercator_lat(y),
+        z,
+    );
+    builder.add_point(kind, anchor, CRS::Geographic, height);
 }
 
 /// Radius of the Web Mercator sphere (EPSG:3857).
@@ -2015,5 +2092,101 @@ mod test {
         // One position, the midpoint: text stacks an anchor there per level.
         let coords = &geoms[0].coords;
         assert!(coords.iter().all(|c| *c == coords[0]), "{coords:?}");
+    }
+
+    /// Anchor positions a single text or billboard appearance derives from
+    /// `geojson`'s polygons.
+    fn polygon_label_coords(geojson: &str, label: Appearance) -> Vec<Vec3> {
+        let billboard = matches!(label, Appearance::Billboard(_));
+        let mut app = run_construct(geojson, vec![label]);
+        let world = app.world_mut();
+        if billboard {
+            let mut q = world.query_filtered::<&BatchedPointGeometry, With<BillboardMarker>>();
+            q.iter(world).flat_map(|g| g.coords.clone()).collect()
+        } else {
+            let mut q = world.query_filtered::<&BatchedPointGeometry, With<TextMarker>>();
+            q.iter(world).flat_map(|g| g.coords.clone()).collect()
+        }
+    }
+
+    fn polygon_text(placement: navara_material::Placement) -> Appearance {
+        Appearance::Text(TextMaterial {
+            geometry_types: vec![SourceGeometryType::Polygon],
+            placement,
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn labels_mark_each_polygon_once_at_its_pole() {
+        let geojson = r#"{
+    "type": "Feature",
+    "properties": {},
+    "geometry": { "type": "MultiPolygon", "coordinates": [
+        [[[0, 0], [0.01, 0], [0.01, 0.01], [0, 0.01], [0, 0]]],
+        [[[0.02, 0], [0.03, 0], [0.03, 0.01], [0.02, 0.01], [0.02, 0]]]
+    ] }
+}"#;
+        let billboard = Appearance::Billboard(BillboardMaterial {
+            geometry_types: vec![SourceGeometryType::Polygon],
+            ..Default::default()
+        });
+        for label in [polygon_text(navara_material::Placement::Point), billboard] {
+            let coords = polygon_label_coords(geojson, label);
+            assert_eq!(coords.len(), 2, "{coords:?}");
+            for (c, lon) in coords.iter().zip([0.005, 0.025]) {
+                assert!(
+                    (c.x - lon).abs() < 1e-4 && (c.y - 0.005).abs() < 1e-4,
+                    "{c:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn polygon_label_avoids_holes() {
+        // The hole fills all but a strip on the east, centred on 0.009.
+        let geojson = r#"{
+    "type": "Feature",
+    "properties": {},
+    "geometry": { "type": "Polygon", "coordinates": [
+        [[0, 0], [0.01, 0], [0.01, 0.01], [0, 0.01], [0, 0]],
+        [[0.0005, 0.0005], [0.0005, 0.0095], [0.008, 0.0095], [0.008, 0.0005], [0.0005, 0.0005]]
+    ] }
+}"#;
+        let coords = polygon_label_coords(geojson, polygon_text(navara_material::Placement::Point));
+        assert_eq!(coords.len(), 1);
+        assert!((coords[0].x - 0.009).abs() < 2e-4, "{coords:?}");
+    }
+
+    #[test]
+    fn polygon_label_across_the_antimeridian_stays_on_it() {
+        let geojson = r#"{
+    "type": "Feature",
+    "properties": {},
+    "geometry": { "type": "Polygon", "coordinates": [
+        [[179.99, 0], [-179.99, 0], [-179.99, 0.01], [179.99, 0.01], [179.99, 0]]
+    ] }
+}"#;
+        let coords = polygon_label_coords(geojson, polygon_text(navara_material::Placement::Point));
+        assert_eq!(coords.len(), 1);
+        assert!(coords[0].x.abs() > 179.98, "{coords:?}");
+    }
+
+    #[test]
+    fn line_placement_walks_polygon_rings() {
+        let geojson = r#"{
+    "type": "Feature",
+    "properties": {},
+    "geometry": { "type": "Polygon", "coordinates": [
+        [[0, 0], [0.01, 0], [0.01, 0.01], [0, 0.01], [0, 0]]
+    ] }
+}"#;
+        let coords = polygon_label_coords(geojson, polygon_text(navara_material::Placement::Line));
+        assert!(coords.len() > 4, "{} anchors", coords.len());
+        let on_edge = |v: f64| v.abs() < 1e-9 || (v - 0.01).abs() < 1e-9;
+        for c in &coords {
+            assert!(on_edge(c.x) || on_edge(c.y), "{c:?} is off the ring");
+        }
     }
 }

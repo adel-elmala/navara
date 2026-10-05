@@ -42,7 +42,7 @@ impl LayerParseKind {
     }
 }
 
-pub use crate::line_placement::PointPlacement;
+pub use crate::line_placement::{PointPlacement, PolygonAnchors};
 
 /// A point-like emitter derived from a `Point`/`Billboard`/`Text` appearance.
 ///
@@ -51,8 +51,8 @@ pub use crate::line_placement::PointPlacement;
 /// heights, so they cannot be collapsed into a single scalar.
 ///
 /// The `from_*` flags mirror the appearance's opt-in `geometry_types`: besides
-/// point geometry, an emitter can derive a point per line-string vertex and/or
-/// per polygon-ring vertex.
+/// point geometry, an emitter can derive anchors from line-strings and/or
+/// polygons, as `placement` (and, for polygons, `kind`) decides.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PointEmitter {
     pub kind: LayerParseKind,
@@ -63,16 +63,25 @@ pub struct PointEmitter {
     /// Also emit one point per line-string vertex.
     #[serde(default)]
     pub from_lines: bool,
-    /// Also emit one point per polygon-ring vertex (closing duplicate skipped).
+    /// Also emit anchors for polygons, as [`Self::polygon_anchors`] decides.
     #[serde(default)]
     pub from_polygons: bool,
-    /// How anchors are derived from line geometry once `from_lines` is set.
+    /// How anchors are derived from line geometry (and polygon rings).
     #[serde(default)]
     pub placement: PointPlacement,
     /// Anchor spacing along a line in pixels at this tile's own zoom. Only used
     /// by [`PointPlacement::Line`].
     #[serde(default = "default_spacing")]
     pub spacing_px: f32,
+}
+
+impl PointEmitter {
+    /// Where this emitter anchors on a polygon: text and billboards label it
+    /// once, point markers mark its vertices.
+    pub fn polygon_anchors(&self) -> PolygonAnchors {
+        self.placement
+            .polygon_anchors(self.kind != LayerParseKind::Point)
+    }
 }
 
 fn default_true() -> bool {

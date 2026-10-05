@@ -31,7 +31,9 @@ pub struct HillshadeConfig {
 /// appearances consume [`SourceGeometryType::Point`], polyline consumes
 /// [`SourceGeometryType::Line`]). Opting extra entries into a material's
 /// `geometry_types` derives additional representations: polygon boundary
-/// rings render as polylines, and line/polygon vertices render as points.
+/// rings render as polylines, line vertices render as points, and polygons
+/// render as one label per polygon (text, billboards) or one marker per ring
+/// vertex (points) — see [`Placement`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceGeometryType {
     Point,
@@ -100,16 +102,20 @@ impl Facing {
 /// How a label or sprite is positioned relative to the geometry it was derived
 /// from.
 ///
-/// Only meaningful once the appearance opts into line geometry through
-/// `geometry_types`; point geometry always places at the point itself.
+/// Only meaningful once the appearance opts into line or polygon geometry
+/// through `geometry_types`; point geometry always places at the point itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Placement {
-    /// One anchor per source vertex — the historical behaviour.
+    /// One anchor per line vertex. A polygon gets one label at its pole of
+    /// inaccessibility from text and billboards, as MapLibre places a
+    /// polygon's symbol, and one marker per ring vertex from points.
     #[default]
     Point,
-    /// Anchors repeated along the line at `spacing` intervals.
+    /// Anchors repeated along the line, or each polygon ring, at `spacing`
+    /// intervals.
     Line,
-    /// A single anchor at the line's arc-length midpoint.
+    /// A single anchor at the arc-length midpoint of the line, or of each
+    /// polygon ring.
     LineCenter,
 }
 
@@ -205,7 +211,7 @@ pub struct PointMaterial {
     /// in degrees, clockwise seen from the front. `center` decides where
     /// inside the quad the pivot sits. Default `0.0`.
     pub rotation: f32,
-    /// How anchors are derived from line geometry. See
+    /// How anchors are derived from line and polygon geometry. See
     /// [`TextMaterial::placement`]. Default [`Placement::Point`].
     pub placement: Placement,
     /// Distance between repeated anchors along a line, in screen pixels. See
@@ -237,7 +243,7 @@ pub struct PointMaterial {
     pub declutter_priority: f32,
     /// Source geometry types this appearance consumes. Defaults to the native
     /// geometry only; opting in `Line`/`Polygon` also emits a point per
-    /// line-string / polygon-ring vertex.
+    /// line-string / polygon-ring vertex, or along them with `placement`.
     pub geometry_types: Vec<SourceGeometryType>,
     // post effect
     pub effect_ids: Option<Vec<String>>,
@@ -300,7 +306,7 @@ pub struct BillboardMaterial {
     /// in degrees, clockwise seen from the front. `center` decides where
     /// inside the sprite the pivot sits. Default `0.0`.
     pub rotation: f32,
-    /// How anchors are derived from line geometry. See
+    /// How anchors are derived from line and polygon geometry. See
     /// [`TextMaterial::placement`]. Default [`Placement::Point`].
     pub placement: Placement,
     /// Distance between repeated anchors along a line, in screen pixels. See
@@ -333,8 +339,9 @@ pub struct BillboardMaterial {
     /// `declutter` is enabled.
     pub declutter_priority: f32,
     /// Source geometry types this appearance consumes. Defaults to the native
-    /// geometry only; opting in `Line`/`Polygon` also emits a billboard per
-    /// line-string / polygon-ring vertex.
+    /// geometry only; opting in `Line` also emits a billboard per line-string
+    /// vertex, and `Polygon` one per polygon — or along either with
+    /// `placement`.
     pub geometry_types: Vec<SourceGeometryType>,
     // post effect
     pub effect_ids: Option<Vec<String>>,
@@ -412,9 +419,9 @@ pub struct TextMaterial {
     /// signboard standing on the surface, [`Facing::Flat`] a north-up
     /// label painted on it.
     pub rotate_with_camera: bool,
-    /// How anchors are derived from line geometry. See [`Placement`]. Requires
-    /// `geometry_types` to include `Line`; ignored otherwise. Default
-    /// [`Placement::Point`].
+    /// How anchors are derived from line and polygon geometry. See
+    /// [`Placement`]. Requires `geometry_types` to include `Line` or
+    /// `Polygon`; ignored otherwise. Default [`Placement::Point`].
     pub placement: Placement,
     /// Distance between repeated anchors along a line, in screen pixels, for
     /// every source. The line gets nested levels of anchors and the renderer
@@ -495,8 +502,9 @@ pub struct TextMaterial {
     /// `declutter` is enabled.
     pub declutter_priority: f32,
     /// Source geometry types this appearance consumes. Defaults to the native
-    /// geometry only; opting in `Line`/`Polygon` also emits a label per
-    /// line-string / polygon-ring vertex.
+    /// geometry only; opting in `Line` also emits a label per line-string
+    /// vertex, and `Polygon` one per polygon — or along either with
+    /// `placement`.
     pub geometry_types: Vec<SourceGeometryType>,
     // post effect
     pub effect_ids: Option<Vec<String>>,

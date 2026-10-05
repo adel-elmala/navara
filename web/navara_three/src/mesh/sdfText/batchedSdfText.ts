@@ -128,7 +128,7 @@ type LabelRecord = {
   slot: number;
   /** Anchor (position) slot this label sits on, NOT the feature index: a
    * feature spans several anchors for MultiPoint geometry and for labels
-   * derived from line/polygon vertices via `geometryTypes`. */
+   * derived from line/polygon geometry via `geometryTypes`. */
   instanceIndex: number;
   batchId: number;
   /** Feature index — the column in the shared batch data texture holding
@@ -243,7 +243,7 @@ export class BatchedSdfTextMesh
   /**
    * Feature (batch) index → this feature's anchor slots. A feature owns
    * multiple anchors for MultiPoint geometry and for labels derived from
-   * line/polygon vertices via `geometryTypes`, so per-feature styling must fan
+   * line/polygon geometry via `geometryTypes`, so per-feature styling must fan
    * out to all of them. `null` means anchors and features are 1:1.
    */
   private _batchIndexToInstances: Map<number, number[]> | null = null;

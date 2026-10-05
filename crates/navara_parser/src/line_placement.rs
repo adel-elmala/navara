@@ -28,6 +28,31 @@ impl PointPlacement {
     pub fn is_along_line(self) -> bool {
         matches!(self, Self::Line | Self::LineCenter)
     }
+
+    /// Where an emitter with this placement anchors on a polygon. `label` is
+    /// set for text and billboards, which (as MapLibre symbols) mark a polygon
+    /// once rather than at every vertex the way point markers (circles) do.
+    pub fn polygon_anchors(self, label: bool) -> PolygonAnchors {
+        if self.is_along_line() {
+            PolygonAnchors::AlongRings
+        } else if label {
+            PolygonAnchors::LabelPoint
+        } else {
+            PolygonAnchors::Vertices
+        }
+    }
+}
+
+/// How a point-like emitter derives anchors from a polygon, resolved by
+/// [`PointPlacement::polygon_anchors`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PolygonAnchors {
+    /// One anchor per ring vertex, holes included.
+    Vertices,
+    /// One anchor per polygon, at its pole of inaccessibility.
+    LabelPoint,
+    /// Each ring is walked as a line, by the emitter's along-line placement.
+    AlongRings,
 }
 
 /// Path samples stored per along-line text anchor.

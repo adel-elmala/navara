@@ -172,7 +172,7 @@ export class InstancedSpriteMesh
   /**
    * Feature (batch) index → this feature's instance ids. A feature owns
    * multiple instances for MultiPoint geometry and for points derived from
-   * line/polygon vertices via `geometryTypes`, so per-feature styling must
+   * line/polygon geometry via `geometryTypes`, so per-feature styling must
    * fan out to all of them. `null` means instances and features are 1:1.
    */
   private _batchIndexToInstances: Map<number, number[]> | null = null;
