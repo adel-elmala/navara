@@ -51,21 +51,20 @@ fn parse_facing(field: &str, value: &Option<String>) -> Option<navara_material::
 }
 
 /// Parse a JS-facing placement name, warning on an unknown value so the caller
-/// keeps the material's current value. `field` is always `"placement"`; it is
-/// threaded through for symmetry with [`parse_facing`], whose property name
-/// varies per material.
-fn parse_placement(field: &str, value: &Option<String>) -> Option<navara_material::Placement> {
+/// keeps the material's current value.
+fn parse_placement(value: &Option<String>) -> Option<navara_material::Placement> {
     let name = value.as_ref()?;
     match navara_material::Placement::parse(name) {
         Some(p) => Some(p),
         None => {
             bevy_log::warn!(
-                "{field}: unknown value {name:?} (expected \"point\", \"line\" or \"line-center\")"
+                "placement: unknown value {name:?} (expected \"point\", \"line\" or \"line-center\")"
             );
             None
         }
     }
 }
+
 #[wasm_bindgen]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PointMaterial {
@@ -178,7 +177,7 @@ impl From<PointMaterial> for navara_material::PointMaterial {
                 .unwrap_or(default.point_facing),
             rotate_with_camera: val.rotate_with_camera.unwrap_or(default.rotate_with_camera),
             rotation: val.rotation.unwrap_or(default.rotation),
-            placement: parse_placement("placement", &val.placement).unwrap_or(default.placement),
+            placement: parse_placement(&val.placement).unwrap_or(default.placement),
             spacing: val.spacing.unwrap_or(default.spacing),
             rotate_to_line: val.rotate_to_line.unwrap_or(default.rotate_to_line),
             color: val.color.unwrap_or(default.color),
@@ -242,7 +241,7 @@ impl PointMaterial {
                 .unwrap_or(other.point_facing),
             rotate_with_camera: self.rotate_with_camera.unwrap_or(other.rotate_with_camera),
             rotation: self.rotation.unwrap_or(other.rotation),
-            placement: parse_placement("placement", &self.placement).unwrap_or(other.placement),
+            placement: parse_placement(&self.placement).unwrap_or(other.placement),
             spacing: self.spacing.unwrap_or(other.spacing),
             rotate_to_line: self.rotate_to_line.unwrap_or(other.rotate_to_line),
             center: self.center.unwrap_or(other.center.into()).into(),
@@ -390,7 +389,7 @@ impl From<BillboardMaterial> for navara_material::BillboardMaterial {
                 .unwrap_or(default.billboard_facing),
             rotate_with_camera: val.rotate_with_camera.unwrap_or(default.rotate_with_camera),
             rotation: val.rotation.unwrap_or(default.rotation),
-            placement: parse_placement("placement", &val.placement).unwrap_or(default.placement),
+            placement: parse_placement(&val.placement).unwrap_or(default.placement),
             spacing: val.spacing.unwrap_or(default.spacing),
             rotate_to_line: val.rotate_to_line.unwrap_or(default.rotate_to_line),
             center: val.center.unwrap_or(default.center.into()).into(),
@@ -460,7 +459,7 @@ impl BillboardMaterial {
                 .unwrap_or(other.billboard_facing),
             rotate_with_camera: self.rotate_with_camera.unwrap_or(other.rotate_with_camera),
             rotation: self.rotation.unwrap_or(other.rotation),
-            placement: parse_placement("placement", &self.placement).unwrap_or(other.placement),
+            placement: parse_placement(&self.placement).unwrap_or(other.placement),
             spacing: self.spacing.unwrap_or(other.spacing),
             rotate_to_line: self.rotate_to_line.unwrap_or(other.rotate_to_line),
             center: self.center.unwrap_or(other.center.into()).into(),
@@ -702,7 +701,7 @@ impl From<TextMaterial> for navara_material::TextMaterial {
                 .unwrap_or(default.text_facing),
             rotate_with_camera: val.rotate_with_camera.unwrap_or(default.rotate_with_camera),
             rotation: val.rotation.unwrap_or(default.rotation),
-            placement: parse_placement("placement", &val.placement).unwrap_or(default.placement),
+            placement: parse_placement(&val.placement).unwrap_or(default.placement),
             spacing: val.spacing.unwrap_or(default.spacing),
             max_angle: val.max_angle.unwrap_or(default.max_angle),
             keep_upright: val.keep_upright.unwrap_or(default.keep_upright),
@@ -811,7 +810,7 @@ impl TextMaterial {
             text_facing: parse_facing("textFacing", &self.text_facing).unwrap_or(other.text_facing),
             rotate_with_camera: self.rotate_with_camera.unwrap_or(other.rotate_with_camera),
             rotation: self.rotation.unwrap_or(other.rotation),
-            placement: parse_placement("placement", &self.placement).unwrap_or(other.placement),
+            placement: parse_placement(&self.placement).unwrap_or(other.placement),
             spacing: self.spacing.unwrap_or(other.spacing),
             max_angle: self.max_angle.unwrap_or(other.max_angle),
             keep_upright: self.keep_upright.unwrap_or(other.keep_upright),

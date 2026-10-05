@@ -494,8 +494,7 @@ describe("BatchedSdfTextMesh deferred font preparation", () => {
 
 // `_applyUpdate` rebuilds the enhancer's props from scratch, and the state
 // merge reads `props.x ?? currentState.x` — so a field left out of that object
-// is not "unchanged", it is unreachable forever. `lineOffset` was missing, and
-// the example's slider moved nothing.
+// is not "unchanged", it is unreachable forever.
 describe("BatchedSdfTextMesh style updates reach the enhancer", () => {
   const enhancerState = (mesh: BatchedSdfTextMesh) =>
     (

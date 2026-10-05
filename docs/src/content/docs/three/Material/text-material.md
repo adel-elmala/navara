@@ -640,6 +640,8 @@ When `true`, the label always faces the viewer. With [`textFacing`](#textfacing)
 
 When `false`, the label is fixed in its anchor's local east/north/up frame, and moving the camera never reorients it. With `"upright"`, it becomes a signboard standing on the surface and facing south. It is readable from a camera looking northward, seen edge-on from directly above, and mirrored from behind. With `"flat"`, it is a north-up label painted on the surface that turns with the map.
 
+Not used when [`placement`](#placement) is `"line"` or `"line-center"`: those labels follow the line's direction.
+
 Can also be set per feature from a [feature evaluator](../../api/feature-evaluator/).
 
 **Default:** `true`
@@ -659,7 +661,7 @@ Can also be set per feature from a [feature evaluator](../../api/feature-evaluat
 
 **Type:** `number | undefined`
 
-**Description:** Rotates the label within its own plane around its anchor point, in degrees, clockwise as seen from the front. The rotation is applied on top of the orientation that [`textFacing`](#textfacing) and [`rotateWithCamera`](#rotatewithcamera) resolve to. It spins a billboard on screen and turns a surface label like a compass bearing.
+**Description:** Rotates the label within its own plane around its anchor point, in degrees, clockwise as seen from the front. The rotation is applied on top of the orientation that [`textFacing`](#textfacing) and [`rotateWithCamera`](#rotatewithcamera) resolve to. It spins a billboard on screen and turns a surface label like a compass bearing. Not used when [`placement`](#placement) is `"line"` or `"line-center"`.
 
 [`center`](#center) decides where inside the text the pivot sits. For example, `{ x: 0.5, y: 0.5 }` turns the label around its middle, and `{ x: 0.5, y: 0.0 }` turns it around the bottom of the text block.
 

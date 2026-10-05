@@ -72,10 +72,8 @@ const _tmpColorArray: [number, number, number] = [0, 0, 0];
 const _visibility = createAnchorVisibilityState();
 
 /**
- * Line labels per row of the path texture. At 32 samples (16 texels) a label
- * that is a 1024-texel row, so the 4096-row limit the batch texture also
- * assumes holds ~262k labels — well past a dense tile, where the default
- * 64-texel row ran out at 16k.
+ * Line labels per row of the path texture: at 32 samples (16 texels) per
+ * label, a 1024-texel row, so the texture grows in height rather than width.
  */
 const PATH_LABELS_PER_ROW = 64;
 
@@ -216,6 +214,9 @@ export class BatchedSdfTextMesh
   /** Per-batch text quality. All labels in the batch share it because they
    *  sample the same atlas texture; flipping quality requires a new batch. */
   private _highQuality: boolean;
+  /** The material's `spacing` the engine built this batch's scale bands for,
+   *  so as fixed as the bands. */
+  private readonly _spacingPx: number;
   private _fontManager: FontManager;
   private _needRender?: () => void;
   /** Unsubscribe from the font manager's atlas-eviction notifications. */
@@ -286,14 +287,12 @@ export class BatchedSdfTextMesh
    *  pass turned on or off. */
   private _linePrevRejected: Uint8Array | null = null;
   /** Reused gather buffer for the labels a placement pass actually has to
-   *  judge, so the filter below costs no allocation per pass. */
+   *  judge. */
   private _linePlaceable: LabelRecord[] = [];
   /** The subset of those that passed the fit phase and so need their path sent
    *  to the full placement. */
   private _linePlaceSurvivors: LabelRecord[] = [];
-  /** The view matrix both kernel phases read. Held here because the pass runs
-   *  once per batch and `Matrix4.elements` is a plain array — copying it into a
-   *  fresh `Float64Array` each time was hundreds of allocations per pass. */
+  /** Reused copy of the view matrix both kernel phases read. */
   private _lineViewMatrix = new Float64Array(16);
 
   /** Layout inputs baked into glyph quads; a change forces a re-layout. */
@@ -339,6 +338,7 @@ export class BatchedSdfTextMesh
     this._material = material;
     this._transform = m.transform;
     this._highQuality = material.highQuality ?? false;
+    this._spacingPx = material.spacing ?? 250;
 
     this._maxWidth = material.maxWidth ?? 0;
     this._lineHeight = material.lineHeight ?? 1.0;
@@ -506,29 +506,21 @@ export class BatchedSdfTextMesh
    * Only labels that could become declutter candidates are judged, under the
    * same two conditions {@link collectDeclutterCandidates} applies — an
    * invisible batch, and a label with no shaped text, are both dropped there a
-   * moment later, so placing them is pure waste. Measured on a dense London
-   * view that waste was most of the pass: ~28% of batches were not visible and
-   * only ~7k of ~24k labels per pass were shown. Whatever marks those
-   * conditions dirty already has to mark the declutter pass dirty for
-   * collection to be correct, so this filter inherits that guarantee — keep
-   * the two predicates identical.
+   * moment later. Whatever marks those conditions dirty already has to mark
+   * the declutter pass dirty for collection to be correct, so this filter
+   * inherits that guarantee — keep the two predicates identical.
    *
    * What survives that filter then goes through the kernel in two phases. The
-   * fit test needs no path samples, and on a dense view rejects roughly four
-   * labels in five, so it runs first over a compact array; only survivors have
-   * their 32 path points gathered and sent. See the "Two phases" section of
-   * `line_label.rs`.
+   * fit test needs no path samples, so it runs first over a compact array;
+   * only survivors have their path points gathered and sent. See the "Two
+   * phases" section of `line_label.rs`.
    *
    * The fit test also rejects every anchor whose level is not the one on
    * screen. Each position along a line carries one anchor per level, each with
    * a path sized for it, so zooming across a level boundary retires one label
    * and admits its stack-mate at the same spot — see {@link _handOffLineLabel}.
    */
-  placeLineLabels(
-    camera: PerspectiveCamera,
-    _widthPx: number,
-    heightPx: number,
-  ): void {
+  placeLineLabels(camera: PerspectiveCamera, heightPx: number): void {
     const line = this._path;
     if (!this.visible) return;
     if (!this._pathData || !line || this._labels.length === 0) return;
@@ -562,7 +554,7 @@ export class BatchedSdfTextMesh
     prevRejected.set(rejected);
 
     const sizeInMeters = this._material.sizeInMeters ?? true;
-    const spacingPx = this._material.spacing ?? 250;
+    const spacingPx = this._spacingPx;
     const fovRad = MathUtils.degToRad(camera.fov);
     camera.updateMatrixWorld();
     const view = this._lineViewMatrix;
@@ -692,7 +684,7 @@ export class BatchedSdfTextMesh
    */
   private _isAlongLine(record: LabelRecord): boolean {
     const meta = this._path?.meta;
-    return (meta?.[record.instanceIndex * PATH_META_STRIDE] ?? 0) > 0;
+    return !!meta && meta[record.instanceIndex * PATH_META_STRIDE] > 0;
   }
 
   /**
@@ -814,7 +806,7 @@ export class BatchedSdfTextMesh
       record.slot * texelsPerLabel,
       // Zero for a plain point, which is what tells the shader to lay it out
       // as an ordinary label.
-      line.meta?.[record.instanceIndex * PATH_META_STRIDE] ?? 0,
+      line.meta[record.instanceIndex * PATH_META_STRIDE],
       0, // flip — decided per pass by `placeLineLabels`
       // Rejected until that pass has judged it. A label drawn before its first
       // placement runs has no flip yet, so it would appear for a frame or two
@@ -1222,6 +1214,12 @@ export class BatchedSdfTextMesh
     const next = record.requestedShow && !!record.text;
     if (record.show === next) return;
     record.show = next;
+    // A hidden label is not placed, so by the time it shows again its last
+    // decision is stale: it waits to be judged, as a new label does.
+    if (!next && this._isAlongLine(record)) {
+      this._labelData.setComponent(record.slot, LabelRow.PATH, 3, 1);
+      if (this._lineRejected) this._lineRejected[record.slot] = 1;
+    }
     this._writeShow(record);
     this._syncGlyphRefs(record);
   }
@@ -1387,7 +1385,9 @@ export class BatchedSdfTextMesh
         }
       }
     }
-    this._markDeclutterDirty();
+    // Line labels are culled until placed, and a hidden batch is never
+    // placed, so the swap must not wait out the throttle.
+    this.ctx.declutter?.markDirty(activating && this._path !== null);
   }
 
   /**

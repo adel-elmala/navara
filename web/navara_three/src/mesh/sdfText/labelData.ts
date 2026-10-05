@@ -150,14 +150,18 @@ export class LabelDataTexture {
     this._texture.needsUpdate = true;
   }
 
-  /** Write one channel of a texel, leaving the other three alone. */
+  /** Write one channel of a texel, leaving the other three alone. Writing the
+   *  value already stored requests no upload: placement passes rewrite every
+   *  label's decisions, and most are unchanged. */
   setComponent(
     slot: number,
     row: number,
     component: number,
     value: number,
   ): void {
-    this._data[(slot * this._texelsPerSlot + row) * 4 + component] = value;
+    const i = (slot * this._texelsPerSlot + row) * 4 + component;
+    if (this._data[i] === Math.fround(value)) return;
+    this._data[i] = value;
     this._texture.needsUpdate = true;
   }
 

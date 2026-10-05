@@ -208,7 +208,7 @@ fn accumulate_point_rte(
                 }
             }
             PolygonAnchors::AlongRings => {
-                for ring in rings {
+                for ring in rings.iter().filter(|r| !r.is_empty()) {
                     // The walk must come back to the start to cover the
                     // closing edge, which an open ring leaves implicit.
                     let closed;
@@ -2188,5 +2188,18 @@ mod test {
         for c in &coords {
             assert!(on_edge(c.x) || on_edge(c.y), "{c:?} is off the ring");
         }
+    }
+
+    #[test]
+    fn line_placement_skips_empty_rings() {
+        let geojson = r#"{
+    "type": "Feature",
+    "properties": {},
+    "geometry": { "type": "Polygon", "coordinates": [
+        [[0, 0], [0.01, 0], [0.01, 0.01], [0, 0.01], [0, 0]], []
+    ] }
+}"#;
+        let coords = polygon_label_coords(geojson, polygon_text(navara_material::Placement::Line));
+        assert!(!coords.is_empty());
     }
 }

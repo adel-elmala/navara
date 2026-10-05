@@ -100,7 +100,7 @@ pub struct GeometryGroup {
 ///
 /// // Per feature:
 /// groups.begin_feature();
-/// groups.track_point_rte(kind, coords, crs, high, low, global_batch_id, None, None);
+/// groups.track_point_rte(kind, coords, crs, high, low, global_batch_id, None);
 ///
 /// // After all features:
 /// let entities = groups.finalize(commands, buf, appearances, layer_id, true);

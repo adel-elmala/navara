@@ -4,6 +4,8 @@
 //! them as plain data (no `navara_material` / `bevy_ecs` dependency) lets the
 //! parse core run either inline or inside a Web Worker.
 
+pub use crate::line_placement::{PointPlacement, PolygonAnchors};
+
 /// The geometry-appearance kind a parsed group belongs to.
 ///
 /// This mirrors `navara_feature_component::geometry_builder::GeometryAppearanceKind`
@@ -42,8 +44,6 @@ impl LayerParseKind {
     }
 }
 
-pub use crate::line_placement::{PointPlacement, PolygonAnchors};
-
 /// A point-like emitter derived from a `Point`/`Billboard`/`Text` appearance.
 ///
 /// Each coordinate of a point/multipoint geometry is emitted once per enabled
@@ -69,8 +69,9 @@ pub struct PointEmitter {
     /// How anchors are derived from line geometry (and polygon rings).
     #[serde(default)]
     pub placement: PointPlacement,
-    /// Anchor spacing along a line in pixels at this tile's own zoom. Only used
-    /// by [`PointPlacement::Line`].
+    /// Anchor spacing along a line in pixels at this tile's own zoom. Along-line
+    /// placements only; [`PointPlacement::LineCenter`] uses it to size the
+    /// anchor's sampled path and scale bands.
     #[serde(default = "default_spacing")]
     pub spacing_px: f32,
 }

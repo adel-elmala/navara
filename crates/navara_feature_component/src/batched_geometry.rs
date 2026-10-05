@@ -306,7 +306,8 @@ pub struct BatchedPointGeometry {
     pub(crate) scale_bands: Option<Handle>,
     /// Per-anchor east/north path samples; `None` unless along-line text.
     pub(crate) path_samples: Option<Handle>,
-    /// Per-anchor metres between adjacent path samples.
+    /// Per-anchor metres between adjacent path samples, then metres of real
+    /// line either side of the anchor.
     pub(crate) path_meta: Option<Handle>,
 }
 

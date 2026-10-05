@@ -138,11 +138,6 @@ impl Placement {
             Self::LineCenter => "line-center",
         }
     }
-
-    /// Whether this mode resamples the line rather than emitting per vertex.
-    pub fn is_along_line(self) -> bool {
-        matches!(self, Self::Line | Self::LineCenter)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

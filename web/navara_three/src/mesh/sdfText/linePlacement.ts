@@ -1,4 +1,5 @@
 import { MathUtils } from "three";
+import invariant from "tiny-invariant";
 
 /**
  * Packing for the Rust `lineLabelPlace` kernel.
@@ -27,43 +28,22 @@ export const PATH_META_STRIDE = 2;
 export const SCALE_BAND_STRIDE = 2;
 
 /**
- * How much line a label may occupy either side of its anchor, in metres.
+ * How much line a label may occupy either side of its anchor, in metres: the
+ * smaller of the **real line** left before its end and the **span the engine
+ * sampled** for this anchor (`spacing` either side — `line_placement.rs`
+ * samples `PATH_SPAN_SPACINGS * spacing` of line across `PATH_SAMPLES` points).
  *
- * The smaller of two limits, and both matter:
- *
- * - the **real line** left before its end, which is what "the label would
- *   overrun its road" means; and
- * - the **span the engine actually sampled** for this anchor, which is
- *   `spacing` either side — `line_placement.rs` samples `PATH_SPAN_SPACINGS * spacing`
- *   of line across `PATH_SAMPLES` points.
- *
- * Only the first used to be checked. A label longer than the sampled span
- * still draws: the vertex shader clamps its path lookup to the last sample, so
- * everything past the span piles onto that one point and the far words land on
- * top of the near ones. It shows up as soon as `spacing` is small enough that
- * the span is shorter than a label — on straight roads as much as curved ones,
- * which is what distinguishes it from a curvature problem.
- *
- * Rejecting instead is also the right cartography: a label longer than the gap
- * to its own next repeat would collide with it anyway.
+ * Past the sampled span the vertex shader clamps its path lookup to the last
+ * sample, so the far words would pile onto that one point. A label that long
+ * would collide with its own next repeat anyway.
  */
 function usableHalfExtentMeters(path: LinePath, instanceIndex: number): number {
-  const meta = path.meta;
   const o = instanceIndex * PATH_META_STRIDE;
-  const stepMeters = meta?.[o] ?? 0;
-  const realLine = meta?.[o + 1] ?? 0;
+  const stepMeters = path.meta[o];
+  const realLine = path.meta[o + 1];
   // Mirrors `halfSpan` in sdfText.vert.glsl; the two must move together.
   const sampledSpan = 0.5 * (path.stride / 2 - 1) * stepMeters;
   return Math.min(realLine, sampledSpan);
-}
-
-/** Bounds of the anchor's scale band; a path always comes with one. */
-function scaleBandMin(path: LinePath, instanceIndex: number): number {
-  return path.scaleBands?.[instanceIndex * SCALE_BAND_STRIDE] ?? 0;
-}
-
-function scaleBandMax(path: LinePath, instanceIndex: number): number {
-  return path.scaleBands?.[instanceIndex * SCALE_BAND_STRIDE + 1] ?? Infinity;
 }
 
 /** The subset of a label record this packing reads. */
@@ -87,11 +67,11 @@ export type LinePath = {
   /** Floats per anchor — twice the sample count. */
   stride: number;
   /** Per-anchor `(metres between samples, metres of real line either side)`. */
-  meta: Float32Array<ArrayBufferLike> | null;
+  meta: Float32Array<ArrayBufferLike>;
   /** Per-anchor tangent bearing in degrees clockwise from north. */
-  bearings: Float32Array<ArrayBufferLike> | null;
+  bearings: Float32Array<ArrayBufferLike>;
   /** Per-anchor scale band, {@link SCALE_BAND_STRIDE} floats each. */
-  scaleBands: Float32Array<ArrayBufferLike> | null;
+  scaleBands: Float32Array<ArrayBufferLike>;
 };
 
 export type LinePlacementOptions = {
@@ -144,6 +124,7 @@ export function packLineLabelFits(
   for (let i = 0; i < labels.length; i++) {
     const label = labels[i];
     const o = i * LINE_LABEL_FIT_STRIDE;
+    const band = label.instanceIndex * SCALE_BAND_STRIDE;
     out[o] = label.anchor[0];
     out[o + 1] = label.anchor[1];
     out[o + 2] = label.anchor[2];
@@ -152,8 +133,8 @@ export function packLineLabelFits(
     out[o + 5] = label.fontSize;
     out[o + 6] = metric;
     out[o + 7] = usableHalfExtentMeters(path, label.instanceIndex);
-    out[o + 8] = scaleBandMin(path, label.instanceIndex);
-    out[o + 9] = scaleBandMax(path, label.instanceIndex);
+    out[o + 8] = path.scaleBands[band];
+    out[o + 9] = path.scaleBands[band + 1];
     out[o + 10] = label.widthEm;
   }
   return out;
@@ -173,14 +154,13 @@ export function packLineLabels(
   const stride = path.stride;
   const out = new Float64Array(n * LINE_LABEL_STRIDE);
   const paths = new Float32Array(n * stride);
-  const samples = path.samples;
-  const meta = path.meta;
-  const bearings = path.bearings;
+  const { samples, meta, bearings, scaleBands } = path;
   const maxAngleRad = MathUtils.degToRad(options.maxAngleDeg);
 
   for (let i = 0; i < n; i++) {
     const label = labels[i];
     const o = i * LINE_LABEL_STRIDE;
+    const band = label.instanceIndex * SCALE_BAND_STRIDE;
     out[o] = label.anchor[0];
     out[o + 1] = label.anchor[1];
     out[o + 2] = label.anchor[2];
@@ -190,9 +170,9 @@ export function packLineLabels(
     out[o + 6] = options.sizeInMeters ? 1 : 0;
     out[o + 7] = maxAngleRad;
     out[o + 8] = options.keepUpright ? 1 : 0;
-    out[o + 9] = meta?.[label.instanceIndex * PATH_META_STRIDE] ?? 0;
+    out[o + 9] = meta[label.instanceIndex * PATH_META_STRIDE];
     out[o + 10] = usableHalfExtentMeters(path, label.instanceIndex);
-    out[o + 11] = MathUtils.degToRad(bearings?.[label.instanceIndex] ?? 0);
+    out[o + 11] = MathUtils.degToRad(bearings[label.instanceIndex]);
     out[o + 12] = options.readFlip(label.slot) ? 1 : 0;
 
     // The unrotated collision box, in the font's own units. Computed here
@@ -210,8 +190,8 @@ export function packLineLabels(
     out[o + 16] = (label.maxYEm - cy * h) * label.fontSize;
     out[o + 17] = options.lineOffset;
     out[o + 18] = options.readFlatFacing(label.slot) ? 1 : 0;
-    out[o + 19] = scaleBandMin(path, label.instanceIndex);
-    out[o + 20] = scaleBandMax(path, label.instanceIndex);
+    out[o + 19] = scaleBands[band];
+    out[o + 20] = scaleBands[band + 1];
     out[o + 21] = label.widthEm;
     out[o + 22] = label.maxWordHalfEm * label.fontSize;
 
@@ -247,12 +227,15 @@ export function takeLinePath(
   } | null,
 ): LinePath | null {
   if (!info?.pathSamples || info.pathStride <= 0) return null;
+  const { pathMeta, bearings, scaleBands } = info;
+  // The engine sends a path only for anchors that also carry these.
+  invariant(pathMeta && bearings && scaleBands, "line path without its meta");
   return {
     samples: info.pathSamples,
     stride: info.pathStride,
-    meta: info.pathMeta,
-    bearings: info.bearings,
-    scaleBands: info.scaleBands,
+    meta: pathMeta,
+    bearings,
+    scaleBands,
   };
 }
 

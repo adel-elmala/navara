@@ -117,22 +117,11 @@ describe("usable half extent", () => {
       stride: SAMPLES * 2,
       meta,
       bearings: new Float32Array([0, 0, 0]),
-      scaleBands: null,
+      scaleBands: new Float32Array(SCALE_BAND_STRIDE * 3),
     };
 
     const fit = packLineLabelFits([label({ instanceIndex: 2 })], p, options);
     expect(fit[7]).toBeCloseTo(7, 5);
-  });
-
-  it("treats a missing meta array as no usable line", () => {
-    const p: LinePath = {
-      samples: new Float32Array(SAMPLES * 2),
-      stride: SAMPLES * 2,
-      meta: null,
-      bearings: null,
-      scaleBands: null,
-    };
-    expect(packLineLabelFits([label()], p, options)[7]).toBe(0);
   });
 });
 
@@ -345,11 +334,23 @@ describe("takeLinePath", () => {
     const lifted = takeLinePath({
       pathSamples: samples,
       pathStride: 4,
-      pathMeta: null,
-      bearings: null,
-      scaleBands: null,
+      pathMeta: new Float32Array(PATH_META_STRIDE),
+      bearings: new Float32Array(1),
+      scaleBands: new Float32Array(SCALE_BAND_STRIDE),
     });
     expect(lifted?.samples).toBe(samples);
     expect(lifted?.stride).toBe(4);
+  });
+
+  it("rejects a path that arrives without its meta", () => {
+    expect(() =>
+      takeLinePath({
+        pathSamples: new Float32Array(4),
+        pathStride: 4,
+        pathMeta: null,
+        bearings: null,
+        scaleBands: null,
+      }),
+    ).toThrow();
   });
 });

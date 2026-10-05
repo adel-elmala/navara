@@ -260,9 +260,12 @@ export class InstancedSpriteMesh
   }
 
   setActive(active: boolean) {
+    const activating = active && !this._active;
     this._active = active;
     this.updateVisibility();
-    this.ctx.declutter?.markDirty();
+    // Along-line anchors stay hidden until placed, and a hidden batch is never
+    // placed, so the swap must not wait out the throttle.
+    this.ctx.declutter?.markDirty(activating && this._scaleBands !== null);
   }
 
   /**
@@ -299,11 +302,7 @@ export class InstancedSpriteMesh
    * `collectDeclutterCandidates`. Runs at the placement pass's cadence,
    * before candidates are collected, whether or not this mesh declutters.
    */
-  placeLineLabels(
-    camera: PerspectiveCamera,
-    _widthPx: number,
-    heightPx: number,
-  ): void {
+  placeLineLabels(camera: PerspectiveCamera, heightPx: number): void {
     const bands = this._scaleBands;
     const bearings = this._bearings;
     const anchors = this._anchors;
@@ -1416,6 +1415,11 @@ export class InstancedSpriteMesh
     this._anchors = null;
     this._declutterTargets = null;
     this._declutterPriorityOverrides = null;
+    this._scaleBands = null;
+    this._bearings = null;
+    this._linePlacement = null;
+    this._outOfBand = null;
+    this._bandInput = new Float64Array(0);
     this._imageOverrides.clear();
     this._requestedImageUrls.clear();
   }

@@ -8,7 +8,7 @@ import { DefaultPlugin } from "@navaramap/three-default-plugin";
 import { TileJsonPlugin } from "@navaramap/three-plugins";
 import { Pane } from "tweakpane";
 
-import { VECTOR_DATASETS } from "../../../helpers/constants";
+import { OPEN_FREE_MAP_TILEJSON } from "../../../helpers/constants";
 import {
   googleFontsCssUrl,
   NOTO_SANS_ATTRIBUTION,
@@ -148,14 +148,14 @@ export const run = async (view: ThreeView) => {
   const basemap = await tileset.addSource({
     type: "raster-tile",
     url: "https://papers.reearth.land/styles/papers-dark/tilejson.json",
-    // url: TILE_DATASETS.eox.url,
   });
   view.addLayer({ type: "raster", source: basemap });
 
-  const planet = view.addSource({
+  // OpenFreeMap republishes the planet weekly; its TileJSON always points at
+  // the current build.
+  const planet = await tileset.addSource({
     type: "vector-tile",
-    url: VECTOR_DATASETS.openFreeMapPlanet.url,
-    maxZoom: 14,
+    url: OPEN_FREE_MAP_TILEJSON,
   });
 
   // Road geometry, for the labels to sit on.
@@ -187,20 +187,16 @@ export const run = async (view: ThreeView) => {
     spritesLayerFactory(view, planet),
   );
 
-  // The basemap credit is registered by TileJsonPlugin from the document, so
-  // only the sources added by hand are listed here.
-  view.attribution?.add([
-    VECTOR_DATASETS.openFreeMapPlanet,
-    NOTO_SANS_ATTRIBUTION,
-  ]);
+  // TileJsonPlugin registers both tile sources' credits from their documents.
+  view.attribution?.add([NOTO_SANS_ATTRIBUTION]);
 };
 
 /**
  * Build the label layer from the current `params`.
  *
  * `geometryTypes: ["line"]` opts the text appearance into line geometry;
- * `placement` then decides whether that means one label per vertex (the
- * historical behaviour) or labels spaced along the line.
+ * `placement` then decides whether that means one label per vertex or labels spaced
+ * along the line.
  *
  * Returned as a factory rather than a layer so the panel can rebuild it: the
  * options that decide where the anchors go are read when a tile is parsed, and
@@ -221,8 +217,8 @@ const labelsLayerFactory =
         maxAngle: params.maxAngle,
         keepUpright: params.keepUpright,
         lineOffset: params.lineOffset,
-        // Line placement always lays the label in the ground plane and takes its
-        // direction from the line, so `rotateWithCamera` has no effect here.
+        // Along a line the label takes its direction from the line, so
+        // `rotateWithCamera` and `rotation` have no effect here.
         textFacing: "flat",
         size: params.size,
         sizeInMeters: params.sizeInMeters,

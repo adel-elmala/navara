@@ -375,7 +375,8 @@ pub struct TransferablePointGeometry {
     /// `size` is the stride: two floats per sample.
     #[wasm_bindgen(getter_with_clone)]
     pub path_samples: Option<TransferableFloatAttribute>,
-    /// Per-anchor metres between adjacent path samples.
+    /// Per-anchor metres between adjacent path samples, then metres of real
+    /// line either side of the anchor.
     #[wasm_bindgen(getter_with_clone)]
     pub path_meta: Option<TransferableFloatAttribute>,
 }

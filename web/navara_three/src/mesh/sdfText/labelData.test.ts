@@ -178,7 +178,7 @@ describe("LabelDataTexture", () => {
 
   // `needsUpdate` is a write-only setter that bumps `version`, so the upload
   // request is only observable through the version counter.
-  it("flags the texture for upload on every write", () => {
+  it("flags the texture for upload on every write that changes it", () => {
     const store = new LabelDataTexture(4);
 
     let version = store.texture.version;
@@ -188,6 +188,10 @@ describe("LabelDataTexture", () => {
     version = store.texture.version;
     store.setComponent(0, LabelRow.STATE, 0, 1);
     expect(store.texture.version).toBeGreaterThan(version);
+
+    version = store.texture.version;
+    store.setComponent(0, LabelRow.STATE, 0, 1);
+    expect(store.texture.version).toBe(version);
 
     version = store.texture.version;
     store.clearSlot(0);

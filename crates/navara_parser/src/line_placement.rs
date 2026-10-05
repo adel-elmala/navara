@@ -144,7 +144,7 @@ pub const PATH_META_STRIDE: usize = 2;
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnchorPath {
     /// [`PATH_SAMPLES`] east/north metre offsets from the anchor.
-    pub samples: Vec<f32>,
+    pub samples: [f32; PATH_SAMPLES * 2],
     /// See [`PATH_META_STRIDE`].
     pub meta: [f32; PATH_META_STRIDE],
 }
@@ -189,43 +189,29 @@ impl<'a> LinePath<'a> {
         let first = self.cum[1..]
             .partition_point(|&c| c < clamped)
             .min(last_seg);
-        // Zero-length segments (repeated vertices) are skipped: a line opening
-        // with a duplicate would otherwise hand every query at its start that
-        // segment, whose tangent is undefined, and the extrapolation before the
-        // first anchor would run off in an arbitrary direction. Only a run of
-        // duplicates at `clamped == 0` can be found this way — any later
-        // zero-length segment ends where its predecessor did, so the search
-        // stops on the predecessor — and the line has positive length, so a
-        // real segment follows.
+        // Zero-length segments (repeated vertices) have no tangent, so they are
+        // skipped. Only a run of them at `clamped == 0` can be found this way —
+        // any later one ends where its predecessor did, so the search stops on
+        // the predecessor — and the line has positive length, so a real
+        // segment follows.
         let seg = (first..=last_seg)
             .find(|&i| self.cum[i + 1] > self.cum[i])
-            .unwrap_or(last_seg);
-        let len = self.cum[seg + 1] - self.cum[seg];
-        let t = if len > 0.0 {
-            (clamped - self.cum[seg]) / len
-        } else {
-            0.0
-        };
+            .expect("a line with length has a segment with length");
+        let t = (clamped - self.cum[seg]) / (self.cum[seg + 1] - self.cum[seg]);
         (seg, t)
     }
 
     /// Position and unit tangent at arc length `s`.
     ///
-    /// Past either end the path is **extrapolated** along that end's tangent
-    /// rather than clamped: a label longer than the line it sits on then runs
-    /// straight off the end, which reads correctly and — unlike a clamped,
-    /// zero-length end segment — never yields a degenerate tangent for the
-    /// shader to normalize.
+    /// Past either end the path is **extrapolated** along that end's tangent,
+    /// so a label longer than the line it sits on runs straight off the end and
+    /// the shader never sees a degenerate tangent.
     pub fn sample(&self, s: f64) -> ((f64, f64), (f64, f64)) {
         let (seg, t) = self.segment_at(s);
         let (a, b) = (self.verts[seg], self.verts[seg + 1]);
         let (dx, dy) = (b.0 - a.0, b.1 - a.1);
         let norm = dx.hypot(dy);
-        let tangent = if norm > 0.0 {
-            (dx / norm, dy / norm)
-        } else {
-            (1.0, 0.0)
-        };
+        let tangent = (dx / norm, dy / norm);
         // Zero whenever `s` is on the path, so this is a no-op for anchor queries.
         let overshoot = s - s.clamp(0.0, self.length());
         (
@@ -336,9 +322,10 @@ impl<'a> LinePath<'a> {
     /// east/north metre offsets from it, for a pattern `spacing` frame units
     /// apart — an anchor's [`LineAnchor::path_spacing`].
     ///
-    /// The two middle samples straddle the anchor half a step either side, and
-    /// from there each sample is the first point along the line a chord of
-    /// `step` away from its neighbour (see [`PATH_SAMPLES`]).
+    /// The sample before the middle sits a half-step chord behind the anchor,
+    /// and from there each sample is the first point along the line a chord of
+    /// `step` away from its neighbour (see [`PATH_SAMPLES`]), so on a straight
+    /// stretch the anchor lies midway between the two middle samples.
     ///
     /// Metres rather than frame units because glyph sizes are metric
     /// downstream, and relative to the anchor so the values stay small enough
@@ -346,7 +333,7 @@ impl<'a> LinePath<'a> {
     /// ECEF coordinate. `meters_per_unit` is the frame's ground scale at the
     /// anchor.
     pub fn anchor_path(&self, s: f64, spacing: f64, meters_per_unit: f64) -> AnchorPath {
-        let spacing = self.resolve_spacing(spacing);
+        debug_assert!(spacing.is_finite() && spacing > 0.0);
         let step = spacing * PATH_SPAN_SPACINGS / (PATH_SAMPLES - 1) as f64;
         let (origin, _) = self.sample(s);
         let mid = PATH_SAMPLES / 2;
@@ -358,12 +345,12 @@ impl<'a> LinePath<'a> {
         for k in (0..mid - 1).rev() {
             arcs[k] = self.chord_step(arcs[k + 1], step, false);
         }
-        let mut samples = Vec::with_capacity(PATH_SAMPLES * 2);
-        for arc in arcs {
+        let mut samples = [0.0; PATH_SAMPLES * 2];
+        for (k, arc) in arcs.into_iter().enumerate() {
             let (p, _) = self.sample(arc);
             // The frame's y grows southward, so north is the negated delta.
-            samples.push(((p.0 - origin.0) * meters_per_unit) as f32);
-            samples.push(((origin.1 - p.1) * meters_per_unit) as f32);
+            samples[k * 2] = ((p.0 - origin.0) * meters_per_unit) as f32;
+            samples[k * 2 + 1] = ((origin.1 - p.1) * meters_per_unit) as f32;
         }
         let half_extent = s.min(self.length() - s) * meters_per_unit;
         AnchorPath {
@@ -643,7 +630,7 @@ mod test {
     #[test]
     fn segment_at_skips_duplicates_anywhere_in_the_line() {
         // Duplicates in the middle and at the end, too: every query lands on a
-        // segment with length, and the binary search agrees with the old scan.
+        // segment with length.
         let verts = [
             (0.0, 0.0),
             (0.0, 0.0),
@@ -671,7 +658,7 @@ mod test {
             bearing: 90.0,
             scale_band: [1.0, 2.0],
             path: Some(AnchorPath {
-                samples: vec![1.0; PATH_SAMPLES * 2],
+                samples: [1.0; PATH_SAMPLES * 2],
                 meta: [2.0, 3.0],
             }),
         };
@@ -739,7 +726,7 @@ mod test {
         }
 
         // On a straight line chords and arcs agree: samples sit at
-        // (k - 15.5) steps either side of the anchor, as before.
+        // (k - 15.5) steps either side of the anchor.
         let verts = line_1000();
         let path = LinePath::new(&verts).unwrap();
         let p = path.anchor_path(500.0, 100.0, 1.0);
@@ -756,7 +743,6 @@ mod test {
         let verts = [(0.0, 0.0), (1000.0, 0.0)];
         let path = LinePath::new(&verts).unwrap();
         let p = path.anchor_path(500.0, 100.0, 2.0);
-        assert_eq!(p.samples.len(), PATH_SAMPLES * 2);
         let step = (100.0 * PATH_SPAN_SPACINGS / (PATH_SAMPLES - 1) as f64 * 2.0) as f32;
         assert!((p.meta[0] - step).abs() < 1e-4);
         // 500 frame units either side at 2 m each.

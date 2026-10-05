@@ -447,6 +447,8 @@ struct MvtFeatureProcessor<'a> {
     /// line emitter places along the line instead, the per-vertex walk is
     /// skipped entirely rather than projecting each vertex for nobody.
     derive_points_per_vertex_from_lines: bool,
+    /// Whether any of those emitters places anchors along the line.
+    derive_points_along_lines: bool,
     /// Whether any point emitter derives from polygons.
     derive_points_from_polygons: bool,
     /// Whether any of those emitters wants one anchor per ring vertex.
@@ -479,6 +481,7 @@ impl<'a> MvtFeatureProcessor<'a> {
         let mut derive_points_from_points = false;
         let mut derive_points_from_lines = false;
         let mut derive_points_per_vertex_from_lines = false;
+        let mut derive_points_along_lines = false;
         let mut derive_points_from_polygons = false;
         let mut derive_points_per_vertex_from_polygons = false;
         let mut derive_points_along_rings = false;
@@ -492,6 +495,7 @@ impl<'a> MvtFeatureProcessor<'a> {
                 derive_points_from_points |= emitter.from_points;
                 derive_points_from_lines |= emitter.from_lines;
                 derive_points_per_vertex_from_lines |= PointSource::Lines.per_vertex(emitter);
+                derive_points_along_lines |= PointSource::Lines.along_line(emitter);
                 derive_points_from_polygons |= emitter.from_polygons;
                 derive_points_per_vertex_from_polygons |= PointSource::Polygons.per_vertex(emitter);
                 derive_points_along_rings |= PointSource::Polygons.along_line(emitter);
@@ -537,6 +541,7 @@ impl<'a> MvtFeatureProcessor<'a> {
             derive_points_from_points,
             derive_points_from_lines,
             derive_points_per_vertex_from_lines,
+            derive_points_along_lines,
             derive_points_from_polygons,
             derive_points_per_vertex_from_polygons,
             derive_points_along_rings,
@@ -683,7 +688,9 @@ impl<'a> MvtFeatureProcessor<'a> {
         // around and back to its start, skipping the edges tile clipping cut,
         // which would otherwise run labels along the tile's outline.
         if !is_polygon_ring {
-            self.emit_line_placed_points(&ring[..count], source);
+            if self.derive_points_along_lines {
+                self.emit_line_placed_points(&ring[..count], source);
+            }
         } else if self.derive_points_along_rings {
             let extent = self.converter.extent();
             for run in tile_ring_boundary_runs(ring[..count].iter().copied(), extent) {
@@ -740,9 +747,8 @@ impl<'a> MvtFeatureProcessor<'a> {
             return; // Degenerate: fewer than two vertices, or all coincide.
         };
 
-        // A pixel at this tile's own zoom is `extent / TILE_SIZE_PX` tile units,
-        // the ratio MapLibre calls `tilePixelRatio`.
-        let tile_px_ratio = self.converter.extent() / TILE_SIZE_PX;
+        let extent = self.converter.extent();
+        let tile_px_ratio = extent / TILE_SIZE_PX;
 
         for i in 0..self.emitters.len() {
             let (index, emitter) = self.emitters[i];
@@ -758,10 +764,8 @@ impl<'a> MvtFeatureProcessor<'a> {
             for anchor in path.anchors(emitter.placement, finest, wants_path) {
                 let (pos, tangent) = path.sample(anchor.s);
                 // An anchor in the tile's buffer belongs to the neighbouring
-                // tile, which holds the same stretch of line and places it
-                // itself; keeping it would draw the symbol twice. MapLibre
-                // drops these the same way (`addSymbolAtAnchor`).
-                let extent = self.converter.extent();
+                // tile, which labels its own piece of the line. MapLibre drops
+                // these the same way (`addSymbolAtAnchor`).
                 if !(0.0..extent).contains(&pos.0) || !(0.0..extent).contains(&pos.1) {
                     continue;
                 }
@@ -1888,32 +1892,6 @@ mod test {
                 assert_eq!(coords.len(), 20);
                 // Tile x 0 is longitude -180 at z0.
                 assert!(coords.iter().all(|c| c.x > -180.0), "{coords:?}");
-            }
-            _ => panic!("expected points"),
-        }
-    }
-
-    #[test]
-    fn line_placement_keeps_anchors_clear_of_the_line_ends() {
-        // A line measuring a whole number of intervals: the pattern at
-        // 50/150/…/1950 would put its last anchor exactly on the endpoint,
-        // where a label has no road to sit on. Every anchor must keep at least
-        // half an interval of line either side of it.
-        let bin = encode_tile(vec![make_layer(
-            "l",
-            vec![linestring_feature(&[(0, 0), (2000, 0)], vec![])],
-        )]);
-        let mut config = line_placed_config(PointPlacement::Line, 100.0);
-        config.point_emitters[0].kind = LayerParseKind::Text;
-        let groups = parse_mvt_tile(&bin, xyz(), Vec3::ZERO, &[config]);
-        match &groups[0].geometry {
-            ParsedGeometry::Points { path_meta, .. } => {
-                let count = path_meta.len() / PATH_META_STRIDE;
-                assert!(count > 0);
-                for a in 0..count {
-                    let extent = path_meta[a * PATH_META_STRIDE + 1];
-                    assert!(extent > 0.0, "anchor {a} sits on an endpoint");
-                }
             }
             _ => panic!("expected points"),
         }

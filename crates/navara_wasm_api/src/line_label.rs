@@ -1,11 +1,9 @@
 //! Pure numeric kernel for placing text labels along a line.
 //!
-//! Sibling of [`crate::declutter`], and split from TypeScript for the same
-//! reason: everything here is a CPU mirror of what `sdfText.vert.glsl` does
-//! with the same data, and that mirror already exists on this side of the
-//! boundary. Doing it in TypeScript would mean a third copy of `nvr_pxToWorld`.
+//! Sibling of [`crate::declutter`]: everything here is a CPU mirror of what
+//! `sdfText.vert.glsl` does with the same data.
 //!
-//! Three decisions per label, all of which depend on the camera and so cannot
+//! Four decisions per label, all of which depend on the camera and so cannot
 //! be baked when the tile is parsed:
 //!
 //! - **flip** — whether to walk the label's path backwards, so a name never
@@ -73,15 +71,13 @@
 //!
 //! The fit test needs no path samples at all — only the anchor, the label's
 //! width, the length of line under it and its scale band — while the samples
-//! are by far the
-//! largest thing crossing the boundary (32 points per label against 17
-//! scalars). On a dense city view roughly four labels in five are rejected for
-//! fit, so sending every label's path and then discarding most of the work is
-//! the wrong order.
+//! are by far the largest thing crossing the boundary. Most labels on a dense
+//! view fail that test, so sending every label's path first would waste most
+//! of the transfer.
 //!
 //! [`line_label_fit`] therefore runs that test alone over a compact input, and
 //! the caller packs paths only for the labels that survive it. Both phases go
-//! through the same [`fit_lengths`], so they cannot disagree about how long a
+//! through the same [`fits`], so they cannot disagree about how long a
 //! label is; [`line_label_place`] repeats the test rather than trusting its
 //! caller, which keeps it correct on its own and lets it be called with every
 //! label when the split is not worth it.
@@ -161,12 +157,11 @@ const FLIP_HYSTERESIS: f64 = 0.08;
 ///
 /// `labels` is a packed `f64` slice of `n * LINE_LABEL_STRIDE` values (see the
 /// module docs); `paths` holds each label's samples as `2 * samples` `f32`
-/// values, east then north metres relative to its anchor. `view` and `proj` are
-/// column-major 4x4 matrices.
+/// values, east then north metres relative to its anchor. `view` is a
+/// column-major 4x4 matrix.
 ///
-/// Returns `n * LINE_LABEL_RESULT_STRIDE` values per label, in input order; see
+/// Returns [`LINE_LABEL_RESULT_STRIDE`] values per label, in input order; see
 /// the module docs for the layout. `spacing_px` is the layer's `spacing`.
-#[allow(clippy::too_many_arguments)]
 #[wasm_bindgen(js_name = lineLabelPlace)]
 pub fn line_label_place(
     labels: &[f64],
@@ -182,28 +177,19 @@ pub fn line_label_place(
         height_px,
         fov_rad,
     };
-    let n = labels.len() / LINE_LABEL_STRIDE;
-    let mut out = vec![0.0; n * LINE_LABEL_RESULT_STRIDE];
-    if samples_per_label < 2 {
-        return out;
-    }
+    debug_assert!(samples_per_label >= 2);
+    let rows = labels.as_chunks::<LINE_LABEL_STRIDE>().0;
+    let mut out = Vec::with_capacity(rows.len() * LINE_LABEL_RESULT_STRIDE);
+    let mut turns = Vec::with_capacity(samples_per_label);
 
-    for i in 0..n {
-        let l = &labels[i * LINE_LABEL_STRIDE..(i + 1) * LINE_LABEL_STRIDE];
-        let path = &paths[i * samples_per_label * 2..(i + 1) * samples_per_label * 2];
-
-        let (reach, half_extent, meters_per_em) = fit_lengths(l, l[10], &cam);
+    for (l, path) in rows.iter().zip(paths.chunks_exact(samples_per_label * 2)) {
         let m = meters_per_px((l[0], l[1], l[2]), l[3], &cam);
-        let shown = in_scale_band(m, (l[19], l[20]), label_length(l, l[21]), spacing_px);
+        let meters_per_unit = meters_per_font_unit(l, m);
+        let meters_per_em = l[5] * meters_per_unit;
 
         // The arc the text actually covers, in metres along the path from the
         // anchor. The box's baseline extent is exactly that in font units, and
         // walking the path backwards mirrors it.
-        let meters_per_unit = if l[5] > 0.0 {
-            meters_per_em / l[5]
-        } else {
-            0.0
-        };
         let (x0, x1) = (l[13] * meters_per_unit, l[14] * meters_per_unit);
 
         let axes = enu_screen_axes(l, view);
@@ -222,25 +208,32 @@ pub fn line_label_place(
         // The fit test is repeated here rather than trusted from phase one, so
         // this stays correct when called with labels that never went through
         // it.
-        let rejected = !shown
-            || reach <= 0.0
-            || reach > half_extent
-            || exceeds_max_angle(path, samples_per_label, l[9], arc, meters_per_em, l[7]);
+        let rejected = !fits(l, m, l[10], (l[19], l[20]), l[21], spacing_px)
+            || exceeds_max_angle(
+                path,
+                samples_per_label,
+                l[9],
+                arc,
+                meters_per_em,
+                l[7],
+                &mut turns,
+            );
 
-        let o = i * LINE_LABEL_RESULT_STRIDE;
-        out[o] = if flip { 1.0 } else { 0.0 };
-        out[o + 1] = if rejected { 1.0 } else { 0.0 };
-        let (bx0, bx1, by0, by1) = if meters_per_unit > 0.0 && l[9] > 0.0 {
-            path_box(l, path, samples_per_label, axes, flip, meters_per_unit)
+        // A rejected label's box is never read; its flip still is, for hysteresis.
+        let (bx0, bx1, by0, by1) = if rejected {
+            (0.0, 0.0, 0.0, 0.0)
         } else {
-            let d = if flip { -1.0 } else { 1.0 };
-            rotated_box(l[13], l[14], l[15], l[16], sx * d, sy * d)
+            path_box(l, path, samples_per_label, axes, flip, meters_per_unit)
         };
-        out[o + 2] = bx0;
-        out[o + 3] = bx1;
-        out[o + 4] = by0;
-        out[o + 5] = by1;
-        out[o + 6] = m;
+        out.extend_from_slice(&[
+            if flip { 1.0 } else { 0.0 },
+            if rejected { 1.0 } else { 0.0 },
+            bx0,
+            bx1,
+            by0,
+            by1,
+            m,
+        ]);
     }
 
     out
@@ -255,22 +248,11 @@ struct CameraView<'a> {
     fov_rad: f64,
 }
 
-/// Metres one em of the label spans on the ground.
-///
-/// Mirrors `sdfText.vert.glsl`'s `scaleFactor`: metres directly when the font
-/// size is metric, otherwise [`meters_per_px`] times the pixel size.
-fn em_to_meters(
-    anchor: (f64, f64, f64),
-    add_height: f64,
-    font_size: f64,
-    size_in_meters: bool,
-    cam: &CameraView<'_>,
-) -> f64 {
-    if size_in_meters {
-        font_size
-    } else {
-        font_size * meters_per_px(anchor, add_height, cam)
-    }
+/// Metres one unit of the font size spans on the ground, at an anchor where a
+/// pixel spans `m` metres: `sdfText.vert.glsl`'s `scaleFactor` per unit of
+/// size. `row` is either text layout, whose offset 6 is the size's unit.
+fn meters_per_font_unit(row: &[f64], m: f64) -> f64 {
+    if row[6] != 0.0 { 1.0 } else { m }
 }
 
 /// Ground metres one screen pixel spans at the anchor: `nvr_pxToWorld` at its
@@ -299,14 +281,6 @@ fn meters_per_px(anchor: (f64, f64, f64), add_height: f64, cam: &CameraView<'_>)
     (2.0 * (cam.fov_rad / 2.0).tan() * -vz) / cam.height_px
 }
 
-/// A symbol's extent along its line: `(length, in metres)`, the length in
-/// pixels unless the flag says metres. For text it is the label's full width,
-/// whichever side of the anchor it runs; `row` is either text layout, whose
-/// offsets 5–6 are the font size and its unit.
-fn label_length(row: &[f64], width_em: f64) -> (f64, bool) {
-    (width_em * row[5], row[6] != 0.0)
-}
-
 /// The ground spacing a symbol asks for, as metres per pixel, at an anchor
 /// where one pixel spans `m` metres.
 ///
@@ -331,18 +305,25 @@ fn in_scale_band(m: f64, (min, max): (f64, f64), length: (f64, bool), spacing_px
     m > 0.0 && min < r && r <= max
 }
 
-/// How far the label runs from its anchor along the line, and how much line
-/// it has either side.
+/// Whether a label's level is the one on screen and its text reaches no
+/// further along the line than the `half_extent` metres of line under it.
 ///
 /// The single place the fit test is defined, so [`line_label_fit`] and
-/// [`line_label_place`] cannot drift apart. `row` is either phase's packed row:
-/// offsets 0–6 are shared, which is what lets both read them in one place; the
-/// extent sits at a different offset in each, so it is passed in. Returns
-/// `(reach, half_extent, meters_per_em)`; the label fits when
-/// `0 < reach <= half_extent`.
-fn fit_lengths(row: &[f64], half_extent: f64, cam: &CameraView<'_>) -> (f64, f64, f64) {
-    let meters_per_em = em_to_meters((row[0], row[1], row[2]), row[3], row[5], row[6] != 0.0, cam);
-    (row[4] * meters_per_em, half_extent, meters_per_em)
+/// [`line_label_place`] cannot drift apart. `row` is either phase's packed row,
+/// whose offsets 0–6 are shared; the extent, band and width sit at different
+/// offsets in each, so they are passed in. `m` is [`meters_per_px`] at the
+/// anchor.
+fn fits(
+    row: &[f64],
+    m: f64,
+    half_extent: f64,
+    band: (f64, f64),
+    width_em: f64,
+    spacing_px: f64,
+) -> bool {
+    let reach = row[4] * row[5] * meters_per_font_unit(row, m);
+    let length = (width_em * row[5], row[6] != 0.0);
+    in_scale_band(m, band, length, spacing_px) && reach > 0.0 && reach <= half_extent
 }
 
 /// Whether a label is short enough to sit on its line, using nothing but the
@@ -363,16 +344,15 @@ pub fn line_label_fit(
         height_px,
         fov_rad,
     };
-    let n = labels.len() / LINE_LABEL_FIT_STRIDE;
-    let mut out = vec![0u8; n];
-    for i in 0..n {
-        let l = &labels[i * LINE_LABEL_FIT_STRIDE..(i + 1) * LINE_LABEL_FIT_STRIDE];
-        let (reach, half_extent, _) = fit_lengths(l, l[7], &cam);
-        let m = meters_per_px((l[0], l[1], l[2]), l[3], &cam);
-        let shown = in_scale_band(m, (l[8], l[9]), label_length(l, l[10]), spacing_px);
-        out[i] = u8::from(shown && reach > 0.0 && reach <= half_extent);
-    }
-    out
+    labels
+        .as_chunks::<LINE_LABEL_FIT_STRIDE>()
+        .0
+        .iter()
+        .map(|l| {
+            let m = meters_per_px((l[0], l[1], l[2]), l[3], &cam);
+            u8::from(fits(l, m, l[7], (l[8], l[9]), l[10], spacing_px))
+        })
+        .collect()
 }
 
 /// Place along-line anchors for meshes that lay no label along the line — a
@@ -496,13 +476,6 @@ impl ScreenAxes {
 fn enu_screen_axes(l: &[f64], view: &[f64]) -> ScreenAxes {
     let (x, y, z) = (l[0], l[1], l[2]);
     let len = (x * x + y * y + z * z).sqrt();
-    if len <= 0.0 {
-        return ScreenAxes {
-            east: (1.0, 0.0),
-            north: (0.0, 1.0),
-            up: (0.0, 0.0),
-        };
-    }
     let (nx, ny, nz) = (x / len, y / len, z / len);
 
     let (ex, ey) = (-ny, nx);
@@ -538,7 +511,7 @@ fn enu_screen_axes(l: &[f64], view: &[f64]) -> ScreenAxes {
 /// Measured as the chord across the label's own extent, so a road that curves
 /// under the label is judged by where the text actually starts and ends rather
 /// than by the tangent at its midpoint. Falls back to the anchor's bearing when
-/// the label has no length yet — a label whose text has not been shaped.
+/// that chord degenerates.
 fn screen_direction(
     l: &[f64],
     path: &[f32],
@@ -546,14 +519,7 @@ fn screen_direction(
     arc_meters: (f64, f64),
     axes: ScreenAxes,
 ) -> (f64, f64) {
-    let step = l[9];
-    let (first, last) = if step > 0.0 {
-        sample_range(samples, step, arc_meters)
-    } else {
-        // No step: every sample is the anchor, and the bearing below decides.
-        (0, samples - 1)
-    };
-
+    let (first, last) = sample_range(samples, l[9], arc_meters);
     let (mut de, mut dn) = (
         (path[last * 2] - path[first * 2]) as f64,
         (path[last * 2 + 1] - path[first * 2 + 1]) as f64,
@@ -588,23 +554,13 @@ fn screen_direction(
 ///
 /// The decision is asymmetric about zero so a label sitting on the boundary
 /// keeps whichever way it already faces rather than flipping back and forth as
-/// the camera drifts — the same failure `HYSTERESIS_PX` guards against in the
-/// declutter pass.
+/// the camera drifts — the same failure `HYSTERESIS_PX` in `DeclutterManager.ts`
+/// guards against.
 fn should_flip(sx: f64, sy: f64, currently_flipped: bool) -> bool {
-    // "Reads left to right, and bottom to top when it is too steep for that to
-    // mean anything" is a single half-plane test, not two rules with a handover
-    // between them: it keeps the label whenever its direction lies on the
-    // positive side of a line tilted `asin(VERTICAL_BAND)` off vertical.
-    //
-    // Writing it as the branch it looks like is what caused labels near
-    // vertical to flicker. That form picks *which component to test* from the
-    // current flip, so in the strip where the two branches disagree an
-    // unflipped label reads its neighbour's rule, flips, then reads its own
-    // rule and flips straight back. It happened to be stable in one pair of
-    // quadrants, which is why it survived earlier testing.
-    //
-    // As one continuous score the hysteresis is an ordinary deadband, and both
-    // states are self-confirming inside it.
+    // One half-plane test, tilted `asin(VERTICAL_BAND)` off vertical, rather
+    // than a branch on which component to test: a branch chosen from the
+    // current flip disagrees with itself near vertical and oscillates, while a
+    // single continuous score makes the hysteresis an ordinary deadband.
     let normal_x = (1.0 - VERTICAL_BAND * VERTICAL_BAND).sqrt();
     let score = sx * normal_x + sy * VERTICAL_BAND;
     let threshold = if currently_flipped {
@@ -613,25 +569,6 @@ fn should_flip(sx: f64, sy: f64, currently_flipped: bool) -> bool {
         -FLIP_HYSTERESIS
     };
     score < threshold
-}
-
-/// Screen-space AABB of the label's box once turned to run along `(dx, dy)`.
-///
-/// The declutter grid is axis-aligned, so a label that follows a north-south
-/// road has to be handed the box it actually covers: modelling it as the
-/// horizontal rectangle it would occupy unrotated over-claims across the road
-/// and, worse, under-claims along it — which is exactly where labels stack up
-/// and overlap.
-fn rotated_box(
-    min_x: f64,
-    max_x: f64,
-    min_y: f64,
-    max_y: f64,
-    dx: f64,
-    dy: f64,
-) -> (f64, f64, f64, f64) {
-    // The label's own +x maps to (dx, dy) and its +y to the perpendicular.
-    basis_box(min_x, max_x, min_y, max_y, (dx, dy), (-dy, dx))
 }
 
 /// Screen-space AABB of a local box laid out along `right` (its +x) and `up`
@@ -659,11 +596,9 @@ fn basis_box(
 
 /// Screen-space AABB of the label as the shader lays it along its path.
 ///
-/// [`rotated_box`] turns the whole label by one direction, which is exact on a
-/// straight road but not on the long gentle curves [`exceeds_max_angle`]
-/// deliberately accepts: there the glyphs bow away from the chord, and a box
-/// that misses them lets decluttering overlap two labels it thinks are apart.
-/// So the box is built the way the shader places glyphs instead.
+/// The declutter grid is axis-aligned, and on the gentle curves
+/// [`exceeds_max_angle`] accepts the glyphs bow away from the label's chord, so
+/// the box is built the way the shader places glyphs.
 ///
 /// The shader lays each word rigidly along the tangent of the segment its
 /// centre falls on, so a word does not follow the path past that segment's
@@ -787,9 +722,10 @@ fn sample_range(samples: usize, step_meters: f64, (lo, hi): (f64, f64)) -> (usiz
 ///
 /// The turn is accumulated over a sliding window rather than over the whole
 /// label: a long road that curves gently is perfectly readable even though its
-/// total bend is large, while a short sharp kink is not. Samples are uniform in
-/// arc length, so the window is a fixed number of samples and the sliding sum
-/// comes straight off a prefix sum.
+/// total bend is large, while a short sharp kink is not. Samples are a uniform
+/// chord apart, so the window is a fixed number of samples and the sliding sum
+/// comes straight off a prefix sum, built in `prefix` (scratch reused across
+/// labels).
 fn exceeds_max_angle(
     path: &[f32],
     samples: usize,
@@ -797,10 +733,8 @@ fn exceeds_max_angle(
     arc_meters: (f64, f64),
     meters_per_em: f64,
     max_angle_rad: f64,
+    prefix: &mut Vec<f64>,
 ) -> bool {
-    if step_meters <= 0.0 {
-        return false;
-    }
     // Zero means "straight only", so it has to survive as a limit rather than
     // switch the test off; a negative limit is no more permissive than that.
     // The tolerance absorbs the f32 noise on the samples of a straight road,
@@ -815,17 +749,19 @@ fn exceeds_max_angle(
     }
 
     // Turn at each interior sample, as a prefix sum over the covered range.
-    let mut prefix = vec![0.0f64; last - first];
+    prefix.clear();
+    prefix.push(0.0);
     for k in (first + 1)..last {
-        let turn = corner_angle(path, k);
-        prefix[k - first] = prefix[k - first - 1] + turn;
+        prefix.push(prefix[k - first - 1] + corner_angle(path, k));
     }
 
+    // At least two corners: the samples are uniform chords, so a polyline
+    // vertex falling between two samples splits its turn across both.
     let window_samples = ((ANGLE_WINDOW_EMS * meters_per_em) / step_meters)
         .ceil()
-        .max(1.0) as usize;
+        .max(2.0) as usize;
     if window_samples >= prefix.len() {
-        return *prefix.last().unwrap_or(&0.0) > limit;
+        return prefix[prefix.len() - 1] > limit;
     }
     for start in 0..(prefix.len() - window_samples) {
         if prefix[start + window_samples] - prefix[start] > limit {
@@ -843,12 +779,9 @@ fn corner_angle(path: &[f32], k: usize) -> f64 {
     let (cx, cy) = p(k + 1);
     let (ux, uy) = (bx - ax, by - ay);
     let (vx, vy) = (cx - bx, cy - by);
-    let (ul, vl) = (ux.hypot(uy), vx.hypot(vy));
-    if ul <= 0.0 || vl <= 0.0 {
-        return 0.0;
-    }
     // atan2 of the cross and dot products is stable where acos of the
-    // normalized dot loses precision near zero turn — which is most corners.
+    // normalized dot loses precision near zero turn — which is most corners —
+    // and is 0 for a zero-length segment.
     let cross = ux * vy - uy * vx;
     let dot = ux * vx + uy * vy;
     cross.atan2(dot).abs()
@@ -862,7 +795,7 @@ mod tests {
     /// with screen right = east and screen up = north.
     ///
     /// Column-major, so `v[col * 4 + row]`: row 0 is `(v[0], v[4], v[8])`, the
-    /// row `decide_flip` dots the tangent with. Putting east there is what makes
+    /// row `screen_direction` reads the east component from. Putting east there is what makes
     /// the flip test reduce to the sign of the tangent's easting.
     fn top_down_view(distance_m: f64) -> Vec<f64> {
         vec![
@@ -1237,6 +1170,30 @@ mod tests {
     }
 
     #[test]
+    fn a_corner_split_across_two_samples_still_counts_whole() {
+        // A right angle whose vertex falls midway between samples 15 and 16
+        // reads as two 45 deg turns. The 20 m step is longer than the 15 m
+        // angle window, which must still take both of them.
+        let mut l = label(std::f64::consts::FRAC_PI_2, true, false);
+        l[7] = std::f64::consts::FRAC_PI_4;
+        l[9] = 20.0;
+        let d = 20.0 / 2f64.sqrt();
+        let corner: Vec<f32> = (0..32)
+            .flat_map(|k| {
+                let k = k as f64;
+                let (e, n) = if k <= 15.0 {
+                    (-d - (15.0 - k) * 20.0, 0.0)
+                } else {
+                    (0.0, d + (k - 16.0) * 20.0)
+                };
+                [e as f32, n as f32]
+            })
+            .collect();
+        let out = line_label_place(&l, &corner, 32, &view(), 1000.0, 1.0, SPACING);
+        assert_eq!(out[1], 1.0);
+    }
+
+    #[test]
     fn labels_longer_than_their_line_are_rejected() {
         let mut l = label(std::f64::consts::FRAC_PI_2, true, false);
         // 4 ems at 10 m/em is 40 m long, so 15 m of road either side is not
@@ -1404,14 +1361,10 @@ mod tests {
 
     #[test]
     fn no_direction_makes_the_flip_oscillate() {
-        // The defect this guards: feed `should_flip` its own previous answer
-        // and it must settle. A direction where flipping makes the next pass
-        // un-flip, and vice versa, is a label that flickers between the two
-        // upright orientations for as long as the camera holds still.
-        //
-        // Swept over the whole circle rather than at a chosen direction,
-        // because the broken version was stable in half the quadrants — a
-        // single sample passed it for months.
+        // Fed its own previous answer, `should_flip` must settle: otherwise a
+        // label flickers between its two upright orientations while the camera
+        // holds still. Swept over the whole circle, since a broken rule can be
+        // stable in some quadrants only.
         let steps = 2000;
         for i in 0..steps {
             let theta = (i as f64 / steps as f64) * std::f64::consts::TAU;

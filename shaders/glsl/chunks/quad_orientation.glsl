@@ -2,6 +2,21 @@
 #define QUAD_ORIENTATION_GLSL
 
 /**
+ * The anchor's local east-north-up frame, in WORLD space.
+ *
+ * `cross(polar axis, normal)` vanishes at the poles, where every tangent
+ * direction is an equally valid "east"; ECEF +x is the fallback there.
+ */
+void nvr_enuBasis(vec3 worldPos, out vec3 east, out vec3 north, out vec3 up) {
+    vec3 nWorld = normalize(worldPos);
+    vec3 e = vec3(-nWorld.y, nWorld.x, 0.0);
+    float eLen = length(e);
+    east = eLen > 1e-6 ? e / eLen : vec3(1.0, 0.0, 0.0);
+    north = cross(nWorld, east);
+    up = nWorld;
+}
+
+/**
  * View-space basis an anchored quad (a text label, a sprite) is laid out in:
  * `right` spans the quad's local +x, `up` its local +y. A vertex is then
  * `mvPosition + vec4(localPos.x * right + localPos.y * up, 0.0)`.
@@ -20,25 +35,6 @@
  * `worldPos` is the anchor in ECEF meters; its normalized direction is the
  * surface normal, matching mvr_getMvHeightOffset's spherical approximation.
  */
-/**
- * The anchor's local east-north-up frame, in WORLD space.
- *
- * `cross(polar axis, normal)` vanishes at the poles, where every tangent
- * direction is an equally valid "east"; ECEF +x is the fallback there.
- *
- * The surface normal is the normalized anchor direction — the same spherical
- * approximation mvr_getMvHeightOffset uses, so height offsets and quad bases
- * cannot disagree about which way is up.
- */
-void nvr_enuBasis(vec3 worldPos, out vec3 east, out vec3 north, out vec3 up) {
-    vec3 nWorld = normalize(worldPos);
-    vec3 e = vec3(-nWorld.y, nWorld.x, 0.0);
-    float eLen = length(e);
-    east = eLen > 1e-6 ? e / eLen : vec3(1.0, 0.0, 0.0);
-    north = cross(nWorld, east);
-    up = nWorld;
-}
-
 void nvr_quadOrientation(
     vec3 worldPos,
     bool flatFacing,

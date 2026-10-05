@@ -133,6 +133,16 @@ describe("DeclutterManager", () => {
     ).toBe("ran");
   });
 
+  it("runs an immediate request inside the throttle window", () => {
+    const manager = new DeclutterManager(new StubKernel());
+    manager.register(new FakeParticipant([label({ handle: 0 })]));
+    const camera = makeCamera();
+
+    expect(manager.update(camera, 800, 600, 0)).toBe("ran");
+    manager.markDirty(true);
+    expect(manager.update(camera, 800, 600, 50)).toBe("ran");
+  });
+
   it("re-runs when the camera moves and stays idle when nothing changed", () => {
     const manager = new DeclutterManager(new StubKernel());
     const p = new FakeParticipant([label({ handle: 0 })]);

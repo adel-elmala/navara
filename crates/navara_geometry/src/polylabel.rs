@@ -8,8 +8,8 @@ use std::collections::BinaryHeap;
 /// `rings[0]` is the outer ring and the rest are holes, in any planar units;
 /// a ring may or may not repeat its first vertex. Unlike a centroid, the result
 /// is always inside the polygon, and away from narrow parts of it. A polygon
-/// with no area answers its bounding box's minimum corner; one with no vertices
-/// answers `None`.
+/// whose bounding box is no wider than `precision` answers its minimum corner;
+/// one with no vertices answers `None`.
 pub fn pole_of_inaccessibility<R: AsRef<[(f64, f64)]>>(
     rings: &[R],
     precision: f64,
@@ -21,8 +21,10 @@ pub fn pole_of_inaccessibility<R: AsRef<[(f64, f64)]>>(
         min = (min.0.min(x), min.1.min(y));
         max = (max.0.max(x), max.1.max(y));
     }
+    // A polygon narrower than `precision` would seed `long side / short side`
+    // cells for an answer no better than its corner.
     let cell_size = (max.0 - min.0).min(max.1 - min.1);
-    if cell_size == 0.0 {
+    if cell_size <= precision {
         return Some(min);
     }
 
@@ -214,6 +216,12 @@ mod test {
     fn polygon_without_area_answers_its_minimum_corner() {
         let line = vec![(1.0, 5.0), (4.0, 5.0), (1.0, 5.0)];
         assert_eq!(pole_of_inaccessibility(&[line], 0.01), Some((1.0, 5.0)));
+    }
+
+    #[test]
+    fn sliver_narrower_than_precision_answers_its_minimum_corner() {
+        let sliver = vec![(0.0, 0.0), (1000.0, 0.0), (1000.0, 1e-7), (0.0, 1e-7)];
+        assert_eq!(pole_of_inaccessibility(&[sliver], 1.0), Some((0.0, 0.0)));
     }
 
     #[test]

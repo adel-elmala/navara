@@ -52,7 +52,7 @@ vec4 nvr_readLabel(int slot, int row) {
 }
 
 #ifdef NVR_LINE_PLACEMENT
-// Each label's line, resampled at a uniform arc-length step as east/north
+// Each label's line, resampled a uniform straight-line step apart, as east/north
 // metre offsets from its anchor. Uniform spacing is the whole point: a glyph
 // finds its segment with one division instead of walking the path, so bending
 // costs two texel fetches rather than a loop. PATH_SAMPLES is injected as a

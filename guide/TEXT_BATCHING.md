@@ -1,8 +1,9 @@
 # Text Batching
 
 How `@navaramap/three` draws every text label in a tile-layer with a **single
-draw call**, and how a label can change its text without rebuilding the batch.
-For the placement pass that decides which of those labels stay visible, see
+draw call**, how a label can change its text without rebuilding the batch, and
+how a label is bent along a line ([Line placement](#line-placement)). For the
+placement pass that decides which of those labels stay visible, see
 [DECLUTTER.md](DECLUTTER.md); for the broader pipeline, see
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -30,16 +31,23 @@ knowing before touching either shader.
 ```mermaid
 flowchart LR
   subgraph U["Tier 1 · batch-wide<br/>uniforms"]
-    U1["outline width/color/opacity<br/>background color/border<br/>uCenter, uSizeInMeters, uOffsetDepth<br/>atlas samplers + sizes<br/>camera fov / screen height / far plane<br/>RTE eye split, RTC center<br/>nvr_uPickable"]
+    U1["outline width/color/opacity<br/>background color/border<br/>uCenter, uSizeInMeters, uOffsetDepth<br/>atlas samplers + sizes<br/>label + path samplers + sizes<br/>(uPathData, uPathTexSize), uLineOffset<br/>camera fov / screen height / far plane<br/>RTE eye split, RTC center<br/>nvr_uPickable"]
   end
   subgraph L["Tier 2 · per-label<br/>uLabelData texels"]
-    L1["anchor, fontSize, addHeight<br/>color, opacity<br/>text box metrics<br/>declutterHide, batchId, show"]
+    L1["anchor (RTE high/low)<br/>text box metrics<br/>declutterHide, batchId, show, batchIndex<br/>PATH: path run, step, flip, rejected"]
   end
   subgraph G["Tier 3 · per-glyph<br/>instanced attributes"]
-    G1["glyphOffset, glyphSize<br/>glyphUvRect, glyphKind<br/>labelIndex"]
+    G1["glyphOffset, glyphSize<br/>glyphUvRect, glyphKind<br/>labelIndex, glyphWordCenter"]
   end
   G -->|"labelIndex indexes into"| L
 ```
+
+Per-*feature* style — color, opacity, font size, height, orientation,
+rotation — is not in any of the three. It lives in the shared batch data
+texture, keyed by the feature index the label carries in `STATE.w` (see
+[BATCH_TEXTURE.md](BATCH_TEXTURE.md)); a feature can own several labels
+(MultiPoint, along-line repeats), so the label rows only hold what differs per
+anchor.
 
 **Tier 1** works because a batch is already keyed by `(font, quality)` and
 built from one material — these were never actually per-label. Text quality is
@@ -60,17 +68,18 @@ that the **vertex** shader reads with `texelFetch`
 
 | row | x | y | z | w |
 | --- | --- | --- | --- | --- |
-| 0 `POSITION_HIGH_SIZE` | anchor high .x | .y | .z | `fontSize` |
-| 1 `POSITION_LOW_HEIGHT` | anchor low .x | .y | .z | `addHeight` |
-| 2 `COLOR_OPACITY` | color.r | .g | .b | `opacity` |
-| 3 `BOX` | textWidth | textHeight | bgMinY | bgMaxY |
-| 4 `STATE` | declutterHide | batchId | show | *(reserved)* |
+| 0 `POSITION_HIGH` | anchor high .x | .y | .z | *(reserved)* |
+| 1 `POSITION_LOW` | anchor low .x | .y | .z | *(reserved)* |
+| 2 `BOX` | textWidth | textHeight | bgMinY | bgMaxY |
+| 3 `STATE` | declutterHide | batchId | show | batchIndex |
+| 4 `PATH` | first texel of the path run | metres between samples | flip | rejected |
 
 Rows 0–1 carry the RTE high/low anchor split (see
 [RTC_VS_RTE.md](RTC_VS_RTE.md)); in RTC mode row 0 holds the tile-relative
 position and row 1's `xyz` is unused. The layout is identical across both so
-the shader's row indices never branch. The anchor only needs `xyz`, so the
-leftover `w` channels absorb two scalars at no cost.
+the shader's row indices never branch. `STATE.w` is the feature index into the
+batch data texture. `PATH` is all zero unless the label sits on a line (see
+[Line placement](#line-placement)).
 
 Addressing is a linear texel index over a **fixed-width** texture, mirroring
 `fogLight.frag.glsl`:
@@ -90,8 +99,12 @@ copied straight in.
 (`material/enhancer/sdfText/sdfTextBaseEnhancer/types.ts`), not with the
 texture, because they are a shader contract: the enhancer injects `LABEL_ROWS`
 as a GLSL define, so the CPU row table and the shader's stride cannot drift.
-`shader.test.ts` pins that, including that the rows form a dense `0..n-1`
-range.
+The individual row indices are restated in GLSL as `LABEL_ROW_*` defines;
+`shader.test.ts` pins those against `LabelRow`, and that the rows form a dense
+`0..n-1` range.
+
+`setComponent` skips a write whose value is already stored, so a placement
+pass that rewrites every label's unchanged decisions requests no upload.
 
 > **Why a texture rather than replicating per-label values onto every glyph
 > attribute?** Both render identically, but replication makes a per-label
@@ -280,19 +293,142 @@ Two consequences worth knowing:
   tests the anchor). An upright camera-following quad never presents a back
   face, and `screenSpaceNormal()` in both fragment shaders already flips an
   away-facing normal before it reaches the G-buffer.
-- **Declutter still measures a screen-aligned box.** The Rust kernel projects
-  the anchor and scales the label's em box by pixels-per-meter
-  (`crates/navara_wasm_api/src/declutter.rs`), which ignores the foreshortening
-  and rotation a flat label picks up. The box is therefore an over-estimate for
-  `textFacing: "flat"` — conservative (it hides slightly more than it must),
-  never an under-estimate.
+- **A point label's declutter box is its unrotated block.** The Rust kernel
+  projects the anchor and scales the label's em box by pixels-per-meter
+  (`crates/navara_wasm_api/src/declutter.rs`), ignoring the basis above. That
+  over-estimates a foreshortened flat or frozen label, which is conservative,
+  but does not follow `rotation`: a rotated label can overrun its box. Line
+  labels are the exception — the line-placement pass hands declutter the
+  rotated box they actually cover (see [Line placement](#line-placement)).
+
+### Along a line
+
+A label with a non-zero `PATH.y` skips `nvr_quadBasis` entirely. Its basis
+comes from the line under each **word**, not from the camera, so `rotation` and
+`rotateWithCamera` do not apply; facing still picks the plane:
+
+| facing | right | up |
+| --- | --- | --- |
+| upright | path tangent | surface normal |
+| flat | path tangent | ground normal (tangent turned 90° left) |
+
+The walk is word-rigid. `glyphWordCenter` (the centre of the glyph's word, in
+ems, identical for every glyph in the word; filled by `layout.ts`, which closes
+a word only at shaper whitespace) gives an arc length `s` from the anchor,
+negated when `PATH.z` flips the label. Samples are a uniform `step` apart, so
+the segment is `floor((s + halfSpan) / step)`: two texel fetches, no loop. The
+interpolated point plus `uLineOffset` along the ground normal places the word;
+its glyphs are then laid along that one segment's tangent from the word's
+centre. Per-glyph tangents would splay the letters of a word apart on a tight
+bend, and quads are never bent per vertex.
+
+For a flat label the path offset and the glyph's offset within its word are
+summed and wrapped **once** by `nvr_wrapOffset` (the wrap step of
+`nvr_quadOffset` on its own). Wrapping them separately and adding the results
+would leave the path part planar, rising off the globe with its length.
+
+Along-line labels draw no background. A bent ribbon cannot be expressed as
+quads, so `BACKGROUND` instances are culled when `PATH.y > 0`. A plain point
+sharing the batch (`geometryTypes: ["point", "line"]`) has `PATH.y == 0` and
+lays out as an ordinary label, background and all.
+
+Sprites placed along a line take a different route through the same chunk:
+the line's bearing arrives as the per-instance `instanceBearing` attribute
+(`USE_INSTANCE_BEARING`) and is added to the rotation `nvr_quadBasis` spins by.
+
+## Line placement
+
+With `placement: "line" | "line-center"`, a label is laid along the line its
+anchor was placed on (MapLibre's `symbol-placement`). The work is split by when
+each answer can be known.
+
+**Parse time** (`crates/navara_parser/src/line_placement.rs`, called from the
+MVT and GeoJSON parsers). `LinePath::anchors` places anchors at **nested
+levels**: level `l` repeats every `finest · 2^l` along the line, centred on its
+midpoint, and each level's positions are a subset of the finer one's, so
+zooming out only drops anchors, never moves them. The midpoint belongs to
+every level and is the only anchor of `line-center`. Each anchor carries a
+**scale band**, the `(min, max]` ground metres per pixel over which its level
+is the one shown, so the on-screen gap stays between one and two `spacing`.
+Text anchors are *banded*: a position gets one anchor per level it belongs to
+(its "stack-mates", adjacent instances with an identical anchor), each with a
+path sized for its own level. Each text anchor also carries `PATH_SAMPLES`
+(32) east/north metre offsets from the anchor, neighbours a uniform straight
+**chord** `step` apart across twice its level's spacing and extrapolated past the
+line's ends, plus `(step, metres of real line either side)`. Plain points in
+the same group get a zero step and an always-shown band.
+
+**Upload.** The path texture (`uPathData`) is a second `LabelDataTexture` with
+`PATH_SAMPLES / 2` texels per slot (two samples per RGBA texel) and 64 labels
+per row. A label's own slot addresses its path run, so there is no second
+allocator; `PATH.x` is that run's first texel. `NVR_LINE_PLACEMENT` and
+`PATH_SAMPLES` are injected as defines only when the engine actually sent a
+path, derived from the data's stride, and both are part of the program cache
+key. The batch keeps the path (`_path`) apart from its positions, since a
+terrain-height update re-sends positions without it. The `spacing` the bands
+were built for is fixed per batch.
+
+**Per pass** (`placeLineLabels`, called by `DeclutterManager` before it
+collects candidates, whether or not the layer declutters; see
+[DECLUTTER.md](DECLUTTER.md)). Only along-line labels that could become
+declutter candidates (visible batch, shown, shaped text) are judged; this
+filter relies on the same dirty-marking as `collectDeclutterCandidates`, so the
+two predicates must stay identical. The Rust
+kernel (`crates/navara_wasm_api/src/line_label.rs`) mirrors the vertex shader's
+sizing and runs in two phases:
+
+1. `lineLabelFit`, over a compact row with no path samples: the anchor's level
+   must be the one on screen (the requested spacing stretches when the label is
+   longer than about ¾ of `spacing`, as MapLibre does), and the text's reach
+   from the anchor must fit within the real line and the sampled span. Most
+   labels on a dense view fail here, so their paths never cross the boundary.
+2. `lineLabelPlace`, for the survivors with their paths: the flip, the
+   `maxAngle` test (the turn summed over a sliding window of about 1.5 em must
+   stay under the limit), and the rotated screen-axis box (`path_box`, built
+   segment by segment the way the shader places words, in the font size's
+   units around the anchor). It repeats the fit test rather than trusting
+   phase one.
+
+Then `findRepeatedLabels` (in `linePlacement.ts`) drops a label whose text
+already has an accepted anchor in the batch closer than half the spacing,
+keeping the first in anchor order. It runs last, so a label rejected for its
+angle cannot have hidden its neighbour first. Results land in `PATH.z` / `.w`
+and in `_lineBoxes`, which `collectDeclutterCandidates` uses in place of the
+unrotated block.
+
+Invariants that keep this flicker-free:
+
+- **Culled until placed.** `_writePath` writes `PATH.w = 1`, because an
+  unjudged label has no flip yet and would read backwards for a frame. Hiding
+  a label (`_recomputeShow`) sets it back to 1, since a hidden label is not
+  placed and its last decision is stale by the time it shows again. A rejected
+  label is *culled* in the
+  shader, not faded: it is not a contest a pixel of drift could win back. An
+  invisible batch is never placed, so `setActive` on a batch with a path calls
+  `declutter.markDirty(true)` to lift the throttle.
+- **Flip hysteresis.** `should_flip` scores the on-screen reading direction
+  against a half-plane tilted slightly off vertical (a near-vertical label
+  reads bottom-to-top) with a deadband (`FLIP_HYSTERESIS`). The current flip
+  is read back from `PATH.z`, so a label on the boundary keeps its direction.
+- **Level handoff.** When a pass newly rejects a label, `_handOffLineLabel`
+  copies its declutter hide and target to the stack-mate this pass newly
+  accepted. Without the copy, every crossing of a level boundary would snap the
+  old label out and fade the new one in along every line on screen.
+- **Rejected labels are not incumbents.** The declutter pass never sees a
+  rejected label, so `_hideRejectedLineLabel` snaps its declutter state to
+  hidden. When it fits again it competes as a fresh candidate, not with a
+  stale "shown" claim.
+
+Sprites use the same anchors unbanded (one per position, shown up to its
+coarsest level, no path) and only the scale and box half of the kernel,
+`lineAnchorPlace`, from `InstancedSpriteMesh.placeLineLabels`.
 
 ## Picking
 
 `sdfText.frag.glsl` deliberately does **not** include
 `chunks/batch_definition.glsl`, which declares `nvr_uBatchId` as a uniform —
 that only works when one material draws one feature. The batch id instead
-travels per-label (row 4) into a `flat varying vBatchID`, the same approach
+travels per-label (`STATE.y`) into a `flat varying vBatchID`, the same approach
 `instancedSprite.frag.glsl` takes. `nvr_uPickable` stays a uniform because pick
 mode is batch-wide.
 
@@ -332,22 +468,26 @@ requires reading the instance count at the GL level, e.g. patching
   sparse `batchIndex → label` map. MVT tiles routinely carry thousands of
   features where only a handful get text; sizing eagerly to the anchor count
   would waste hundreds of KB per tile.
-- **A material update overwrites per-feature style.** `_applyUpdate` writes the
-  material's `color`/`opacity`/`size`/`height` to every label, clobbering
-  evaluator overrides. This predates batching and is preserved deliberately.
+- **A changed material field overwrites per-feature style.** Engine change
+  events re-send the whole material, so `_applyUpdate` compares against the
+  previous one and writes only the fields that actually changed to every
+  label, clobbering evaluator overrides for those fields alone.
 
 ## Key files
 
 | File | Role |
 | --- | --- |
-| `shaders/glsl/sdfText.vert.glsl` | `nvr_readLabel`, the `GLYPH_KIND_*` culls, RTE/RTC transform |
-| `shaders/glsl/chunks/quad_orientation.glsl` | `nvr_quadOrientation` / `nvr_quadBasis` — the orientation basis; `nvr_quadOffset` — the vertex offset, wrapped onto the globe when flat. Shared with instancedSprite |
+| `shaders/glsl/sdfText.vert.glsl` | `nvr_readLabel` / `nvr_readPath`, the `GLYPH_KIND_*` culls, RTE/RTC transform, the along-line word walk |
+| `shaders/glsl/chunks/quad_orientation.glsl` | `nvr_enuBasis`; `nvr_quadOrientation` / `nvr_quadBasis` — the orientation basis; `nvr_quadOffset` / `nvr_wrapOffset` — the vertex offset, wrapped onto the globe when flat. Shared with instancedSprite |
 | `shaders/glsl/sdfText.frag.glsl` | SDF/MTSDF and COLRv1 sampling, outline, background, pick encoding via `vBatchID` |
-| `web/navara_three/src/mesh/sdfText/batchedSdfText.ts` | `BatchedSdfTextMesh` — label records, the engine/evaluator API, declutter participation, atlas retain/release |
+| `web/navara_three/src/mesh/sdfText/batchedSdfText.ts` | `BatchedSdfTextMesh` — label records, the engine/evaluator API, declutter participation, `placeLineLabels`, atlas retain/release |
+| `web/navara_three/src/mesh/sdfText/linePlacement.ts` | Packing for `lineLabelFit` / `lineLabelPlace` (the stride contract with Rust), `takeLinePath`, `findRepeatedLabels` |
+| `crates/navara_wasm_api/src/line_label.rs` | The line-placement kernel: fit, flip, max angle, rotated box; `lineAnchorPlace` for sprites |
+| `crates/navara_parser/src/line_placement.rs` | Parse-time anchors: nested levels, scale bands, `PATH_SAMPLES` chord-sampled paths |
 | `web/navara_three/src/mesh/sdfText/glyphBuffers.ts` | Instance attributes, partial uploads, capacity growth, `GlyphKind` |
 | `web/navara_three/src/mesh/sdfText/glyphSlots.ts` | `GlyphSlotAllocator` — size classes, free lists, `realloc` |
-| `web/navara_three/src/mesh/sdfText/labelData.ts` | `LabelDataTexture` — addressing, writes, growth |
-| `web/navara_three/src/mesh/sdfText/layout.ts` | Pure layout: line breaking, RTL direction, shaping result → glyph quads |
+| `web/navara_three/src/mesh/sdfText/labelData.ts` | `LabelDataTexture` — addressing, writes, growth; also backs the path texture |
+| `web/navara_three/src/mesh/sdfText/layout.ts` | Pure layout: line breaking, RTL direction, shaping result → glyph quads, word centres |
 | `.../enhancer/sdfText/sdfTextBaseEnhancer/types.ts` | Batch-wide props/state/refs, plus `LabelRow` / `LABEL_ROWS` (the shader contract) |
 | `web/navara_three/src/event/features/text.ts` | Creates one batch per Rust `TextMesh` event |
 | `web/navara_three/src/mesh/sprite/instancedSprite.ts` | The sibling batched mesh; text follows its conventions |
