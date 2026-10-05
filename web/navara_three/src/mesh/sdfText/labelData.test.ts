@@ -19,13 +19,23 @@ describe("LabelDataTexture", () => {
     expect(dataOf(store).length).toBe(width * height * 4);
   });
 
+  // WebGL2 guarantees only 2048 texels per side.
+  const MIN_MAX_TEXTURE_SIZE = 2048;
+
+  it("stays under the GPU texture limit when grown to a large capacity", () => {
+    // Grown, not constructed: capacity doubling overshoots the request, and
+    // the overshoot is what used to push a narrow texture past the limit.
+    const store = new LabelDataTexture();
+    store.ensureCapacity(60_000);
+    expect(store.capacity).toBeGreaterThanOrEqual(60_000);
+    expect(store.size.y).toBeLessThanOrEqual(MIN_MAX_TEXTURE_SIZE);
+  });
+
   it("lays a wide slot out on a wide row", () => {
-    // The path texture: 16 texels a label. On the default row a 4096-row
-    // texture holds only 16k of them; on its own width it keeps the same
-    // linear addressing but grows ~16x more slowly.
+    // The path texture: 16 texels a label, with the same linear addressing.
     const store = new LabelDataTexture(100_000, 16, 1024);
     expect(store.size.x).toBe(1024);
-    expect(store.size.y).toBeLessThanOrEqual(4096);
+    expect(store.size.y).toBeLessThanOrEqual(MIN_MAX_TEXTURE_SIZE);
     expect(store.capacity).toBeGreaterThanOrEqual(100_000);
 
     store.setRow(70_000, 3, 1, 2, 3, 4);
@@ -100,9 +110,9 @@ describe("LabelDataTexture", () => {
     });
 
     // The allocation is padded out to whole texture rows, and that padding is
-    // usable space — 17 labels round up to 2 rows, which address 32. Growing
-    // at 18 would mean an allocate + copy + texture recreate (and a full GPU
-    // re-upload) while free slots were still sitting in the buffer.
+    // usable space. Growing at 18 would mean an allocate + copy + texture
+    // recreate (and a full GPU re-upload) while free slots were still sitting
+    // in the buffer.
     it("uses the row padding before growing", () => {
       const store = new LabelDataTexture(17);
       const before = store.texture;
@@ -140,10 +150,12 @@ describe("LabelDataTexture", () => {
       store.setRow(0, LabelRow.BOX, 1, 2, 3, 4);
       store.setRow(1, LabelRow.STATE, 5, 6, 7, 8);
       const before = store.texture;
+      // Past the padded capacity, which is larger than the 2 requested.
+      const target = store.capacity + 1;
 
-      expect(store.ensureCapacity(40)).toBe(true);
+      expect(store.ensureCapacity(target)).toBe(true);
       expect(store.texture).not.toBe(before);
-      expect(store.capacity).toBeGreaterThanOrEqual(40);
+      expect(store.capacity).toBeGreaterThanOrEqual(target);
 
       // Addresses are stable across a grow: the width is fixed, so only the
       // height changes and previously written texels keep their index.
@@ -151,15 +163,15 @@ describe("LabelDataTexture", () => {
       expect(store.getComponent(1, LabelRow.STATE, 3)).toBe(8);
 
       // ...and the new tail is addressable.
-      store.setRow(39, LabelRow.BOX, 11, 12, 13, 14);
-      expect(store.getComponent(39, LabelRow.BOX, 0)).toBe(11);
+      store.setRow(target - 1, LabelRow.BOX, 11, 12, 13, 14);
+      expect(store.getComponent(target - 1, LabelRow.BOX, 0)).toBe(11);
     });
 
     it("reports the grown dimensions through size", () => {
       const store = new LabelDataTexture(2);
       const heightBefore = store.size.y;
 
-      store.ensureCapacity(500);
+      expect(store.ensureCapacity(store.capacity + 1)).toBe(true);
 
       expect(store.size.y).toBeGreaterThan(heightBefore);
       expect(store.size.x).toBe(store.texture.image.width);
@@ -169,7 +181,7 @@ describe("LabelDataTexture", () => {
 
     it("keeps the highest addressable slot inside the buffer", () => {
       const store = new LabelDataTexture(3);
-      store.ensureCapacity(100);
+      expect(store.ensureCapacity(store.capacity + 1)).toBe(true);
 
       const last = texelIndex(store.capacity - 1, LABEL_ROWS - 1) * 4 + 3;
       expect(last).toBeLessThan(dataOf(store).length);

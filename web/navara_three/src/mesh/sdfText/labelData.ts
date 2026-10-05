@@ -17,9 +17,12 @@ export { LABEL_ROWS, LabelRow };
 /**
  * Default texels per texture row. Fixed per store so a capacity grow never
  * changes an existing label's address — only the height grows, and previously
- * written data stays valid after the copy.
+ * written data stays valid after the copy. Wide because the height is what
+ * grows and must stay under the GPU's texture size limit: at five texels a
+ * label and with capacity doubling, a 64-texel row passes 4096 rows before
+ * 60k labels.
  */
-const TEXTURE_WIDTH = 64;
+const TEXTURE_WIDTH = 1024;
 
 /** Labels a freshly-created store is sized for, before row padding. */
 const INITIAL_CAPACITY = 16;
@@ -73,8 +76,7 @@ export class LabelDataTexture {
    *   {@link LABEL_ROWS} for the per-label state texture; the path texture
    *   (`uPathData`) uses the same machinery with its own, much wider stride.
    * @param width Texels per row. The height is what grows, so a wide slot
-   *   needs a wide row to keep the height under the GPU's texture size limit:
-   *   at 64 texels a 16-texel path slot fits only four labels per row.
+   *   needs a wide row to keep the height under the GPU's texture size limit.
    */
   constructor(
     initialCapacity = INITIAL_CAPACITY,

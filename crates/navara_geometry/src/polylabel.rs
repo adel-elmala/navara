@@ -8,8 +8,8 @@ use std::collections::BinaryHeap;
 /// `rings[0]` is the outer ring and the rest are holes, in any planar units;
 /// a ring may or may not repeat its first vertex. Unlike a centroid, the result
 /// is always inside the polygon, and away from narrow parts of it. A polygon
-/// whose bounding box is no wider than `precision` answers its minimum corner;
-/// one with no vertices answers `None`.
+/// with no area answers its bounding box's minimum corner; one with no vertices
+/// answers `None`.
 pub fn pole_of_inaccessibility<R: AsRef<[(f64, f64)]>>(
     rings: &[R],
     precision: f64,
@@ -22,10 +22,10 @@ pub fn pole_of_inaccessibility<R: AsRef<[(f64, f64)]>>(
         max = (max.0.max(x), max.1.max(y));
     }
     // A polygon narrower than `precision` would seed `long side / short side`
-    // cells for an answer no better than its corner.
+    // cells, and any point inside it is within `precision` of the pole.
     let cell_size = (max.0 - min.0).min(max.1 - min.1);
     if cell_size <= precision {
-        return Some(min);
+        return Some(interior_point(rings).unwrap_or(min));
     }
 
     let cell = |x: f64, y: f64, half: f64| Cell::new(x, y, half, rings);
@@ -61,7 +61,53 @@ pub fn pole_of_inaccessibility<R: AsRef<[(f64, f64)]>>(
             queue.push(cell(c.x + dx * half, c.y + dy * half, half));
         }
     }
-    Some((best.x, best.y))
+    // Only within `precision` of the pole: where no inscribed circle is wider
+    // than that, the search can settle outside the polygon.
+    if best.distance > 0.0 {
+        return Some((best.x, best.y));
+    }
+    Some(interior_point(rings).unwrap_or(min))
+}
+
+/// A point strictly inside the polygon (even-odd over every ring, as
+/// [`signed_distance`] tests it), or `None` when it has no area.
+///
+/// The middle of the widest span a horizontal line cuts out of the polygon,
+/// with the line midway between two neighbouring vertex heights: it then
+/// passes through no vertex and along no edge, so every crossing is a clean
+/// one and the span between a crossing pair is inside.
+fn interior_point<R: AsRef<[(f64, f64)]>>(rings: &[R]) -> Option<(f64, f64)> {
+    let mut heights: Vec<f64> = rings
+        .iter()
+        .flat_map(|r| r.as_ref().iter().map(|p| p.1))
+        .collect();
+    heights.sort_by(f64::total_cmp);
+    heights.dedup();
+    let y = heights
+        .windows(2)
+        .max_by(|a, b| (a[1] - a[0]).total_cmp(&(b[1] - b[0])))
+        .map(|w| (w[0] + w[1]) * 0.5)?;
+
+    let mut crossings = Vec::new();
+    for ring in rings {
+        let ring = ring.as_ref();
+        let Some(&last) = ring.last() else { continue };
+        let mut b = last;
+        for &a in ring {
+            if (a.1 > y) != (b.1 > y) {
+                crossings.push((b.0 - a.0) * (y - a.1) / (b.1 - a.1) + a.0);
+            }
+            b = a;
+        }
+    }
+    crossings.sort_by(f64::total_cmp);
+    crossings
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .max_by(|a, b| (a[1] - a[0]).total_cmp(&(b[1] - b[0])))
+        .filter(|span| span[1] > span[0])
+        .map(|span| ((span[0] + span[1]) * 0.5, y))
 }
 
 /// A square of the search grid, ordered by the farthest a point inside it
@@ -219,9 +265,21 @@ mod test {
     }
 
     #[test]
-    fn sliver_narrower_than_precision_answers_its_minimum_corner() {
-        let sliver = vec![(0.0, 0.0), (1000.0, 0.0), (1000.0, 1e-7), (0.0, 1e-7)];
-        assert_eq!(pole_of_inaccessibility(&[sliver], 1.0), Some((0.0, 0.0)));
+    fn slivers_narrower_than_precision_label_inside() {
+        // Each one's bounding-box corner is outside it, or on its edge.
+        let cases: [Vec<Vec<(f64, f64)>>; 4] = [
+            // Narrower than precision across its bounding box.
+            vec![vec![(0.0, 0.5), (1000.0, 0.0), (1000.0, 0.5)]],
+            vec![vec![(0.0, 0.0), (1000.0, 0.0), (1000.0, 1e-7), (0.0, 1e-7)]],
+            // A wide bounding box around a thin diagonal: the search runs.
+            vec![vec![(0.0, 0.0), (1000.0, 999.5), (1000.0, 1000.0)]],
+            // A thin frame, whose centre is in its hole.
+            vec![square(0.0, 100.0), square(0.25, 99.75)],
+        ];
+        for rings in cases {
+            let p = pole_of_inaccessibility(&rings, 1.0).unwrap();
+            assert!(signed_distance(p, &rings) > 0.0, "{p:?} outside {rings:?}");
+        }
     }
 
     #[test]

@@ -91,9 +91,10 @@ vec4 nvr_readLabel(int slot, int row) {
 }
 ```
 
-The width is fixed (64 texels) precisely so growth only changes the height —
+The width is fixed (1024 texels) precisely so growth only changes the height —
 an existing label's address stays valid across a resize, and the old data is
-copied straight in.
+copied straight in. It is wide because that height must stay under the GPU's
+texture size limit, which WebGL2 only guarantees at 2048.
 
 `LabelRow` and `LABEL_ROWS` live with the **enhancer**
 (`material/enhancer/sdfText/sdfTextBaseEnhancer/types.ts`), not with the
