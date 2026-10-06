@@ -116,13 +116,13 @@ Attachment indices are **dynamic and packed** — three.js cannot express sparse
 MRT attachments, so enabled buffers are packed in a fixed order with no gaps
 and no placeholder textures:
 
-| attachment  | content                                                                                            | type               | when                      |
-| ----------- | -------------------------------------------------------------------------------------------------- | ------------------ | ------------------------- |
-| 0 `color`   | forward color (or albedo — see `lit`)                                                              | HalfFloat          | always                    |
-| 1 `normal`  | RG = octahedral view-space normal, B = metalness/reflectivity, A = roughness _(and blend factor!)_ | HalfFloat          | always                    |
-| packed next | `effectIds` — R = selective-effect bitmask                                                         | HalfFloat, Nearest | `buffers.selectiveEffect` |
-| packed next | `emissive` — RGB = HDR emissive                                                                    | HalfFloat          | `buffers.emissive`        |
-| packed next | `shadow` — R = shadow amount (0 = lit .. 1 = shadowed), G = albedo-output flag                     | UnsignedByte       | `buffers.shadow`          |
+| attachment  | content                                                                        | type               | when                      |
+| ----------- | ------------------------------------------------------------------------------ | ------------------ | ------------------------- |
+| 0 `color`   | forward color (or albedo — see `lit`)                                          | HalfFloat          | always                    |
+| 1 `normal`  | RG = octahedral view-space normal, B = F0, A = roughness _(and blend factor!)_ | HalfFloat          | always                    |
+| packed next | `effectIds` — R = selective-effect bitmask                                     | HalfFloat, Nearest | `buffers.selectiveEffect` |
+| packed next | `emissive` — RGB = HDR emissive                                                | HalfFloat          | `buffers.emissive`        |
+| packed next | `shadow` — R = shadow amount (0 = lit .. 1 = shadowed), G = albedo-output flag | UnsignedByte       | `buffers.shadow`          |
 
 Because indices shift, shader `layout(location = …)` values are delivered per
 material as defines (`GBUFFER_EFFECT_ID_LOCATION` etc.,
@@ -133,24 +133,27 @@ read `CustomRenderPass.textureIndex`, the `MRTPassEffectDesc` getters, or the
 disabled buffers. Fetch them **every frame** — a configuration change rebuilds
 the render target with new texture objects.
 
-**The normal buffer's B and A are not uniform quantities.** What lands there
-depends entirely on which material wrote the pixel, and nothing in the buffer
-says which:
+**The normal buffer's B is read as the reflectance at normal incidence (F0),
+and A as the roughness.** Writers store their material's own reflectance input
+there unconverted, so a model's metalness reaches readers as its F0 as is:
 
-| writer                                                               | B                                           | A                                                                  |
-| -------------------------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------ |
-| model / 3D Tiles glTF (`MeshStandard`/`Physical`)                    | real `metalnessFactor`                      | real `roughnessFactor`                                             |
-| polygon                                                              | `reflectivity` ref, **default 0**           | `roughness` ref, **default `GBUFFER_PHONG_ROUGHNESS`**             |
-| terrain tile, `useNormal` on                                         | `tileReflectivity`, **default 0**           | draped slot's roughness, **default `GBUFFER_PHONG_ROUGHNESS`**     |
-| terrain watermask ocean                                              | 0.02 (water's F0)                           | 0.4 (Cox-Munk wave slopes)                                         |
-| terrain tile, `useNormal` off (`MeshBasicMaterial`)                  | forced 0                                    | 1.0, and **RG is NaN** (no `normal` attribute)                     |
-| polyline, outline, sprite, SDF text, points, custom `ShaderMaterial` | 0                                           | 1.0                                                                |
-| any other Lambert/Basic/Phong                                        | `reflectivity` (three's default is **1.0**) | 1.0                                                                |
-| any `transparent` material                                           | unchanged                                   | **forced 1.0** (`NVR_BLENDED`)                                     |
+| writer                                                               | B                                                                        | A                                                              |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------ | -------------------------------------------------------------- |
+| model / 3D Tiles glTF (`MeshStandard`/`Physical`)                    | real `metalnessFactor`                                                   | real `roughnessFactor`                                         |
+| polygon                                                              | `reflectivity` ref, **default 0**                                        | `roughness` ref, **default `GBUFFER_PHONG_ROUGHNESS`**         |
+| terrain tile, `useNormal` on                                         | `tileReflectivity`, **default 0**                                        | draped slot's roughness, **default `GBUFFER_PHONG_ROUGHNESS`** |
+| terrain watermask ocean                                              | 0.02 (water's F0)                                                        | 0.4 (Cox-Munk wave slopes)                                     |
+| terrain tile, `useNormal` off (`MeshBasicMaterial`)                  | 0                                                                        | 1.0, and **RG is NaN** (no `normal` attribute)                 |
+| polyline, outline, sprite, SDF text, points, custom `ShaderMaterial` | 0                                                                        | 1.0                                                            |
+| any other Lambert/Basic/Phong                                        | 0 (three's `reflectivity` is an env-map weight, not an F0)               | 1.0                                                            |
+| any `transparent` material                                           | unchanged                                                                | **forced 1.0** (`NVR_BLENDED`)                                 |
 
-So B is readable only as _one reflectance_ behind a small "is this reflective
-at all" threshold, which is how `ssr.frag.glsl`, `coneTracing.frag.glsl` and
-the aerial perspective's specular term all use it.
+B is a scalar and nothing derives a dielectric's 0.04 or a metal's tint from
+it: metalness 0 does not reflect and 1 is an untinted mirror. B below 0.01
+means "not reflective"; `ssr.frag.glsl`, `coneTracing.frag.glsl` and the
+aerial perspective's specular term all skip it, and feed B into a Schlick
+Fresnel term otherwise. SSR also skips A = 1, where its roughness fade is
+already zero, so the default glTF roughness costs no rays.
 
 A can be read at face value, and 0 means a mirror. That holds only because
 every writer without a real roughness defaults to a meaningful one CPU-side:
