@@ -187,13 +187,7 @@ pub(crate) fn finalize_parsed_mvt(
                 layer_properties.push(props.into_shared_parts());
             }
 
-            // Parsed, so no longer pending even when nothing matched: the
-            // traversal reads `None` as "still parsing" and would keep the
-            // parent tile on screen in this one's place forever.
-            if let Ok(mut rt) = rendered_tiles.get_mut(ctx.rendered_tile) {
-                rt.feature_ids.get_or_insert_with(Vec::new);
-            }
-
+            let mut feature_ids = Vec::new();
             for header in meta.headers {
                 // Slice the group out even when no appearance matches: the
                 // cursor must advance past every group's segments.
@@ -219,7 +213,7 @@ pub(crate) fn finalize_parsed_mvt(
                     continue;
                 };
 
-                let entities = finalize_group(
+                feature_ids.extend(finalize_group(
                     &mut commands,
                     &mut batch_table,
                     &mut buf,
@@ -231,11 +225,15 @@ pub(crate) fn finalize_parsed_mvt(
                     rtc_center,
                     tile_info,
                     &ctx.order,
-                );
-
-                if let Ok(mut rt) = rendered_tiles.get_mut(ctx.rendered_tile) {
-                    rt.feature_ids.get_or_insert_with(Vec::new).extend(entities);
-                }
+                ));
+            }
+            // Recorded even when empty, as the synchronous path does: the
+            // traversal reads `None` as "still parsing" and would keep the
+            // parent tile on screen in this one's place forever.
+            if let Ok(mut rt) = rendered_tiles.get_mut(ctx.rendered_tile) {
+                rt.feature_ids
+                    .get_or_insert_with(Vec::new)
+                    .extend(feature_ids);
             }
 
             // Charge the freshly built geometry to the memory ledger on the
