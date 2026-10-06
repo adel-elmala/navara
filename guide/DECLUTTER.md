@@ -133,7 +133,7 @@ gated by `declutter`. Text batches call `lineLabelFit` then `lineLabelPlace`;
 sprites call `lineAnchorPlace`, which only picks the level and the box. The
 mechanics (nested levels, scale bands, the two-phase kernel, flip hysteresis,
 level handoff) are in
-[TEXT_BATCHING.md § Line placement](TEXT_BATCHING.md#line-placement).
+[LINE_PLACEMENT.md](LINE_PLACEMENT.md).
 
 ## 1. Candidates and participants
 
