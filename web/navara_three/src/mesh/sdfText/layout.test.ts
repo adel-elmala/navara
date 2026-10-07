@@ -1,16 +1,23 @@
 import {
   GlyphCharClass,
   type GlyphMetrics,
-  type ShapeTextResult,
   type ShapedGlyph,
+  type ShapeTextResult,
 } from "@navaramap/font";
 import { describe, expect, it } from "vitest";
 
-import { breakLines, buildLabelLayout, isRtlText, lineWidthFu } from "./layout";
+import {
+  allowsLetterSpacing,
+  breakLines,
+  buildLabelLayout,
+  isRtlText,
+  lineWidthFu,
+} from "./layout";
 
-/** Build a glyph run from a compact spec: one entry per glyph. */
+/** Build a glyph run from a compact spec: one entry per glyph. `cont` marks a
+ *  glyph continuing the previous glyph's shaping cluster. */
 function glyphs(
-  spec: { advance?: number; cls?: number }[],
+  spec: { advance?: number; cls?: number; cont?: boolean }[],
   defaultAdvance = 100,
 ): ShapedGlyph[] {
   return spec.map((s, i) => ({
@@ -22,6 +29,7 @@ function glyphs(
     xOffset: 0,
     yOffset: 0,
     charClass: s.cls ?? GlyphCharClass.Normal,
+    continuesCluster: s.cont ?? false,
   }));
 }
 
@@ -372,5 +380,136 @@ describe("buildLabelLayout word grouping", () => {
       spreadGlyphs: true,
     });
     expect(glyphs.maxWordHalfEm).toBeCloseTo(0.5, 5);
+  });
+});
+
+describe("letter spacing", () => {
+  describe("lineWidthFu", () => {
+    it("adds spacing between glyphs but not after the last", () => {
+      expect(lineWidthFu(fromText("abc"), 50)).toBe(400);
+    });
+
+    it("adds no spacing after trimmed trailing whitespace", () => {
+      expect(lineWidthFu(fromText("ab  "), 50)).toBe(250);
+    });
+
+    it("keeps glyphs of one cluster together", () => {
+      // base + zero-advance mark + next letter: one gap, not two.
+      const run = glyphs([{}, { advance: 0, cont: true }, {}]);
+      expect(lineWidthFu(run, 50)).toBe(250);
+    });
+
+    it("tightens with negative spacing", () => {
+      expect(lineWidthFu(fromText("abc"), -20)).toBe(260);
+    });
+  });
+
+  describe("breakLines", () => {
+    it("counts spacing toward the wrap width", () => {
+      // "aa bb" is exactly 500 without spacing; four gaps push it over.
+      expect(breakLines(fromText("aa bb"), 500, false, 0).length).toBe(1);
+      expect(breakLines(fromText("aa bb"), 500, false, 10).length).toBe(2);
+    });
+
+    it("measures RTL clusters the same as the final visual layout", () => {
+      // Logical "x ab" where `a` carries a mark. Visual (shaper) order is
+      // b, mark, base, space, x — the base continues the mark's cluster.
+      const visual = glyphs([
+        {}, // b
+        { advance: 0 }, // mark (cluster start in visual order)
+        { cont: true }, // base
+        { cls: GlyphCharClass.Whitespace },
+        {}, // x
+      ]);
+      // 400 advance + three inter-cluster gaps = 550: fits exactly.
+      const lines = breakLines(visual, 550, true, 50);
+      expect(lines.length).toBe(1);
+      expect(lineWidthFu(lines[0], 50)).toBe(550);
+    });
+  });
+
+  describe("allowsLetterSpacing", () => {
+    it("allows Latin, CJK and Hebrew", () => {
+      expect(allowsLetterSpacing("Main St")).toBe(true);
+      expect(allowsLetterSpacing("東京都")).toBe(true);
+      expect(allowsLetterSpacing("רחוב")).toBe(true);
+    });
+
+    it("disallows any Arabic-script text", () => {
+      expect(allowsLetterSpacing("شارع")).toBe(false);
+      expect(allowsLetterSpacing("Cafe شارع")).toBe(false);
+    });
+  });
+
+  describe("buildLabelLayout", () => {
+    /** Wrap a glyph run in a shaping result whose em is 1000 units and whose
+     *  glyphs all have a drawable 10×10 atlas rect with zero bearing, so a
+     *  quad's `offsetEmX` is exactly its pen position / 1000. */
+    function shaped(run: ShapedGlyph[]): ShapeTextResult {
+      return {
+        glyphs: run,
+        metrics: run.map((g) => ({
+          glyphId: g.glyphId,
+          fontIndex: 0,
+          compositeKey: g.compositeKey,
+          atlasX: 0,
+          atlasY: 0,
+          atlasW: 10,
+          atlasH: 10,
+          bearingX: 0,
+          bearingY: 0,
+          isColor: false,
+        })),
+        unitsPerEm: 1000,
+        ascender: 800,
+        descender: -200,
+        lineGap: 0,
+      };
+    }
+
+    const base = {
+      maxWidth: 0,
+      lineHeight: 1,
+      textAlign: 0,
+      spreadGlyphs: false,
+    };
+
+    it("widens the block by (n - 1) gaps", () => {
+      const run = shaped(fromText("abc"));
+      const plain = buildLabelLayout(run, { ...base, text: "abc" });
+      const spaced = buildLabelLayout(run, {
+        ...base,
+        text: "abc",
+        letterSpacing: 0.1,
+      });
+      expect(plain.widthEm).toBeCloseTo(0.3);
+      expect(spaced.widthEm).toBeCloseTo(0.5);
+      expect(spaced.quads.map((q) => q.offsetEmX)).toEqual([
+        expect.closeTo(0),
+        expect.closeTo(0.2),
+        expect.closeTo(0.4),
+      ]);
+    });
+
+    it("centers lines using the spaced widths", () => {
+      const layout = buildLabelLayout(shaped(fromText("ab\nabcd")), {
+        ...base,
+        text: "ab\nabcd",
+        textAlign: 0.5,
+        letterSpacing: 0.1,
+      });
+      // Block 0.7 em, short line 0.3 em: it starts 0.2 em in.
+      expect(layout.widthEm).toBeCloseTo(0.7);
+      expect(layout.quads[0].offsetEmX).toBeCloseTo(0.2);
+    });
+
+    it("ignores spacing for Arabic text", () => {
+      const layout = buildLabelLayout(shaped(fromText("abc")), {
+        ...base,
+        text: "شارع",
+        letterSpacing: 0.1,
+      });
+      expect(layout.widthEm).toBeCloseTo(0.3);
+    });
   });
 });

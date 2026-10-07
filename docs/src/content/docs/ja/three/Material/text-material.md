@@ -372,6 +372,24 @@ view.addFontFamily({
 }
 ```
 
+### letterSpacing
+
+**Type:** `number | undefined`
+
+**Description:** 文字間に追加する間隔を em 単位（`size` の倍数）で指定します。間隔は文字と文字の間にのみ追加され、最後の文字の後には追加されないため、揃え位置やアンカーには影響しません。また、[`maxWidth`](#maxwidth) による折り返し幅の計算にも含まれます。負の値を指定すると字間が詰まります。結合文字（アクセント記号など）は基底文字から離れません。アラビア文字を含むラベルでは、連結された字形が崩れるため間隔は無視されます。フィーチャー評価の `letterSpacing` キーで、フィーチャーごとに指定することもできます。
+
+**Default:** `0`
+
+**Example:**
+
+```typescript
+{
+  text: {
+    letterSpacing: 0.2 // 文字間に 0.2 em を追加
+  }
+}
+```
+
 ### lineHeight
 
 **Type:** `number | undefined`

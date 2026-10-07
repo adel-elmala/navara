@@ -840,6 +840,7 @@ export class MapLibreStylePlugin extends Plugin<ThreeView, ViewContext> {
           "text-field",
           "text-size",
           "text-font",
+          "text-letter-spacing",
           "text-anchor",
           "text-offset",
         ];

@@ -23,15 +23,37 @@ export const ALIGN_FACTORS: Record<string, number> = {
   right: 1,
 };
 
-/** Line width in font units: advances summed, trailing whitespace ignored so
- *  it never affects alignment or the block width. */
-export function lineWidthFu(line: ShapedGlyph[]): number {
+/**
+ * Letter spacing (font units) between two adjacent glyphs of a line: only at
+ * shaping-cluster boundaries, so marks stay on their base, and never before a
+ * line's first glyph (`prev` undefined) — trailing spacing can't arise either.
+ *
+ * `continuesCluster` refers to the shaper's (visual) order; when walking a
+ * reversed run (RTL wrapped in logical order) the flag that separates the
+ * pair sits on `prev` instead of `next`.
+ */
+function spacingBetween(
+  prev: ShapedGlyph | undefined,
+  next: ShapedGlyph,
+  spacingFu: number,
+  reversed = false,
+): number {
+  if (!prev || spacingFu === 0) return 0;
+  return (reversed ? prev : next).continuesCluster ? 0 : spacingFu;
+}
+
+/** Line width in font units: advances (plus letter spacing between clusters)
+ *  summed, trailing whitespace ignored so it never affects alignment or the
+ *  block width. */
+export function lineWidthFu(line: ShapedGlyph[], spacingFu = 0): number {
   let end = line.length;
   while (end > 0 && line[end - 1].charClass === GlyphCharClass.Whitespace) {
     end--;
   }
   let width = 0;
-  for (let i = 0; i < end; i++) width += line[i].xAdvance;
+  for (let i = 0; i < end; i++) {
+    width += spacingBetween(line[i - 1], line[i], spacingFu) + line[i].xAdvance;
+  }
   return width;
 }
 
@@ -53,11 +75,24 @@ export function isRtlText(text: string): boolean {
   return false;
 }
 
+/** Arabic, Arabic Supplement, Arabic Extended-A and the Arabic presentation
+ *  forms — the blocks MapLibre exempts from letter spacing. */
+const CURSIVE_ARABIC_RE =
+  /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/u;
+
+/** Whether letter spacing may be applied to `text`. Tracking pulls apart the
+ *  joined letterforms of cursive Arabic, so (like MapLibre) any Arabic
+ *  character disables it for the whole label. */
+export function allowsLetterSpacing(text: string): boolean {
+  return !CURSIVE_ARABIC_RE.test(text);
+}
+
 /**
  * Split a shaped glyph run into lines: hard breaks at newline markers, greedy
  * soft breaks at the last whitespace/ideographic glyph when a line would
  * exceed `maxWidthFu` (font units; 0 disables wrapping). A word longer than
- * the wrap width overflows rather than breaking mid-word.
+ * the wrap width overflows rather than breaking mid-word. `spacingFu` is the
+ * letter spacing between clusters, counted toward the wrap width.
  *
  * When `rtl` is set, glyphs are assumed to arrive in visual order (leftmost
  * first — how the shaper emits RTL runs), i.e. reversed logical order. Each
@@ -70,16 +105,17 @@ export function breakLines(
   glyphs: ShapedGlyph[],
   maxWidthFu: number,
   rtl = false,
+  spacingFu = 0,
 ): ShapedGlyph[][] {
   const lines: ShapedGlyph[][] = [];
 
   const pushSegment = (segment: ShapedGlyph[]) => {
     if (!rtl) {
-      lines.push(...wrapSegment(segment, maxWidthFu));
+      lines.push(...wrapSegment(segment, maxWidthFu, spacingFu, false));
       return;
     }
     segment.reverse();
-    for (const line of wrapSegment(segment, maxWidthFu)) {
+    for (const line of wrapSegment(segment, maxWidthFu, spacingFu, true)) {
       lines.push(line.reverse());
     }
   };
@@ -97,10 +133,13 @@ export function breakLines(
   return lines;
 }
 
-/** Greedy soft-wrap of a single hard-break-free segment in logical order. */
+/** Greedy soft-wrap of a single hard-break-free segment in logical order.
+ *  `reversed` marks a run flipped out of the shaper's visual order (RTL). */
 function wrapSegment(
   glyphs: ShapedGlyph[],
   maxWidthFu: number,
+  spacingFu: number,
+  reversed: boolean,
 ): ShapedGlyph[][] {
   const lines: ShapedGlyph[][] = [];
   let line: ShapedGlyph[] = [];
@@ -115,7 +154,10 @@ function wrapSegment(
       g.charClass !== GlyphCharClass.Whitespace &&
       line.length > 0 &&
       breakIdx >= 0 &&
-      width + g.xAdvance > maxWidthFu
+      width +
+        spacingBetween(line[line.length - 1], g, spacingFu, reversed) +
+        g.xAdvance >
+        maxWidthFu
     ) {
       const head = line.slice(0, breakIdx + 1);
       while (
@@ -133,12 +175,18 @@ function wrapSegment(
       line = start === -1 ? [] : tail.slice(start);
 
       width = 0;
-      for (const rest of line) width += rest.xAdvance;
+      for (let i = 0; i < line.length; i++) {
+        width +=
+          spacingBetween(line[i - 1], line[i], spacingFu, reversed) +
+          line[i].xAdvance;
+      }
       breakIdx = -1;
     }
 
+    width +=
+      spacingBetween(line[line.length - 1], g, spacingFu, reversed) +
+      g.xAdvance;
     line.push(g);
-    width += g.xAdvance;
     if (
       g.charClass === GlyphCharClass.Whitespace ||
       g.charClass === GlyphCharClass.Ideographic
@@ -211,6 +259,9 @@ export type LayoutOptions = {
   textAlign: number;
   /** Make every glyph its own rigid piece along a line instead of its word. */
   spreadGlyphs: boolean;
+  /** Extra space between characters in ems; ignored for Arabic text (see
+   *  {@link allowsLetterSpacing}). Defaults to 0. */
+  letterSpacing?: number;
 };
 
 const EMPTY_LAYOUT: LabelLayout = {
@@ -278,14 +329,18 @@ export function buildLabelLayout(
     (naturalLineHeight > 0 ? naturalLineHeight : unitsPerEm) *
     options.lineHeight;
 
-  // `maxWidth` is in ems so the wrap width tracks the font size in both
-  // sizeInMeters modes; font units are ems × unitsPerEm.
+  // `maxWidth` and `letterSpacing` are in ems so they track the font size in
+  // both sizeInMeters modes; font units are ems × unitsPerEm.
+  const spacingFu = allowsLetterSpacing(options.text)
+    ? (options.letterSpacing ?? 0) * unitsPerEm
+    : 0;
   const lines = breakLines(
     glyphs,
     options.maxWidth * unitsPerEm,
     isRtlText(options.text),
+    spacingFu,
   );
-  const widths = lines.map(lineWidthFu);
+  const widths = lines.map((line) => lineWidthFu(line, spacingFu));
   const blockWidthFu = Math.max(...widths);
 
   const quads: GlyphQuad[] = [];
@@ -315,9 +370,12 @@ export function buildLabelLayout(
       wordStart = quads.length;
     };
 
-    for (const glyph of lines[li]) {
+    const line = lines[li];
+    for (let gi = 0; gi < line.length; gi++) {
+      const glyph = line[gi];
       const isSpace = glyph.charClass === GlyphCharClass.Whitespace;
       if (isSpace) closePiece();
+      cursorX += spacingBetween(line[gi - 1], glyph, spacingFu);
       const m = metricsMap.get(glyph.compositeKey);
       if (m && m.atlasW > 0 && m.atlasH > 0) {
         glyphKeys.add(glyph.compositeKey);

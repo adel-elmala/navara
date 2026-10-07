@@ -197,6 +197,7 @@ export type SymbolLayout = {
   "icon-anchor"?: ValueExpression;
   "text-field"?: ValueExpression;
   "text-size"?: ValueExpression;
+  "text-letter-spacing"?: ValueExpression;
   "text-offset"?: ValueExpression;
   "text-anchor"?: ValueExpression;
   "text-font"?: ValueExpression;

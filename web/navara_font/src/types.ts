@@ -68,6 +68,9 @@ export type ShapedGlyph = {
   yOffset: number;
   /** One of `GlyphCharClass` (line-break info). */
   charClass: number;
+  /** Same shaping cluster as the previous glyph (combining marks, pre-base
+   *  vowels). Letter spacing is inserted only before cluster starts. */
+  continuesCluster?: boolean;
 };
 
 /** Result from shaping text: glyph positions + atlas metrics. */

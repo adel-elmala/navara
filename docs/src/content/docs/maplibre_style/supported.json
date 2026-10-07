@@ -195,6 +195,9 @@
         "text-font": {
           "status": "✅"
         },
+        "text-letter-spacing": {
+          "status": "✅"
+        },
         "text-anchor": {
           "status": "❌"
         },

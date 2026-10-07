@@ -64,6 +64,8 @@ pub struct WasmShapedGlyph {
     pub y_offset: i32,
     /// One of the `shaping::CHAR_CLASS_*` constants (line-break info).
     pub char_class: u8,
+    /// Same cluster as the previous glyph; letter spacing skips these.
+    pub continues_cluster: bool,
 }
 
 #[wasm_bindgen(getter_with_clone)]
@@ -217,6 +219,7 @@ impl FontCache {
                 x_offset: g.x_offset,
                 y_offset: g.y_offset,
                 char_class: g.char_class,
+                continues_cluster: g.continues_cluster,
             })
             .collect();
 

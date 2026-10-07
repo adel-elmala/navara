@@ -4,6 +4,7 @@ import { JsStyleEngine } from "../engine/JsStyleEngine";
 import type { StyleLayer } from "../engine/types";
 
 import {
+  createLayoutEvaluators,
   createPaintEvaluators,
   toEvaluatedValue,
   toNavaraColor,
@@ -589,5 +590,64 @@ describe("toNavaraColor", () => {
     const result = toNavaraColor("invalid-color");
 
     expect(result).toBeUndefined();
+  });
+});
+
+describe("text-letter-spacing", () => {
+  const engine = new JsStyleEngine();
+  const symbol = (layout: StyleLayer["layout"]): StyleLayer =>
+    ({ id: "test", type: "symbol", source: "test", layout }) as StyleLayer;
+
+  it("defaults to the spec value 0 when omitted", () => {
+    const evaluators = createLayoutEvaluators(symbol({}), engine, "Point");
+    expect(
+      evaluators["text-letter-spacing"]({ properties: {}, zoom: 10 }),
+    ).toBe(0);
+  });
+
+  it("evaluates zoom and data-driven expressions", () => {
+    const byZoom = createLayoutEvaluators(
+      symbol({
+        "text-letter-spacing": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          10,
+          0,
+          14,
+          0.4,
+        ],
+      }),
+      engine,
+      "Point",
+    )["text-letter-spacing"];
+    expect(byZoom({ properties: {}, zoom: 12 })).toBeCloseTo(0.2);
+
+    const byData = createLayoutEvaluators(
+      symbol({ "text-letter-spacing": ["get", "tracking"] }),
+      engine,
+      "Point",
+    )["text-letter-spacing"];
+    expect(byData({ properties: { tracking: 0.3 }, zoom: 10 })).toBe(0.3);
+  });
+
+  it("maps to letterSpacing on text features", () => {
+    const result = toEvaluatedValue(
+      symbol({}),
+      {},
+      { "text-field": "Label", "text-letter-spacing": 0.25 },
+      "text",
+    );
+    expect(result.letterSpacing).toBe(0.25);
+  });
+
+  it("is not applied to icons", () => {
+    const result = toEvaluatedValue(
+      symbol({}),
+      {},
+      { "icon-image": "/icons/marker.svg", "text-letter-spacing": 0.25 },
+      "billboard",
+    );
+    expect(result.letterSpacing).toBeUndefined();
   });
 });

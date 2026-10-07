@@ -28,6 +28,11 @@ pub struct ShapedGlyph {
     /// One of the `CHAR_CLASS_*` constants, derived from the source character
     /// that produced this glyph (the cluster's first char for ligatures).
     pub char_class: u8,
+    /// True when this glyph belongs to the same cluster as the glyph before
+    /// it (combining marks, pre-base vowels, multi-glyph decompositions).
+    /// Layout inserts letter spacing only between clusters, so a mark never
+    /// drifts off its base.
+    pub continues_cluster: bool,
 }
 
 /// Vertical line metrics in font units (from the hhea table).
@@ -105,6 +110,7 @@ pub fn shape_text(font_data: &[u8], text: &str) -> Option<Vec<ShapedGlyph>> {
                 x_offset: 0,
                 y_offset: 0,
                 char_class: CHAR_CLASS_NEWLINE,
+                continues_cluster: false,
             });
         }
         if segment.is_empty() {
@@ -120,6 +126,7 @@ pub fn shape_text(font_data: &[u8], text: &str) -> Option<Vec<ShapedGlyph>> {
         let infos = output.glyph_infos();
         let positions = output.glyph_positions();
 
+        let mut prev_cluster = None;
         glyphs.extend(infos.iter().zip(positions.iter()).map(|(info, pos)| {
             // Clusters are byte offsets into `segment` (valid for RTL runs
             // too, where clusters arrive in descending order).
@@ -128,6 +135,8 @@ pub fn shape_text(font_data: &[u8], text: &str) -> Option<Vec<ShapedGlyph>> {
                 .next()
                 .map(classify_char)
                 .unwrap_or(CHAR_CLASS_NORMAL);
+            let continues_cluster = prev_cluster == Some(info.cluster);
+            prev_cluster = Some(info.cluster);
             ShapedGlyph {
                 glyph_id: info.glyph_id,
                 x_advance: pos.x_advance,
@@ -135,6 +144,7 @@ pub fn shape_text(font_data: &[u8], text: &str) -> Option<Vec<ShapedGlyph>> {
                 x_offset: pos.x_offset,
                 y_offset: pos.y_offset,
                 char_class,
+                continues_cluster,
             }
         }));
     }

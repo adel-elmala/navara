@@ -19,6 +19,7 @@ type EvaluatedResult = {
   opacity?: number;
   width?: number;
   size?: number;
+  letterSpacing?: number;
   height?: number;
   extrudedHeight?: number;
   show?: boolean;
@@ -188,6 +189,7 @@ export function createLayoutEvaluators(
     "text-field",
     "text-size",
     "text-font",
+    "text-letter-spacing",
     "icon-image",
     "icon-size",
     "text-anchor",
@@ -470,6 +472,12 @@ function processSymbolLayer(
       const textSize = layoutValues?.["text-size"] ?? 16;
       if (typeof textSize === "number" && Number.isFinite(textSize)) {
         result.size = textSize;
+      }
+
+      // Ems, like Navara's `letterSpacing`; always present (spec default 0).
+      const letterSpacing = layoutValues?.["text-letter-spacing"];
+      if (typeof letterSpacing === "number" && Number.isFinite(letterSpacing)) {
+        result.letterSpacing = letterSpacing;
       }
     } else {
       // Hide text features with empty text-field (e.g., from zoom-based step expressions)

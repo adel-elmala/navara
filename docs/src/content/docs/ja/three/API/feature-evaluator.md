@@ -145,6 +145,7 @@ evaluate(
 | `text` | `string` | ラベルテキストの内容（テキスト/ラベル地物用） |
 | `width` | `number` | ライン幅（ピクセル、ポリライン地物用） |
 | `size` | `number` | ポイント/テキストサイズ（メートルまたはピクセル、ポイント/テキスト地物用） |
+| `letterSpacing` | `number` | 文字間に追加する間隔（em 単位、テキスト地物用）。マテリアルの [`letterSpacing`](../../../three/material/text-material/#letterspacing) を上書きします |
 | `opacity` | `number` | 地物の不透明度、範囲 0.0-1.0（ポリゴン/ポイント/ビルボード/モデル/テキスト用） |
 | `declutterPriority` | `number` | デクラッターの配置優先度。値が大きいほど重なりの競合に勝ちます（[`declutter`](../../../three/material/text-material/#declutter) が有効なポイント/ビルボード/テキスト用）。レイヤーの `declutterPriority` を上書きします |
 | `image` | `string \| null` | 画像の URL（ビルボード地物用）。個別の URL ごとに一度だけ読み込まれ、レイヤーのテクスチャアトラスにパックされます。`null` を返すと以前に設定した地物ごとの画像がクリアされ、ビルボードマテリアルのデフォルト `url` に戻ります（マテリアルに `url` がない場合、その地物は非表示になります） |
@@ -303,6 +304,9 @@ type EvaluatedValue = {
   width?: number;
   /** ポイント/テキストサイズ（メートルまたはピクセル、ポイント/テキスト地物用） */
   size?: number;
+  /** 文字間に追加する間隔（em 単位、テキスト地物用）。マテリアルの
+   * `letterSpacing` を上書きします */
+  letterSpacing?: number;
   /** 地物の不透明度、範囲 0.0-1.0（ポリゴン/ポイント/ビルボード/モデル/テキスト用） */
   opacity?: number;
   /** デクラッターの配置優先度。値が大きいほど重なりの競合に勝ちます

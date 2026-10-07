@@ -231,6 +231,67 @@ describe("BatchedSdfTextMesh material updates vs per-feature values", () => {
   });
 });
 
+// Letter spacing is baked into the glyph quads, so it shows up in the label's
+// block width (500 font units per glyph at 1000 units/em: "AB" is 1 em wide).
+describe("BatchedSdfTextMesh letter spacing", () => {
+  const widthOf = (mesh: BatchedSdfTextMesh, slot: number) =>
+    (mesh as unknown as { _labels: { widthEm: number }[] })._labels[slot]
+      .widthEm;
+
+  it("re-lays out a label when its per-feature spacing changes", () => {
+    const { mesh } = makeMesh();
+    mesh.setTextByBatchIndex(0, "AB");
+    expect(widthOf(mesh, 0)).toBeCloseTo(1);
+
+    mesh.setFeatureLetterSpacingByBatchIndex(0, 0.25);
+    expect(widthOf(mesh, 0)).toBeCloseTo(1.25);
+  });
+
+  it("uses spacing set before the text arrives", () => {
+    const { mesh } = makeMesh();
+    mesh.setFeatureLetterSpacingByBatchIndex(0, 0.25);
+    mesh.setTextByBatchIndex(0, "AB");
+    expect(widthOf(mesh, 0)).toBeCloseTo(1.25);
+  });
+
+  it("skips the re-layout when the value is unchanged", () => {
+    const { mesh, fontManager } = makeMesh();
+    mesh.setTextByBatchIndex(0, "AB");
+    mesh.setFeatureLetterSpacingByBatchIndex(0, 0.25);
+    const shapes = fontManager.shapeText.mock.calls.length;
+
+    // Zoom-dependent styles re-evaluate every label on each zoom step.
+    mesh.setFeatureLetterSpacingByBatchIndex(0, 0.25);
+    expect(fontManager.shapeText.mock.calls.length).toBe(shapes);
+  });
+
+  it("starts labels at the material's spacing", () => {
+    const { mesh } = makeMesh(material({ letterSpacing: 0.5 }));
+    mesh.setTextByBatchIndex(0, "AB");
+    expect(widthOf(mesh, 0)).toBeCloseTo(1.5);
+  });
+
+  it("keeps per-feature spacing through an unchanged material", async () => {
+    const { mesh } = makeMesh();
+    mesh.setTextByBatchIndex(0, "AB");
+    mesh.setFeatureLetterSpacingByBatchIndex(0, 0.25);
+
+    await mesh._update(textMeshEvent(material()));
+    expect(widthOf(mesh, 0)).toBeCloseTo(1.25);
+  });
+
+  it("applies a changed material spacing to every label", async () => {
+    const { mesh } = makeMesh();
+    mesh.setTextByBatchIndex(0, "AB");
+    mesh.setTextByBatchIndex(1, "AB");
+    mesh.setFeatureLetterSpacingByBatchIndex(0, 0.25);
+
+    await mesh._update(textMeshEvent(material({ letterSpacing: 1 })));
+    expect(widthOf(mesh, 0)).toBeCloseTo(2);
+    expect(widthOf(mesh, 1)).toBeCloseTo(2);
+  });
+});
+
 // The evaluator applies `show` before `text`. A show:false for a feature with
 // no label yet must survive until the text setter creates the label — labels
 // stay lazily allocated, so the intent is parked, not applied.

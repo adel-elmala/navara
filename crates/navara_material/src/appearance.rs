@@ -496,6 +496,11 @@ pub struct TextMaterial {
     /// Horizontal alignment of lines within a multi-line block:
     /// `"left"`, `"center"` (default), or `"right"`.
     pub text_align: String,
+    /// Extra space between characters, in ems (multiples of `size`). Applied
+    /// between shaping clusters, never after the last one, so alignment is
+    /// unaffected; ignored for Arabic-script text, where tracking would break
+    /// cursive joining. Negative values tighten. Default `0.0`.
+    pub letter_spacing: f32,
 
     /// Participate in screen-space decluttering: when labels/sprites overlap
     /// on screen, lower-priority ones are hidden. Enabled by default; set to
@@ -558,6 +563,7 @@ impl Default for TextMaterial {
             max_width: 0.0,
             line_height: 1.0,
             text_align: "center".to_string(),
+            letter_spacing: 0.0,
 
             declutter: true,
             declutter_priority: 0.0,

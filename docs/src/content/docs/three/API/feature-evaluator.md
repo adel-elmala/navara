@@ -145,6 +145,7 @@ The callback function can return an object containing the following properties:
 | `text` | `string` | Label text content (for text/label features) |
 | `width` | `number` | Line width (pixels, for polyline features) |
 | `size` | `number` | Point/text size (meters or pixels, for point/text features) |
+| `letterSpacing` | `number` | Extra space between characters in ems (for text features). Overrides the material's [`letterSpacing`](../../../three/material/text-material/#letterspacing) |
 | `opacity` | `number` | Feature opacity, range 0.0-1.0 (for polygons/points/billboards/models/text) |
 | `declutterPriority` | `number` | Placement priority for decluttering. Higher wins an overlap (for points/billboards/text with [`declutter`](../../../three/material/text-material/#declutter) enabled). Overrides the layer's `declutterPriority` |
 | `image` | `string \| null` | Image URL (for billboard features). Each distinct URL is loaded once and packed into the layer's texture atlas. Return `null` to clear a previous per-feature image and revert to the billboard material's default `url` (the feature becomes invisible if the material has no `url`) |
@@ -315,6 +316,9 @@ type EvaluatedValue = {
   width?: number;
   /** Point/text size (meters or pixels, for point/text features) */
   size?: number;
+  /** Extra space between characters in ems (for text features). Overrides
+   * the material's `letterSpacing` */
+  letterSpacing?: number;
   /** Feature opacity, range 0.0-1.0 (for polygons/points/billboards/models/text) */
   opacity?: number;
   /** Placement priority for decluttering; higher wins an overlap (for

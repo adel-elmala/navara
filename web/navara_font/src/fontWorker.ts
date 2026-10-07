@@ -32,6 +32,7 @@ function convertGlyphs(glyphs: WasmShapedGlyph[]) {
       xOffset: g.x_offset,
       yOffset: g.y_offset,
       charClass: g.char_class,
+      continuesCluster: g.continues_cluster,
     };
     g.free();
     return out;

@@ -669,6 +669,12 @@ pub struct TextMaterial {
     #[wasm_bindgen(getter_with_clone, js_name = textAlign)]
     #[serde(rename = "textAlign")]
     pub text_align: Option<String>,
+    /// Extra space between characters, in ems (multiples of `size`). Not
+    /// added after the last character; ignored for Arabic-script text.
+    /// Negative values tighten. Defaults to `0.0`.
+    #[wasm_bindgen(js_name = letterSpacing)]
+    #[serde(rename = "letterSpacing")]
+    pub letter_spacing: Option<f32>,
 
     /// Participate in screen-space decluttering: when labels/sprites overlap
     /// on screen, lower-priority ones are hidden. Defaults to `true`; set to
@@ -749,6 +755,7 @@ impl From<TextMaterial> for navara_material::TextMaterial {
             max_width: val.max_width.unwrap_or(default.max_width),
             line_height: val.line_height.unwrap_or(default.line_height),
             text_align: val.text_align.unwrap_or(default.text_align),
+            letter_spacing: val.letter_spacing.unwrap_or(default.letter_spacing),
 
             declutter: val.declutter.unwrap_or(default.declutter),
             declutter_priority: val.declutter_priority.unwrap_or(default.declutter_priority),
@@ -803,6 +810,7 @@ impl<'a> From<&'a navara_material::TextMaterial> for TextMaterial {
             max_width: Some(value.max_width),
             line_height: Some(value.line_height),
             text_align: Some(value.text_align.clone()),
+            letter_spacing: Some(value.letter_spacing),
 
             declutter: Some(value.declutter),
             declutter_priority: Some(value.declutter_priority),
@@ -860,6 +868,7 @@ impl TextMaterial {
             max_width: self.max_width.unwrap_or(other.max_width),
             line_height: self.line_height.unwrap_or(other.line_height),
             text_align: self.text_align.clone().unwrap_or(other.text_align.clone()),
+            letter_spacing: self.letter_spacing.unwrap_or(other.letter_spacing),
 
             declutter: self.declutter.unwrap_or(other.declutter),
             declutter_priority: self.declutter_priority.unwrap_or(other.declutter_priority),

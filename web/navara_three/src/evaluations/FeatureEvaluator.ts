@@ -55,6 +55,9 @@ export type EvaluatableMaterialProperty = {
   width: AvailableMaterialProperty["width"];
   /** Point/text size expression from layer configuration (for points/text). */
   size: AvailableMaterialProperty["size"];
+  /** Extra space between characters in ems (for text). Overrides the
+   *  material's `letterSpacing` for this feature. */
+  letterSpacing: AvailableMaterialProperty["letterSpacing"];
   /** Opacity expression from layer configuration (for polygons/points/text where supported). */
   opacity: AvailableMaterialProperty["opacity"];
   /** Per-feature declutter placement priority (for points/billboards/text);
@@ -91,6 +94,7 @@ type EvaluatedMaterialProperty = {
   text: string;
   width: number;
   size: number;
+  letterSpacing: number;
   opacity: number;
   declutterPriority: number;
   image: string | null;
@@ -546,12 +550,21 @@ export class FeatureEvaluator {
       if (evaluated.height != null) {
         obj.setFeatureHeightByBatchIndex(batchIndex, evaluated.height);
       }
-      // Before `text`: glyph pieces are baked into the layout, so setting it
-      // first lays a newly-texted label out once instead of twice.
+      // Before `text`: glyph pieces and spacing are baked into the layout, so
+      // setting them first lays a newly-texted label out once instead of twice.
       if (evaluated.spreadGlyphs != null && obj instanceof BatchedSdfTextMesh) {
         obj.setFeatureSpreadGlyphsByBatchIndex(
           batchIndex,
           evaluated.spreadGlyphs,
+        );
+      }
+      if (
+        evaluated.letterSpacing != null &&
+        obj instanceof BatchedSdfTextMesh
+      ) {
+        obj.setFeatureLetterSpacingByBatchIndex(
+          batchIndex,
+          evaluated.letterSpacing,
         );
       }
       if (evaluated.text != null && obj instanceof BatchedSdfTextMesh) {

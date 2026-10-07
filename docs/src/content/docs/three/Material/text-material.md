@@ -372,6 +372,24 @@ view.addFontFamily({
 }
 ```
 
+### letterSpacing
+
+**Type:** `number | undefined`
+
+**Description:** Specifies extra space between characters in ems (multiples of `size`). Spacing is added between characters only, never after the last one, so alignment and anchoring are unaffected, and it counts toward the [`maxWidth`](#maxwidth) wrap width. Negative values tighten the text. Combining marks stay attached to their base character. Spacing is ignored for labels containing Arabic-script text, where it would break the joined letterforms. Can also be set per feature with the `letterSpacing` key of a feature evaluator.
+
+**Default:** `0`
+
+**Example:**
+
+```typescript
+{
+  text: {
+    letterSpacing: 0.2 // Add 0.2 em between characters
+  }
+}
+```
+
 ### lineHeight
 
 **Type:** `number | undefined`
