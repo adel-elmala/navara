@@ -834,11 +834,32 @@ pub fn compute_terrain_height_at_point(
     )
 }
 
-/// Compute a terrain height at specified point.
-pub fn sample_terrain_height_within_extent(
-    qt: &mut TerrainTileQuadtree,
+/// Merges the height range of `tile`'s loaded mesh into `range`.
+fn extend_with_mesh_heights(range: &mut Option<(FloatType, FloatType)>, tile: &TerrainTile) {
+    if tile.cached_mesh_handle.is_none() || tile.upsampled {
+        return;
+    }
+    let Some(terrain_data) = tile.terrain_data.as_ref() else {
+        return;
+    };
+    if let (Some(tile_min), Some(tile_max)) = (
+        terrain_data.current_min_height(),
+        terrain_data.current_max_height(),
+    ) {
+        *range = Some(match *range {
+            Some((min, max)) => (min.min(tile_min), max.max(tile_max)),
+            None => (tile_min, tile_max),
+        });
+    }
+}
+
+/// Min and max height over `extent` of the deepest loaded terrain tile along
+/// each branch that covers at least the extent's area, or `None` when none
+/// has terrain data.
+fn loaded_terrain_height_range(
+    qt: &TerrainTileQuadtree,
     extent: Extent<f64, Radians>,
-) -> (FloatType, FloatType) {
+) -> Option<(FloatType, FloatType)> {
     let tiles = find_contained_children(
         qt,
         &|t| {
@@ -851,24 +872,49 @@ pub fn sample_terrain_height_within_extent(
         &|t| t.extent.intersects(extent),
     );
 
-    let mut max_height: FloatType = 0.;
-    let mut min_height: FloatType = 9999.;
-    let mut has_terrain_data = false;
-    for tile_handle in tiles {
-        let tile = qt.qt.get_mut(tile_handle);
-        let terrain_data = match tile.and_then(|t| t.terrain_data.as_ref()) {
-            Some(t) => t,
-            None => continue,
-        };
-        if let (Some(min_terrain_height), Some(max_terrain_height)) = (
-            terrain_data.current_min_height(),
-            terrain_data.current_max_height(),
-        ) {
-            has_terrain_data = true;
-            min_height = min_height.min(min_terrain_height);
-            max_height = max_height.max(max_terrain_height);
-        }
+    let mut range = None;
+    for tile in tiles.into_iter().filter_map(|handle| qt.qt.get(handle)) {
+        extend_with_mesh_heights(&mut range, tile);
     }
+    range
+}
+
+/// Min and max height, relative to the ellipsoid, of the ground rendered over
+/// `extent`, or the ellipsoid surface (`(0, 0)`) before any terrain has
+/// loaded.
+///
+/// Reads every loaded tile over the extent, not only the deepest: a parent
+/// still renders the quadrants whose children have not loaded, and a coarser
+/// tile misses peaks a finer one renders. An upsampled tile repeats a loaded
+/// ancestor's heights.
+pub fn terrain_height_range(
+    qt: &TerrainTileQuadtree,
+    extent: Extent<f64, Radians>,
+) -> (FloatType, FloatType) {
+    let mut range = None;
+    let mut stack = root_handles(qt);
+    while let Some(handle) = stack.pop() {
+        let Some(tile) = qt.qt.get(handle) else {
+            continue;
+        };
+        if !tile.extent.intersects(extent) {
+            continue;
+        }
+        extend_with_mesh_heights(&mut range, tile);
+        stack.extend(tile.children.iter().copied());
+    }
+    range.unwrap_or((0., 0.))
+}
+
+/// Compute a terrain height at specified point.
+pub fn sample_terrain_height_within_extent(
+    qt: &mut TerrainTileQuadtree,
+    extent: Extent<f64, Radians>,
+) -> (FloatType, FloatType) {
+    let range = loaded_terrain_height_range(qt, extent);
+    let has_terrain_data = range.is_some();
+    let (mut min_height, mut max_height) =
+        range.map_or((9999., 0.), |(min, max)| (min.min(9999.), max.max(0.)));
 
     // Extrude more
     max_height *= 1.3;
@@ -1686,6 +1732,34 @@ mod test {
         setup_tile(&mut qt, (0, 1, 1));
         setup_tile(&mut qt, (1, 1, 1));
         qt
+    }
+
+    /// Like [`mark_tile_ready`], with the loaded mesh's height range.
+    fn mark_tile_heights(qt: &mut TerrainTileQuadtree, coords: Coords<usize>, min: f64, max: f64) {
+        use crate::terrain::RasterDEMData;
+        mark_tile_ready(qt, coords);
+        let handle = qt.qt.leaf(coords).unwrap().handle();
+        qt.qt.get_mut(handle).unwrap().terrain_data = Some(Box::new(RasterDEMData {
+            current_min_height: Some(min),
+            current_max_height: Some(max),
+            ..Default::default()
+        }));
+    }
+
+    #[test]
+    fn terrain_height_range_reads_every_loaded_level() {
+        let mut qt = setup_qt_with_ready_tiles();
+        // The parent still renders the three quadrants without a loaded
+        // child, and its mesh misses the peak the loaded child reaches.
+        mark_tile_heights(&mut qt, (1, 0, 1), -10., 3600.);
+        mark_tile_heights(&mut qt, (3, 1, 2), 100., 3800.);
+        let extent = qt
+            .qt
+            .get(qt.qt.leaf((1, 0, 1)).unwrap().handle())
+            .unwrap()
+            .extent;
+
+        assert_eq!(super::terrain_height_range(&qt, extent), (-10., 3800.));
     }
 
     #[test]
