@@ -25,7 +25,7 @@ import { getImageDataFromBlob } from "../tasks/getImageDataFromBlob";
 
 import { type EventContext } from "./context";
 import {
-  checkFeatureParallel,
+  isModelFeature,
   processRenderableFeatureAdded,
   processRenderableFeatureChanged,
 } from "./feature";
@@ -66,14 +66,7 @@ function fetchPriorityHint(rank: number): RequestPriority {
 }
 
 export function processEvent(ctx: EventContext, event: Events | undefined) {
-  const {
-    eventManager,
-    meshes,
-    meshHandler,
-    viewEvents,
-    layersManager,
-    viewContext,
-  } = ctx;
+  const { eventManager, meshes, meshHandler, viewEvents, layersManager } = ctx;
 
   eventManager.pushEvents(event);
 
@@ -104,6 +97,10 @@ export function processEvent(ctx: EventContext, event: Events | undefined) {
 
   eventManager.forEachStack("update_sample_terrain_height", (ev) =>
     viewEvents.emit("_sample_terrain_height_received", ev),
+  );
+
+  eventManager.forEachStack("update_terrain_height_range", (ev) =>
+    viewEvents.emit("_terrain_height_range_received", ev),
   );
 
   // Process cancels before backfills, synchronously. Each cancel drops its
@@ -253,8 +250,7 @@ export function processEvent(ctx: EventContext, event: Events | undefined) {
         switch (type) {
           case "add":
             return (
-              !checkFeatureParallel(event.feature) ||
-              viewContext.concurrencyManager.canIncrement()
+              !isModelFeature(event.feature) || canWorkerProcessImmediately()
             );
           case "remove":
             return true;

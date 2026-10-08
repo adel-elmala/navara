@@ -2,6 +2,7 @@
 
 mod attribute;
 mod geometry;
+mod ground_volume;
 mod helpers;
 mod polygon;
 mod polylabel;
@@ -12,6 +13,7 @@ mod tile;
 
 pub use attribute::*;
 pub use geometry::*;
+pub use ground_volume::*;
 pub use polygon::*;
 pub use polylabel::*;
 pub use polyline::*;
