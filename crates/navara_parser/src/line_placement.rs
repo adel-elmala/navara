@@ -14,7 +14,8 @@
 /// `LayerParseKind` mirrors `GeometryAppearanceKind`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PointPlacement {
-    /// One anchor per source vertex.
+    /// At the geometry itself: see [`Self::line_anchors`] and
+    /// [`Self::polygon_anchors`].
     #[default]
     Point,
     /// Anchors repeated along the line at `spacing` intervals.
@@ -29,6 +30,20 @@ impl PointPlacement {
         matches!(self, Self::Line | Self::LineCenter)
     }
 
+    /// Where an emitter with this placement anchors on a line string. `label`
+    /// is set for text and billboards, which (as MapLibre symbols placed at a
+    /// point) mark a line once at its first vertex rather than at every vertex
+    /// the way point markers (circles) do.
+    pub fn line_anchors(self, label: bool) -> LineAnchors {
+        if self.is_along_line() {
+            LineAnchors::Along
+        } else if label {
+            LineAnchors::Start
+        } else {
+            LineAnchors::Vertices
+        }
+    }
+
     /// Where an emitter with this placement anchors on a polygon. `label` is
     /// set for text and billboards, which (as MapLibre symbols) mark a polygon
     /// once rather than at every vertex the way point markers (circles) do.
@@ -41,6 +56,18 @@ impl PointPlacement {
             PolygonAnchors::Vertices
         }
     }
+}
+
+/// How a point-like emitter derives anchors from a line string, resolved by
+/// [`PointPlacement::line_anchors`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineAnchors {
+    /// One anchor per vertex.
+    Vertices,
+    /// One anchor at the line's first vertex.
+    Start,
+    /// Anchors walked along the line, by the emitter's along-line placement.
+    Along,
 }
 
 /// How a point-like emitter derives anchors from a polygon, resolved by

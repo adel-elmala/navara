@@ -62,12 +62,53 @@ uniform ivec2 uPathTexSize;
 // Perpendicular shift away from the line, in the same units as the font size
 // (pixels or metres, per uSizeInMeters). Positive is left of travel.
 uniform float uLineOffset;
+// Every glyph is its own piece on the path (glyphWordCenter is its own centre).
+// The material's value; a feature's own rides in the batch texture.
+uniform bool uSpreadGlyphs;
 
 // Two samples per RGBA texel, so a label's run is PATH_SAMPLES/2 texels.
 vec2 nvr_readPath(int base, int k) {
     int i = base + (k >> 1);
     vec4 texel = texelFetch(uPathData, ivec2(i % uPathTexSize.x, i / uPathTexSize.x), 0);
     return (k - ((k >> 1) << 1)) == 0 ? texel.xy : texel.zw;
+}
+
+// A ground offset from the anchor (east/north metres) as it lands on the
+// screen relative to the anchor, in metres at the anchor's depth; z is its own
+// view depth. Mirrored by `ViewFrame::project` in line_label.rs.
+vec3 nvr_screenAtAnchorDepth(vec3 anchorView, vec3 eastView, vec3 northView, vec2 g) {
+    vec3 p = anchorView + g.x * eastView + g.y * northView;
+    float z = min(p.z, -1e-3);
+    return vec3(p.xy * (anchorView.z / z) - anchorView.xy, z);
+}
+
+// The fractional sample index `s` metres from the anchor along the path, the
+// distance measured on the screen at the anchor's depth, clamped to the path's
+// end. Glyphs that face the camera keep the anchor's size on the screen, so
+// they are spaced on it too: on the ground they would bunch up wherever the line
+// recedes. Within a segment 1/z is what interpolates linearly on the screen.
+// Mirrored by `screen_walk` in line_label.rs.
+float nvr_screenWalk(int pathBase, vec3 anchorView, vec3 eastView, vec3 northView, float s) {
+    float last = float(PATH_SAMPLES - 1);
+    float t = 0.5 * last;
+    int seg = min(int(floor(t)), PATH_SAMPLES - 2);
+    vec2 start = mix(nvr_readPath(pathBase, seg), nvr_readPath(pathBase, seg + 1), t - float(seg));
+    vec3 q = nvr_screenAtAnchorDepth(anchorView, eastView, northView, start);
+    float remaining = abs(s);
+    for (int i = 0; i < PATH_SAMPLES; i++) {
+        float next = s > 0.0 ? floor(t) + 1.0 : ceil(t) - 1.0;
+        if (remaining <= 0.0 || next < 0.0 || next > last) break;
+        vec3 qn = nvr_screenAtAnchorDepth(anchorView, eastView, northView, nvr_readPath(pathBase, int(next)));
+        float len = length(qn.xy - q.xy);
+        if (len >= remaining) {
+            float u = remaining / max(len, 1e-6);
+            return t + (next - t) * (u * q.z / ((1.0 - u) * qn.z + u * q.z));
+        }
+        remaining -= len;
+        q = qn;
+        t = next;
+    }
+    return t;
 }
 #endif
 
@@ -165,6 +206,12 @@ void main() {
     bool nvr_batchRotateWithCamera = uRotateWithCamera;
     vColor = vec3(1.0);
     #include "chunks/batch_texture_vertex.glsl"
+#ifdef NVR_LINE_PLACEMENT
+    bool nvr_batchSpreadGlyphs = uSpreadGlyphs;
+#if defined(USE_BATCH_TEXTURE) && defined(USE_BATCH_ORIENTATION)
+    nvr_batchSpreadGlyphs = nvr_batchOrientation >= 3.5;
+#endif
+#endif
 
     float fontSize = max(batchSize, 0.0);
     float textWidth = box.x;
@@ -221,6 +268,8 @@ void main() {
     bool nvr_alongLine = false;
     float wordCenterEm = 0.0;
     vec3 pathOffset = vec3(0.0);
+    // A screen-walked glyph is sized for the anchor's depth wherever it sits.
+    float glyphDepthScale = 1.0;
 #ifdef NVR_LINE_PLACEMENT
     vec4 pathRow = nvr_readLabel(slot, LABEL_ROW_PATH);
     // A zero sample step marks a plain point sharing the batch with along-line
@@ -261,8 +310,19 @@ void main() {
         wordCenterEm = glyphWordCenter - center.x * textWidth;
         float sMeters = wordCenterEm * scaleFactor * dir;
 
+        vec3 eastWorld, northWorld, normalWorld;
+        nvr_enuBasis(absTransformed, eastWorld, northWorld, normalWorld);
+        vec3 eastView = (viewMatrix * vec4(eastWorld, 0.0)).xyz;
+        vec3 northView = (viewMatrix * vec4(northWorld, 0.0)).xyz;
+
+        // A spread glyph that follows the camera turns like a point label, keeps
+        // the anchor's size on the screen, and so is spaced on the screen.
+        bool facesCamera = nvr_batchSpreadGlyphs && nvr_batchRotateWithCamera;
+
         float halfSpan = 0.5 * float(PATH_SAMPLES - 1) * stepMeters;
-        float t = (sMeters + halfSpan) / max(stepMeters, 1e-6);
+        float t = facesCamera
+            ? nvr_screenWalk(pathBase, mvPosition.xyz, eastView, northView, sMeters)
+            : (sMeters + halfSpan) / max(stepMeters, 1e-6);
         int seg = int(clamp(floor(t), 0.0, float(PATH_SAMPLES - 2)));
         vec2 pa = nvr_readPath(pathBase, seg);
         vec2 pb = nvr_readPath(pathBase, seg + 1);
@@ -280,23 +340,25 @@ void main() {
         // metres per style unit — which is what lineOffset is expressed in.
         pathPos += normal * (uLineOffset * (scaleFactor / max(fontSize, 1e-6)));
 
-        vec3 eastWorld, northWorld, normalWorld;
-        nvr_enuBasis(absTransformed, eastWorld, northWorld, normalWorld);
-        vec3 eastView = (viewMatrix * vec4(eastWorld, 0.0)).xyz;
-        vec3 northView = (viewMatrix * vec4(northWorld, 0.0)).xyz;
-
         // The walk decides where in the tangent plane the glyph sits; facing still
         // decides which plane its quad stands in.
-        axisRight = tangent.x * eastView + tangent.y * northView;
-        axisUp = nvr_batchFlatFacing
-            ? normal.x * eastView + normal.y * northView
-            : (viewMatrix * vec4(normalWorld, 0.0)).xyz;
+        if (facesCamera) {
+            nvr_quadBasis(absTransformed, nvr_batchFlatFacing, true, 0.0, axisRight, axisUp);
+        } else {
+            axisRight = tangent.x * eastView + tangent.y * northView;
+            axisUp = nvr_batchFlatFacing
+                ? normal.x * eastView + normal.y * northView
+                : (viewMatrix * vec4(normalWorld, 0.0)).xyz;
+        }
 
         // Path offsets are already metres, so they bypass the em scaling below.
         // Kept apart rather than added to mvPosition so a flat label wraps the
         // word's place on the path and the glyph's place in its word as one
         // offset (see nvr_wrapOffset).
         pathOffset = pathPos.x * eastView + pathPos.y * northView;
+        if (facesCamera) {
+            glyphDepthScale = min(mvPosition.z + pathOffset.z, -1e-3) / mvPosition.z;
+        }
     }
 #endif
     if (!nvr_alongLine) {
@@ -379,7 +441,7 @@ void main() {
 
         // Lay the glyph out in the label's basis (see nvr_quadBasis), scaled,
         // and wrapped onto the globe when flat (see nvr_wrapOffset).
-        vec2 glyphLocal = localPos * scaleFactor;
+        vec2 glyphLocal = localPos * scaleFactor * glyphDepthScale;
         vec4 newMvPosition = mvPosition + vec4(nvr_wrapOffset(
             pathOffset + glyphLocal.x * axisRight + glyphLocal.y * axisUp,
             nvr_batchFlatFacing,

@@ -327,6 +327,38 @@ describe("BatchedSdfTextMesh multi-instance fan-out", () => {
   });
 });
 
+describe("BatchedSdfTextMesh per-feature spreadGlyphs", () => {
+  /** How far a label's widest rigid piece reaches: its whole word, or one
+   *  glyph once spread. */
+  const reachOf = (mesh: BatchedSdfTextMesh, slot: number) =>
+    (mesh as unknown as { _labels: { maxWordHalfEm: number }[] })._labels[slot]
+      .maxWordHalfEm;
+
+  it("lays out only the overridden feature glyph by glyph", () => {
+    const { mesh } = makeMesh();
+    mesh.setTextByBatchIndex(0, "ABCD");
+    mesh.setTextByBatchIndex(1, "ABCD");
+    const word = reachOf(mesh, 0);
+    expect(reachOf(mesh, 1)).toBe(word);
+
+    mesh.setFeatureSpreadGlyphsByBatchIndex(0, true);
+    expect(reachOf(mesh, 0)).toBeLessThan(word);
+    expect(reachOf(mesh, 1)).toBe(word);
+  });
+
+  it("lets a feature opt out of the material's spreadGlyphs", () => {
+    const { mesh } = makeMesh(material({ spreadGlyphs: true }));
+    mesh.setTextByBatchIndex(0, "ABCD");
+    mesh.setTextByBatchIndex(1, "ABCD");
+    const glyph = reachOf(mesh, 0);
+
+    mesh.setFeatureSpreadGlyphsByBatchIndex(1, false);
+    expect(reachOf(mesh, 1)).toBeGreaterThan(glyph);
+    // Feature 0, never styled, keeps the material's value from the backfill.
+    expect(reachOf(mesh, 0)).toBe(glyph);
+  });
+});
+
 // Unprepared text costs a worker round-trip and font-face fetches, and a
 // low-zoom tile spans far more world than the screen shows. With declutter on,
 // `setTextByBatchIndex` therefore parks preparation until a placement pass

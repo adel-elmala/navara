@@ -42,10 +42,11 @@
   #endif
 
   #ifdef USE_BATCH_ORIENTATION
-    // Packed: flatFacing in the 2s place, rotateWithCamera in the 1s place;
-    // see packOrientation in web/navara_three/src/batchTexture/core.ts
+    // Packed: spreadGlyphs (text only, read by sdfText.vert.glsl) in the 4s
+    // place, flatFacing in the 2s place, rotateWithCamera in the 1s place; see
+    // packOrientation in web/navara_three/src/batchTexture/core.ts
     float nvr_batchOrientation = getBatchTexel(batchId, BATCHED_TEXTURE_ROW_ORIENTATION)[BATCHED_TEXTURE_COMP_ORIENTATION];
-    nvr_batchFlatFacing = nvr_batchOrientation >= 1.5;
+    nvr_batchFlatFacing = mod(nvr_batchOrientation, 4.0) >= 1.5;
     nvr_batchRotateWithCamera = mod(nvr_batchOrientation, 2.0) >= 0.5;
   #endif
 

@@ -4,7 +4,7 @@
 //! them as plain data (no `navara_material` / `bevy_ecs` dependency) lets the
 //! parse core run either inline or inside a Web Worker.
 
-pub use crate::line_placement::{PointPlacement, PolygonAnchors};
+pub use crate::line_placement::{LineAnchors, PointPlacement, PolygonAnchors};
 
 /// The geometry-appearance kind a parsed group belongs to.
 ///
@@ -60,7 +60,7 @@ pub struct PointEmitter {
     /// Emit for point/multipoint geometry (the native source).
     #[serde(default = "default_true")]
     pub from_points: bool,
-    /// Also emit one point per line-string vertex.
+    /// Also emit anchors for line strings, as [`Self::line_anchors`] decides.
     #[serde(default)]
     pub from_lines: bool,
     /// Also emit anchors for polygons, as [`Self::polygon_anchors`] decides.
@@ -77,6 +77,13 @@ pub struct PointEmitter {
 }
 
 impl PointEmitter {
+    /// Where this emitter anchors on a line string: text and billboards label
+    /// it once, point markers mark its vertices.
+    pub fn line_anchors(&self) -> LineAnchors {
+        self.placement
+            .line_anchors(self.kind != LayerParseKind::Point)
+    }
+
     /// Where this emitter anchors on a polygon: text and billboards label it
     /// once, point markers mark its vertices.
     pub fn polygon_anchors(&self) -> PolygonAnchors {

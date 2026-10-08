@@ -246,7 +246,13 @@ describe("buildLabelLayout word grouping", () => {
     };
   }
 
-  const options = { text: "", maxWidth: 0, lineHeight: 1, textAlign: 0 };
+  const options = {
+    text: "",
+    maxWidth: 0,
+    lineHeight: 1,
+    textAlign: 0,
+    spreadGlyphs: false,
+  };
   const ZWJ = "\u200D";
 
   it("keeps a word whole across a glyph that draws nothing", () => {
@@ -312,5 +318,31 @@ describe("buildLabelLayout word grouping", () => {
     expect(layout.quads.slice(2).map((q) => q.wordCenterEmX)).toEqual([
       1.5, 1.5, 1.5,
     ]);
+  });
+
+  it("centres every glyph on itself with spreadGlyphs", () => {
+    const layout = buildLabelLayout(shaped("ab cd"), {
+      ...options,
+      text: "ab cd",
+      spreadGlyphs: true,
+    });
+    expect(layout.quads.map((q) => q.wordCenterEmX)).toEqual([
+      0.5, 1.5, 3.5, 4.5,
+    ]);
+  });
+
+  it("reaches half the widest piece along its tangent", () => {
+    const words = buildLabelLayout(shaped("ab cde"), {
+      ...options,
+      text: "ab cde",
+    });
+    expect(words.maxWordHalfEm).toBeCloseTo(1.5, 5);
+
+    const glyphs = buildLabelLayout(shaped("ab cde"), {
+      ...options,
+      text: "ab cde",
+      spreadGlyphs: true,
+    });
+    expect(glyphs.maxWordHalfEm).toBeCloseTo(0.5, 5);
   });
 });

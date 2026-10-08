@@ -69,6 +69,9 @@ export type EvaluatableMaterialProperty = {
   /** Whether this label/sprite turns to follow the camera. Overrides the
    *  material's `rotateWithCamera` for this feature. */
   rotateWithCamera: boolean;
+  /** Whether this label places each glyph on its own along its line (for
+   *  text). Overrides the material's `spreadGlyphs` for this feature. */
+  spreadGlyphs: boolean;
   /** In-plane rotation of this label/sprite about its anchor, in degrees,
    *  clockwise seen from the front. Overrides the material's `rotation`. */
   rotation: number;
@@ -93,6 +96,7 @@ type EvaluatedMaterialProperty = {
   image: string | null;
   facing: "upright" | "flat";
   rotateWithCamera: boolean;
+  spreadGlyphs: boolean;
   rotation: number;
   emissive: Color;
   emissiveIntensity: number;
@@ -541,6 +545,14 @@ export class FeatureEvaluator {
       }
       if (evaluated.height != null) {
         obj.setFeatureHeightByBatchIndex(batchIndex, evaluated.height);
+      }
+      // Before `text`: glyph pieces are baked into the layout, so setting it
+      // first lays a newly-texted label out once instead of twice.
+      if (evaluated.spreadGlyphs != null && obj instanceof BatchedSdfTextMesh) {
+        obj.setFeatureSpreadGlyphsByBatchIndex(
+          batchIndex,
+          evaluated.spreadGlyphs,
+        );
       }
       if (evaluated.text != null && obj instanceof BatchedSdfTextMesh) {
         obj.setTextByBatchIndex(batchIndex, evaluated.text);

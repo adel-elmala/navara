@@ -52,7 +52,7 @@ const SCRIPTS: Script[] = ["en", "ar", "ja"];
 const PLACEMENT_OPTIONS = {
   "along the line": "line",
   "line midpoint": "line-center",
-  "per vertex": "point",
+  "line start": "point",
 };
 
 const dataParams = {
@@ -73,8 +73,15 @@ const labelParams = {
   spacing: 250,
   maxAngle: 45,
   keepUpright: true,
+  spreadGlyphs: false,
+  // Arabic letters join, so spreading them breaks the joins on a bend: the
+  // evaluator turns `spreadGlyphs` back off for those features only.
+  keepArabicWords: true,
   lineOffset: 0,
   textFacing: "flat" as Facing,
+  // Labels at a line's start use it. Along a line, only spread glyphs do: on turns
+  // each glyph to the camera, off keeps it following the line.
+  rotateWithCamera: true,
   size: 18,
   sizeInMeters: false,
   outlineWidth: 4,
@@ -149,7 +156,7 @@ export const run = async (view: ThreeView) => {
     },
   });
 
-  // The raw vertices, to compare "per vertex" against the resampled anchors.
+  // The raw vertices, to compare against the resampled anchors.
   const addVertices = () =>
     view.addLayer({
       type: "vector",
@@ -176,8 +183,10 @@ export const run = async (view: ThreeView) => {
         spacing: labelParams.spacing,
         maxAngle: labelParams.maxAngle,
         keepUpright: labelParams.keepUpright,
+        spreadGlyphs: labelParams.spreadGlyphs,
         lineOffset: labelParams.lineOffset,
         textFacing: labelParams.textFacing,
+        rotateWithCamera: labelParams.rotateWithCamera,
         size: labelParams.size,
         sizeInMeters: labelParams.sizeInMeters,
         clampToGround: true,
@@ -198,6 +207,9 @@ export const run = async (view: ThreeView) => {
           return {
             text:
               labelParams.text || (properties?.[`name_${script}`] as string),
+            spreadGlyphs:
+              labelParams.spreadGlyphs &&
+              !(labelParams.keepArabicWords && script === "ar"),
           };
         },
         { filters: ["index", "name_en", "name_ar", "name_ja"] },
@@ -278,8 +290,10 @@ export const run = async (view: ThreeView) => {
       text: {
         maxAngle: labelParams.maxAngle,
         keepUpright: labelParams.keepUpright,
+        spreadGlyphs: labelParams.spreadGlyphs,
         lineOffset: labelParams.lineOffset,
         textFacing: labelParams.textFacing,
+        rotateWithCamera: labelParams.rotateWithCamera,
         size: labelParams.size,
         sizeInMeters: labelParams.sizeInMeters,
         outlineWidth: labelParams.outlineWidth,
@@ -322,12 +336,22 @@ export const run = async (view: ThreeView) => {
     .addBinding(labelParams, "keepUpright")
     .on("change", restyleLabels);
   labelsFolder
+    .addBinding(labelParams, "spreadGlyphs")
+    .on("change", restyleLabels);
+  // `update` re-runs the evaluator, which is what decides this per feature.
+  labelsFolder
+    .addBinding(labelParams, "keepArabicWords")
+    .on("change", restyleLabels);
+  labelsFolder
     .addBinding(labelParams, "lineOffset", { min: -30, max: 30, step: 1 })
     .on("change", restyleLabels);
   labelsFolder
     .addBinding(labelParams, "textFacing", {
       options: { upright: "upright", flat: "flat" },
     })
+    .on("change", restyleLabels);
+  labelsFolder
+    .addBinding(labelParams, "rotateWithCamera")
     .on("change", restyleLabels);
   labelsFolder
     .addBinding(labelParams, "size", { min: 6, max: 64, step: 1 })

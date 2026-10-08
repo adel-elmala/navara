@@ -17,7 +17,7 @@ use navara_geometry::{
 };
 use navara_math::{FloatType, Vec3};
 
-use super::config::{LayerParseConfig, LayerParseKind, PointEmitter, PolygonAnchors};
+use super::config::{LayerParseConfig, LayerParseKind, LineAnchors, PointEmitter, PolygonAnchors};
 use super::pos_converter::PosConverter;
 use crate::line_placement::{AlongLine, LinePath, push_anchor_line_data, tangent_to_bearing};
 
@@ -352,7 +352,7 @@ impl PointSource {
         self.enabled(emitter)
             && match self {
                 PointSource::Points => true,
-                PointSource::Lines => !emitter.placement.is_along_line(),
+                PointSource::Lines => emitter.line_anchors() == LineAnchors::Vertices,
                 PointSource::Polygons => emitter.polygon_anchors() == PolygonAnchors::Vertices,
             }
     }
@@ -449,6 +449,8 @@ struct MvtFeatureProcessor<'a> {
     derive_points_per_vertex_from_lines: bool,
     /// Whether any of those emitters places anchors along the line.
     derive_points_along_lines: bool,
+    /// Whether any of those emitters labels each line once, at its start.
+    derive_line_start_points: bool,
     /// Whether any point emitter derives from polygons.
     derive_points_from_polygons: bool,
     /// Whether any of those emitters wants one anchor per ring vertex.
@@ -482,6 +484,7 @@ impl<'a> MvtFeatureProcessor<'a> {
         let mut derive_points_from_lines = false;
         let mut derive_points_per_vertex_from_lines = false;
         let mut derive_points_along_lines = false;
+        let mut derive_line_start_points = false;
         let mut derive_points_from_polygons = false;
         let mut derive_points_per_vertex_from_polygons = false;
         let mut derive_points_along_rings = false;
@@ -496,6 +499,8 @@ impl<'a> MvtFeatureProcessor<'a> {
                 derive_points_from_lines |= emitter.from_lines;
                 derive_points_per_vertex_from_lines |= PointSource::Lines.per_vertex(emitter);
                 derive_points_along_lines |= PointSource::Lines.along_line(emitter);
+                derive_line_start_points |=
+                    emitter.from_lines && emitter.line_anchors() == LineAnchors::Start;
                 derive_points_from_polygons |= emitter.from_polygons;
                 derive_points_per_vertex_from_polygons |= PointSource::Polygons.per_vertex(emitter);
                 derive_points_along_rings |= PointSource::Polygons.along_line(emitter);
@@ -542,6 +547,7 @@ impl<'a> MvtFeatureProcessor<'a> {
             derive_points_from_lines,
             derive_points_per_vertex_from_lines,
             derive_points_along_lines,
+            derive_line_start_points,
             derive_points_from_polygons,
             derive_points_per_vertex_from_polygons,
             derive_points_along_rings,
@@ -691,6 +697,11 @@ impl<'a> MvtFeatureProcessor<'a> {
             if self.derive_points_along_lines {
                 self.emit_line_placed_points(&ring[..count], source);
             }
+            if self.derive_line_start_points {
+                self.emit_label_point(ring[0], |e| {
+                    e.from_lines && e.line_anchors() == LineAnchors::Start
+                });
+            }
         } else if self.derive_points_along_rings {
             let extent = self.converter.extent();
             for run in tile_ring_boundary_runs(ring[..count].iter().copied(), extent) {
@@ -716,25 +727,37 @@ impl<'a> MvtFeatureProcessor<'a> {
     fn emit_polygon_label_points(&mut self) {
         let rings = std::mem::take(&mut self.polygon_rings);
         let extent = self.converter.extent();
-        if let Some((x, y)) = pole_of_inaccessibility(&rings, extent / TILE_SIZE_PX)
-            && (0.0..extent).contains(&x)
-            && (0.0..extent).contains(&y)
-        {
-            let (px, py) = self.converter.project_point(x, y);
-            let coords = Vec3::new(px, py, 0.0 as FloatType);
-            for i in 0..self.emitters.len() {
-                let (index, emitter) = self.emitters[i];
-                if !emitter.from_polygons || emitter.polygon_anchors() != PolygonAnchors::LabelPoint
-                {
-                    continue;
-                }
-                let world_pos = CRS::Geographic.to_vec3(WGS84_64, coords, emitter.height);
-                self.push_point(index, emitter.kind, coords, world_pos, None);
-            }
+        if let Some(point) = pole_of_inaccessibility(&rings, extent / TILE_SIZE_PX) {
+            self.emit_label_point(point, |e| {
+                e.from_polygons && e.polygon_anchors() == PolygonAnchors::LabelPoint
+            });
         }
         // Hand the buffer (and its capacity) back for the next polygon.
         self.polygon_rings = rings;
         self.polygon_rings.clear();
+    }
+
+    /// Emit one anchor at `(x, y)` (tile units) for every emitter `wants`
+    /// picks: a feature's single label, at a polygon's label point or a line's
+    /// start. Dropped when it lands in the tile's buffer, as MapLibre drops a
+    /// symbol outside its tile: there it belongs to the neighbouring tile's
+    /// piece of the feature, or is where tile clipping cut the line rather than
+    /// where the line starts.
+    fn emit_label_point(&mut self, (x, y): (f64, f64), wants: impl Fn(&PointEmitter) -> bool) {
+        let extent = self.converter.extent();
+        if !(0.0..extent).contains(&x) || !(0.0..extent).contains(&y) {
+            return;
+        }
+        let (px, py) = self.converter.project_point(x, y);
+        let coords = Vec3::new(px, py, 0.0 as FloatType);
+        for i in 0..self.emitters.len() {
+            let (index, emitter) = self.emitters[i];
+            if !wants(&emitter) {
+                continue;
+            }
+            let world_pos = CRS::Geographic.to_vec3(WGS84_64, coords, emitter.height);
+            self.push_point(index, emitter.kind, coords, world_pos, None);
+        }
     }
 
     /// Emit anchors spaced along a path for every emitter whose placement
@@ -1816,6 +1839,30 @@ mod test {
             ParsedGeometry::Points { coords, .. } => {
                 assert_eq!(coords.len(), 3);
             }
+            _ => panic!("expected points"),
+        }
+    }
+
+    #[test]
+    fn point_placed_labels_mark_a_line_once_at_its_start_inside_the_tile() {
+        // As MapLibre places a symbol at a point on a line: once, at the first
+        // vertex, and not at all when that vertex is in the tile's buffer,
+        // where clipping cut the line rather than where it starts.
+        let mut config = point_config();
+        config.point_emitters[0].kind = LayerParseKind::Billboard;
+        config.point_emitters[0].from_points = false;
+        config.point_emitters[0].from_lines = true;
+        let bin = encode_tile(vec![make_layer(
+            "l",
+            vec![
+                linestring_feature(&[(10, 10), (50, 50), (100, 0)], vec![]),
+                linestring_feature(&[(-20, 100), (50, 100), (90, 120)], vec![]),
+            ],
+        )]);
+        let groups = parse_mvt_tile(&bin, xyz(), Vec3::ZERO, &[config]);
+        assert_eq!(groups.len(), 1);
+        match &groups[0].geometry {
+            ParsedGeometry::Points { coords, .. } => assert_eq!(coords.len(), 1),
             _ => panic!("expected points"),
         }
     }

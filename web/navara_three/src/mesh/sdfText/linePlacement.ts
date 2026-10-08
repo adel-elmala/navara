@@ -10,7 +10,7 @@ import invariant from "tiny-invariant";
  */
 
 /** `f64` values per label in the kernel's packed input. */
-export const LINE_LABEL_STRIDE = 23;
+export const LINE_LABEL_STRIDE = 24;
 
 /** `f64` values per label in the kernel's packed output: flip, rejected, the
  *  rotated box as minX/maxX/minY/maxY, then metres per pixel at the anchor. */
@@ -85,6 +85,9 @@ export type LinePlacementOptions = {
   /** Whether the label lies flat rather than standing upright, resolved per
    *  label since a feature can override the material's facing. */
   readFlatFacing: (slot: number) => boolean;
+  /** Whether each glyph is its own word and turns with the camera
+   *  (`spreadGlyphs` with `rotateWithCamera`), resolved per label likewise. */
+  readFacesCamera: (slot: number) => boolean;
   /** Whether the label is currently walked backwards, which feeds the kernel's
    *  flip hysteresis. */
   readFlip: (slot: number) => boolean;
@@ -194,6 +197,7 @@ export function packLineLabels(
     out[o + 20] = scaleBands[band + 1];
     out[o + 21] = label.widthEm;
     out[o + 22] = label.maxWordHalfEm * label.fontSize;
+    out[o + 23] = options.readFacesCamera(label.slot) ? 1 : 0;
 
     // Labels are created lazily and sparsely, so their path runs are gathered
     // into input order rather than passed as one contiguous slice.

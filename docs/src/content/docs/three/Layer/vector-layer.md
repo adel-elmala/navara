@@ -100,7 +100,7 @@ The `point`, `billboard`, `text`, and `polyline` materials accept a `geometryTyp
 Derivation is downward only:
 
 - `polyline` with `"polygon"`: every polygon boundary ring (the outer ring and any holes) renders as a closed polyline at the ring's base height. Extruded side edges are not included, so use the polygon material's [`outline`](../../../three/material/polygon-material/#outline) for extruded polygons.
-- `point` / `billboard` / `text` with `"line"`: one point per line-string vertex by default. The `placement` option can place them along the line instead. See [Placing labels and sprites along lines](#placing-labels-and-sprites-along-lines).
+- `point` with `"line"`: one point per line-string vertex by default. `billboard` / `text` with `"line"`: one per line string by default, at its first vertex, as MapLibre places a symbol at a point on a line. The `placement` option can place them along the line instead. See [Placing labels and sprites along lines](#placing-labels-and-sprites-along-lines).
 - `point` with `"polygon"`: one point per polygon-ring vertex (the closing duplicate vertex is skipped).
 - `billboard` / `text` with `"polygon"`: one billboard or label per polygon, placed inside it at the point farthest from its edges, so it never lands in a hole or a narrow part. Each part of a MultiPolygon gets its own. This matches how MapLibre places a symbol on a polygon.
 
@@ -131,7 +131,7 @@ On tiled rendering paths (vector tile sources, or materials with `tiled` / `clam
 
 With `"line"` or `"polygon"` in `geometryTypes`, the `point`, `billboard`, and `text` materials also accept `placement`:
 
-- `"point"` (the default): one object per line-string vertex. Polygons are handled as described in [Deriving representations with geometryTypes](#deriving-representations-with-geometrytypes).
+- `"point"` (the default): one point marker per line-string vertex, and one billboard or label per line string, at its first vertex. Polygons are handled as described in [Deriving representations with geometryTypes](#deriving-representations-with-geometrytypes).
 - `"line"`: objects repeat along the line every `spacing`, evenly spaced regardless of where the vertices are. Polygon boundary rings, holes included, are followed the same way. On vector tiles, ring edges introduced by tile clipping are skipped.
 - `"line-center"`: a single object at the halfway point along each line string or polygon ring.
 

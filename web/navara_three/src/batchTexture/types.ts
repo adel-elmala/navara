@@ -12,6 +12,7 @@ export const BATCHED_ATTRIBUTE_NAMES = [
   "rotation",
   "flatFacing",
   "rotateWithCamera",
+  "spreadGlyphs",
   "emissive",
   "emissiveIntensity",
 ] as const;
@@ -33,6 +34,8 @@ export type BatchAttributeDefaults = {
   rotation: number;
   flatFacing: boolean;
   rotateWithCamera: boolean;
+  /** Text only. */
+  spreadGlyphs?: boolean;
 };
 
 /** vec3 attributes: three components of a row (component 3 stays scalar-poolable). */
@@ -48,8 +51,8 @@ export const BATCH_SCALAR_KEYS = [
   "size",
   "rotation",
   /**
-   * Packed orientation: `facing` and `rotateWithCamera` share one component
-   * (see `packOrientation`). It is a slot key rather than a public attribute
+   * Packed orientation: `facing`, `rotateWithCamera` and (text only)
+   * `spreadGlyphs` share one component (see `packOrientation`). It is a slot key rather than a public attribute
    * — callers write the two booleans by name — but it lives here so a mesh
    * type can declare support for it, which gates allocation to the shaders
    * that actually declare receivers.

@@ -476,14 +476,16 @@ describe("flushBatchTextureUpdates", () => {
 });
 
 describe("packOrientation / unpackOrientation", () => {
-  test("round-trips all four combinations", () => {
+  test("round-trips all eight combinations", () => {
     for (const flatFacing of [false, true]) {
       for (const rotateWithCamera of [false, true]) {
-        const unpacked = unpackOrientation(
-          packOrientation(flatFacing, rotateWithCamera),
-        );
-        expect(unpacked.flatFacing).toBe(flatFacing);
-        expect(unpacked.rotateWithCamera).toBe(rotateWithCamera);
+        for (const spreadGlyphs of [false, true]) {
+          expect(
+            unpackOrientation(
+              packOrientation(flatFacing, rotateWithCamera, spreadGlyphs),
+            ),
+          ).toEqual({ flatFacing, rotateWithCamera, spreadGlyphs });
+        }
       }
     }
   });
@@ -493,6 +495,7 @@ describe("packOrientation / unpackOrientation", () => {
     expect(packOrientation(false, true)).toBe(1);
     expect(packOrientation(true, false)).toBe(2);
     expect(packOrientation(true, true)).toBe(3);
+    expect(packOrientation(true, true, true)).toBe(7);
   });
 });
 
@@ -526,6 +529,34 @@ describe("orientation and rotation attributes", () => {
     );
     expect(flatFacing).toBe(true);
     expect(rotateWithCamera).toBe(false);
+  });
+
+  test("spreadGlyphs shares the component and preserves the other two", () => {
+    const { material } = setupBatchMaterial(4, [...SPRITE_SCALARS]);
+    updateBatchAttribute(material, 0, "flatFacing", true);
+    updateBatchAttribute(material, 0, "rotateWithCamera", false);
+    updateBatchAttribute(material, 0, "spreadGlyphs", true);
+    updateBatchAttribute(material, 0, "flatFacing", false);
+
+    expect(
+      unpackOrientation(readBatchScalar(material, 0, "orientation") ?? NaN),
+    ).toEqual({
+      flatFacing: false,
+      rotateWithCamera: false,
+      spreadGlyphs: true,
+    });
+    // A new slot backfills the material's value for features nobody styled.
+    const { material: other } = setupBatchMaterial(4, [...SPRITE_SCALARS]);
+    updateBatchAttribute(other, 0, "spreadGlyphs", false, {
+      rotation: 0,
+      flatFacing: false,
+      rotateWithCamera: true,
+      spreadGlyphs: true,
+    });
+    expect(
+      unpackOrientation(readBatchScalar(other, 1, "orientation") ?? NaN)
+        .spreadGlyphs,
+    ).toBe(true);
   });
 
   test("rotation stores per-feature radians independently", () => {

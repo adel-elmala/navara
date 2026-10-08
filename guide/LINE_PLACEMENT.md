@@ -51,6 +51,15 @@ billboards label a polygon once at its pole of inaccessibility
 vertex. An MVT anchor that lands in the tile's buffer is dropped, since the
 neighbouring tile labels its own piece of the line.
 
+With the default `"point"` placement a line string is resolved the same way
+(`PointPlacement::line_anchors`, mirroring `polygon_anchors`): point markers
+take every vertex, while text and billboards label it once at its first vertex,
+as MapLibre's `symbol_layout.ts` anchors a point-placed symbol on a LineString.
+In an MVT tile that first vertex is where the tile's clipped piece starts, so
+it is dropped when it lies in the buffer (`emit_label_point`, shared with the
+polygon label point): there the tile cut the line, and the tile holding the
+line's real start labels it.
+
 ## Upload
 
 The path texture (`uPathData`) is a second `LabelDataTexture` with
@@ -95,9 +104,9 @@ unrotated block.
 
 ## Drawing along a line
 
-A label with a non-zero `PATH.y` skips `nvr_quadBasis` entirely. Its basis
-comes from the line under each **word**, not from the camera, so `rotation` and
-`rotateWithCamera` do not apply; facing still picks the plane:
+A label with a non-zero `PATH.y` skips `nvr_quadBasis`, with one exception
+below. Its basis comes from the line under each **word**, not from the camera,
+so `rotation` and `rotateWithCamera` do not apply; facing still picks the plane:
 
 | facing | right | up |
 | --- | --- | --- |
@@ -107,7 +116,36 @@ comes from the line under each **word**, not from the camera, so `rotation` and
 The walk is word-rigid. `glyphWordCenter` (the centre of the glyph's word, in
 ems, identical for every glyph in the word; filled by `layout.ts`, which closes
 a word only at shaper whitespace) gives an arc length `s` from the anchor,
-negated when `PATH.z` flips the label. Samples are a uniform `step` apart, so
+negated when `PATH.z` flips the label. `spreadGlyphs` makes `layout.ts` close a
+piece after every drawn glyph instead, so each glyph is its own "word" and the
+shader and the kernel run unchanged: the kernel only reads the widest piece's
+half length (`wordReach`), which shrinks to half a glyph. It can be set per
+feature: the value rides in the batch texture's packed `orientation` (see
+[BATCH_TEXTURE.md](BATCH_TEXTURE.md)), each label is laid out with its own
+resolved value, and `setFeatureSpreadGlyphsByBatchIndex` lays the feature's
+labels out again when it changes.
+
+The exception: a spread glyph whose (per-feature) `rotateWithCamera` is on
+keeps its place on the path but takes its axes from `nvr_quadBasis` (with
+rotation 0), turning like a point label of the same facing (MapLibre's
+`viewport-glyph`). The kernel learns this per label from `facesCamera` and
+builds that glyph's box from the same axes (`quad_screen_basis`, which mirrors
+`nvr_quadBasis`): `wordReach` either side across the screen around each glyph
+centre on the path, instead of along the segment.
+
+Such a glyph also keeps the anchor's on-screen size (flat ones still
+foreshorten in height), so walking the ground would bunch glyphs wherever the
+line recedes. It is spaced on the screen
+instead: `nvr_screenWalk` projects the samples into the view at the anchor's
+depth and walks them until `s` metres of screen are covered (a loop of up to
+`PATH_SAMPLES` iterations, the one exception to "no loop"), turning the screen
+fraction within the last segment into a ground fraction perspective-correctly
+(`1/z` interpolates linearly on screen). The glyph's quad is then scaled by its
+depth over the anchor's, so every glyph has the anchor's size. The kernel runs
+the same walk (`screen_walk`, `ViewFrame`) to turn the label's screen arc into
+the ground arc it covers, and uses that arc for the max-angle test, for an exact
+fit test (`lineLabelFit` only estimates it from the ground length), and for the
+box, which it projects the same way. Samples are a uniform `step` apart, so
 the segment is `floor((s + halfSpan) / step)`: two texel fetches, no loop. The
 interpolated point plus `uLineOffset` along the ground normal places the word;
 its glyphs are then laid along that one segment's tangent from the word's

@@ -12,7 +12,7 @@ use navara_material::{Appearance, Placement, SourceGeometryType};
 use navara_math::Vec3;
 use navara_parser::geojson::{GeoJson, Geometry, GeometryValue, Position};
 use navara_parser::line_placement::{
-    AlongLine, LinePath, PointPlacement, PolygonAnchors, tangent_to_bearing,
+    AlongLine, LineAnchors, LinePath, PointPlacement, PolygonAnchors, tangent_to_bearing,
 };
 
 use super::builder::{GeometryAppearanceKind, GeometryBuilder};
@@ -170,9 +170,10 @@ fn process_geometry(
 /// Accumulate point geometry with RTE encoding (GeoJSON direct path).
 ///
 /// `geometry_types` opts the point-like appearance into deriving anchors from
-/// line-strings and/or polygons. `placement` then decides whether a line-string
-/// gives one anchor per vertex or anchors spaced `spacing` screen pixels apart
-/// along it, and what a polygon gives (see [`PolygonAnchors`]).
+/// line-strings and/or polygons. `placement` then decides what a line-string
+/// gives (see [`LineAnchors`]: its vertices, its start, or anchors spaced
+/// `spacing` screen pixels apart along it) and what a polygon gives (see
+/// [`PolygonAnchors`]).
 fn accumulate_point_rte(
     builder: &mut GeometryBuilder,
     geometry: &Geometry,
@@ -192,14 +193,14 @@ fn accumulate_point_rte(
         Placement::Line => PointPlacement::Line,
         Placement::LineCenter => PointPlacement::LineCenter,
     };
-    let add_line = |builder: &mut GeometryBuilder, ps: &[Position]| {
-        if placement.is_along_line() {
-            add_line_anchors(builder, ps, kind, height, placement, spacing);
-        } else {
-            add_vertices(builder, ps);
-        }
+    let label = kind != GeometryAppearanceKind::Point;
+    let line_anchors = placement.line_anchors(label);
+    let add_line = |builder: &mut GeometryBuilder, ps: &[Position]| match line_anchors {
+        LineAnchors::Vertices => add_vertices(builder, ps),
+        LineAnchors::Start => add_vertices(builder, &ps[..ps.len().min(1)]),
+        LineAnchors::Along => add_line_anchors(builder, ps, kind, height, placement, spacing),
     };
-    let polygon_anchors = placement.polygon_anchors(kind != GeometryAppearanceKind::Point);
+    let polygon_anchors = placement.polygon_anchors(label);
     let add_polygon = |builder: &mut GeometryBuilder, rings: &[Vec<Position>]| {
         match polygon_anchors {
             PolygonAnchors::Vertices => {
@@ -2052,23 +2053,43 @@ mod test {
     }
 
     #[test]
-    fn point_placement_keeps_one_anchor_per_vertex() {
-        let mut app = run_construct(
-            r#"{
+    fn point_placement_labels_each_line_once_and_marks_every_vertex() {
+        // As MapLibre places a symbol at a point on a line: text and
+        // billboards once, at the first vertex of each line string, while
+        // point markers (circles) keep every vertex.
+        let lines = r#"{
     "type": "Feature",
     "properties": {},
-    "geometry": { "coordinates": [[0, 0], [0.01, 0], [0.02, 0.01]], "type": "LineString" }
-}"#,
+    "geometry": {
+        "coordinates": [[[0, 0], [0.01, 0], [0.02, 0.01]], [[1, 1], [1.01, 1]]],
+        "type": "MultiLineString"
+    }
+}"#;
+        let mut app = run_construct(
+            lines,
             vec![Appearance::Text(TextMaterial {
                 geometry_types: vec![SourceGeometryType::Line],
                 ..Default::default()
             })],
         );
-        let mut geom_query = app
+        let mut text = app
             .world_mut()
             .query_filtered::<&BatchedPointGeometry, With<TextMarker>>();
-        let geoms: Vec<_> = geom_query.iter(app.world()).collect();
-        assert_eq!(geoms[0].coords.len(), 3);
+        let geoms: Vec<_> = text.iter(app.world()).collect();
+        assert_eq!(geoms[0].coords.len(), 2);
+
+        let mut app = run_construct(
+            lines,
+            vec![Appearance::Point(PointMaterial {
+                geometry_types: vec![SourceGeometryType::Line],
+                ..Default::default()
+            })],
+        );
+        let mut points = app
+            .world_mut()
+            .query_filtered::<&BatchedPointGeometry, With<PointMarker>>();
+        let geoms: Vec<_> = points.iter(app.world()).collect();
+        assert_eq!(geoms[0].coords.len(), 5);
     }
 
     #[test]

@@ -23,6 +23,7 @@ export const DEFAULT_BASE_PROPS: Required<
   rotation: 0,
   sizeInMeters: true,
   lineOffset: 0,
+  spreadGlyphs: false,
   offsetDepth: true,
   outlineWidth: 0,
   outlineColor: 0x000000,
@@ -52,6 +53,7 @@ export const DEFAULT_BASE_STATE: SdfTextBaseState = {
   rotation: DEFAULT_BASE_PROPS.rotation * MathUtils.DEG2RAD,
   sizeInMeters: DEFAULT_BASE_PROPS.sizeInMeters,
   lineOffset: DEFAULT_BASE_PROPS.lineOffset,
+  spreadGlyphs: DEFAULT_BASE_PROPS.spreadGlyphs,
   offsetDepth: DEFAULT_BASE_PROPS.offsetDepth,
   outlineWidth:
     DEFAULT_BASE_PROPS.outlineWidth / sdfRadiusFor(DEFAULT_BASE_PROPS.useMsdf),
@@ -95,6 +97,7 @@ export const updateState = (
         : currentState.rotation,
     sizeInMeters: props.sizeInMeters ?? currentState.sizeInMeters,
     lineOffset: props.lineOffset ?? currentState.lineOffset,
+    spreadGlyphs: props.spreadGlyphs ?? currentState.spreadGlyphs,
     offsetDepth: props.offsetDepth ?? currentState.offsetDepth,
     outlineWidth:
       props.outlineWidth !== undefined

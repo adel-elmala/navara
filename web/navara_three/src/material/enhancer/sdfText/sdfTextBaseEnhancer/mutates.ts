@@ -67,6 +67,7 @@ export const createBaseMutates = (
     uPathData: { value: null },
     uPathTexSize: { value: new Vector2(1, 1) },
     uLineOffset: { value: 0 },
+    uSpreadGlyphs: { value: false },
   };
 
   return {
@@ -77,6 +78,7 @@ export const createBaseMutates = (
       refs.uRotation.value = state.rotation;
       refs.uSizeInMeters.value = state.sizeInMeters;
       refs.uLineOffset.value = state.lineOffset;
+      refs.uSpreadGlyphs.value = state.spreadGlyphs;
       refs.uOffsetDepth.value = state.offsetDepth;
       refs.uOutlineWidth.value = state.outlineWidth;
       refs.uOutlineColor.value.set(state.outlineColor);
@@ -129,6 +131,7 @@ export const createBaseMutates = (
       uniforms.uPathData = refs.uPathData;
       uniforms.uPathTexSize = refs.uPathTexSize;
       uniforms.uLineOffset = refs.uLineOffset;
+      uniforms.uSpreadGlyphs = refs.uSpreadGlyphs;
       if (refs.batchDataTexture) {
         uniforms.batchDataTexture = refs.batchDataTexture;
       }

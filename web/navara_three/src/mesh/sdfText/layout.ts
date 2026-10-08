@@ -166,15 +166,14 @@ export type GlyphQuad = {
   /** Sample the COLRv1 colour atlas rather than the SDF atlas. */
   isColor: boolean;
   /**
-   * Centre, along x in em, of the word this glyph belongs to — the same value
-   * for every glyph in the word.
+   * Centre, along x in em, of the rigid piece this glyph belongs to — the same
+   * value for every glyph in the piece. A piece is a word, or the glyph alone
+   * with `spreadGlyphs`.
    *
-   * Line placement puts each *word* on the curve as one rigid piece and lays
-   * its glyphs out along that word's tangent, rather than giving every glyph
-   * its own tangent. Per-glyph following makes the letters of a single word
-   * splay apart on a tight bend, which reads as broken text; a word is short
-   * enough that keeping it straight costs nothing. Unused when the label is
-   * placed at a point.
+   * Line placement puts each piece on the curve rigidly and lays its glyphs
+   * out along that piece's tangent. Word pieces keep a word's letters square
+   * to each other on a tight bend, where per-glyph tangents splay them apart.
+   * Unused when the label is placed at a point.
    */
   wordCenterEmX: number;
 };
@@ -190,8 +189,9 @@ export type LabelLayout = {
   /** Y bounds of the actual rendered glyph bboxes, for the background quad. */
   minYEm: number;
   maxYEm: number;
-  /** Half the width of the widest word: how far line placement's rigid words
-   *  can run along their own tangent from where they sit on the curve. */
+  /** Half the width of the widest piece (see `GlyphQuad.wordCenterEmX`): how
+   *  far line placement's rigid pieces can run along their own tangent from
+   *  where they sit on the curve. */
   maxWordHalfEm: number;
 };
 
@@ -204,6 +204,8 @@ export type LayoutOptions = {
   lineHeight: number;
   /** 0 left, 0.5 center, 1 right. */
   textAlign: number;
+  /** Make every glyph its own rigid piece along a line instead of its word. */
+  spreadGlyphs: boolean;
 };
 
 const EMPTY_LAYOUT: LabelLayout = {
@@ -320,9 +322,16 @@ export function buildLabelLayout(
           uvR: m.atlasX + m.atlasW,
           uvB: m.atlasY + m.atlasH,
           isColor: m.isColor,
-          // Filled in once the word is complete.
+          // Filled in once the piece is complete.
           wordCenterEmX: 0,
         });
+        if (options.spreadGlyphs) {
+          maxWordHalfEm = Math.max(
+            maxWordHalfEm,
+            assignWordCenter(quads, wordStart),
+          );
+          wordStart = quads.length;
+        }
       } else if (glyph.charClass === GlyphCharClass.Whitespace) {
         maxWordHalfEm = Math.max(
           maxWordHalfEm,

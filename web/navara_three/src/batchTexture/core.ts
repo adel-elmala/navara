@@ -54,26 +54,32 @@ function scalarDefault(key: BatchScalarKey): number {
 }
 
 /**
- * Pack the two orientation booleans into one component: `flatFacing` in the
- * 2s place, `rotateWithCamera` in the 1s place, giving the exact float values
- * 0-3. Same trick as {@link packShowOpacity} — two per-feature booleans that
- * would otherwise each burn a texel component.
+ * Pack the orientation booleans into one component: `spreadGlyphs` (text only)
+ * in the 4s place, `flatFacing` in the 2s place, `rotateWithCamera` in the 1s
+ * place, giving the exact float values 0-7. Same trick as
+ * {@link packShowOpacity}: per-feature booleans that would otherwise each burn
+ * a texel component.
  */
 export function packOrientation(
   flatFacing: boolean,
   rotateWithCamera: boolean,
+  spreadGlyphs = false,
 ): number {
-  return (flatFacing ? 2 : 0) + (rotateWithCamera ? 1 : 0);
+  return (
+    (spreadGlyphs ? 4 : 0) + (flatFacing ? 2 : 0) + (rotateWithCamera ? 1 : 0)
+  );
 }
 
 /** Unpack orientation (see {@link packOrientation}). */
 export function unpackOrientation(packed: number): {
   flatFacing: boolean;
   rotateWithCamera: boolean;
+  spreadGlyphs: boolean;
 } {
   return {
-    flatFacing: packed >= 1.5,
+    flatFacing: packed % 4 >= 1.5,
     rotateWithCamera: packed % 2 >= 0.5,
+    spreadGlyphs: packed >= 3.5,
   };
 }
 
@@ -376,6 +382,7 @@ function ensureOrientationSlot(
       packOrientation(
         defaults?.flatFacing ?? false,
         defaults?.rotateWithCamera ?? true,
+        defaults?.spreadGlyphs ?? false,
       ),
     )
   );
@@ -599,7 +606,8 @@ export function updateBatchAttribute(
       return true;
     }
     case "flatFacing":
-    case "rotateWithCamera": {
+    case "rotateWithCamera":
+    case "spreadGlyphs": {
       if (typeof value !== "boolean") return false;
       const slot = ensureOrientationSlot(state, defaults);
       if (!slot) return false;
@@ -612,12 +620,16 @@ export function updateBatchAttribute(
         batchId,
         slot.row,
       );
-      // Read-modify-write: the two booleans share this component.
-      const current = unpackOrientation(data[baseIndex + slot.comp]);
-      data[baseIndex + slot.comp] =
-        attribute === "flatFacing"
-          ? packOrientation(value, current.rotateWithCamera)
-          : packOrientation(current.flatFacing, value);
+      // Read-modify-write: the booleans share this component.
+      const next = {
+        ...unpackOrientation(data[baseIndex + slot.comp]),
+        [attribute]: value,
+      };
+      data[baseIndex + slot.comp] = packOrientation(
+        next.flatFacing,
+        next.rotateWithCamera,
+        next.spreadGlyphs,
+      );
       markTexelDirty(texture, baseIndex);
       return true;
     }

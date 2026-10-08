@@ -46,6 +46,7 @@
 //! | 19,20  | minMpp/maxMpp | the `(min, max]` ground metres per pixel the anchor shows over |
 //! | 21     | widthEm | the label's full length along the line, in ems |
 //! | 22     | wordReach | half the widest word's length, in the font's own units |
+//! | 23     | facesCamera | non-zero = each glyph is its own word and turns with the camera |
 //!
 //! `reachEm` rather than the width because the anchor need not be the text's
 //! centre: with `center.x = 0` the whole label runs off one side of it, and it
@@ -85,7 +86,7 @@
 use wasm_bindgen::prelude::*;
 
 /// Number of `f64` values per label in the packed input slice.
-pub const LINE_LABEL_STRIDE: usize = 23;
+pub const LINE_LABEL_STRIDE: usize = 24;
 
 /// Number of `f64` values per label in [`line_label_fit`]'s packed input.
 ///
@@ -205,10 +206,32 @@ pub fn line_label_place(
         let flip = l[8] != 0.0 && should_flip(sx, sy, l[12] != 0.0);
         let arc = if flip { (-x1, -x0) } else { (x0, x1) };
 
+        // Glyphs that face the camera turn like a point label and keep the
+        // anchor's size on the screen, so they are also spaced on it: the arc
+        // is walked on the screen and becomes the stretch of ground it lands on.
+        let faces_camera = l[23] != 0.0;
+        let facing = faces_camera.then(|| quad_screen_basis(l, view, l[18] != 0.0, true, 0.0));
+        let frame = faces_camera.then(|| ViewFrame::new(l, view));
+        let (arc, overruns) = match &frame {
+            Some(frame) => {
+                let centre = (samples_per_label - 1) as f64 * 0.5;
+                let (t0, out0) = screen_walk(path, samples_per_label, frame, arc.0);
+                let (t1, out1) = screen_walk(path, samples_per_label, frame, arc.1);
+                let ground = ((t0 - centre) * l[9], (t1 - centre) * l[9]);
+                (
+                    ground,
+                    out0 || out1 || -ground.0 > l[10] || ground.1 > l[10],
+                )
+            }
+            None => (arc, false),
+        };
+
         // The fit test is repeated here rather than trusted from phase one, so
         // this stays correct when called with labels that never went through
-        // it.
+        // it. Phase one measures a screen-walked label on the ground, which is
+        // only an estimate of the arc it covers; `overruns` is the exact test.
         let rejected = !fits(l, m, l[10], (l[19], l[20]), l[21], spacing_px)
+            || overruns
             || exceeds_max_angle(
                 path,
                 samples_per_label,
@@ -223,7 +246,15 @@ pub fn line_label_place(
         let (bx0, bx1, by0, by1) = if rejected {
             (0.0, 0.0, 0.0, 0.0)
         } else {
-            path_box(l, path, samples_per_label, axes, flip, meters_per_unit)
+            path_box(
+                l,
+                path,
+                samples_per_label,
+                (axes, frame),
+                (flip, arc),
+                meters_per_unit,
+                facing,
+            )
         };
         out.extend_from_slice(&[
             if flip { 1.0 } else { 0.0 },
@@ -263,14 +294,7 @@ fn meters_per_font_unit(row: &[f64], m: f64) -> f64 {
 /// apply `mvr_getMvHeightOffset` before reading `mvPosition.z` — and along
 /// the same geocentric normal, which is also what the declutter kernel uses.
 fn meters_per_px(anchor: (f64, f64, f64), add_height: f64, cam: &CameraView<'_>) -> f64 {
-    let (mut x, mut y, mut z) = anchor;
-    let len = (x * x + y * y + z * z).sqrt();
-    if add_height != 0.0 && len > 0.0 {
-        let s = add_height / len;
-        x += x * s;
-        y += y * s;
-        z += z * s;
-    }
+    let (x, y, z) = raised(anchor, add_height);
     let v = cam.view;
     let vz = v[2] * x + v[6] * y + v[10] * z + v[14];
     if vz >= 0.0 {
@@ -279,6 +303,17 @@ fn meters_per_px(anchor: (f64, f64, f64), add_height: f64, cam: &CameraView<'_>)
         return 0.0;
     }
     (2.0 * (cam.fov_rad / 2.0).tan() * -vz) / cam.height_px
+}
+
+/// The anchor raised by `add_height` along its geocentric normal, as
+/// `mvr_getMvHeightOffset` raises it.
+fn raised((x, y, z): Vec3, add_height: f64) -> Vec3 {
+    let len = (x * x + y * y + z * z).sqrt();
+    if add_height == 0.0 || len == 0.0 {
+        return (x, y, z);
+    }
+    let s = 1.0 + add_height / len;
+    (x * s, y * s, z * s)
 }
 
 /// The ground spacing a symbol asks for, as metres per pixel, at an anchor
@@ -466,14 +501,11 @@ impl ScreenAxes {
     }
 }
 
-/// The anchor's east, north and up directions, projected into view space and
-/// kept as 2D screen axes.
-///
-/// The derivation mirrors `nvr_enuBasis` in
-/// `shaders/glsl/chunks/quad_orientation.glsl`, which is the basis the vertex
-/// shader lays the label out in. Only the x/y components survive: view space
-/// shares the screen's axes, and the label's orientation is a 2D question.
-fn enu_screen_axes(l: &[f64], view: &[f64]) -> ScreenAxes {
+type Vec3 = (f64, f64, f64);
+
+/// The anchor's east, north and up unit vectors in world space: `nvr_enuBasis`
+/// in `shaders/glsl/chunks/quad_orientation.glsl`. `l` starts with the anchor.
+fn enu_basis(l: &[f64]) -> (Vec3, Vec3, Vec3) {
     let (x, y, z) = (l[0], l[1], l[2]);
     let len = (x * x + y * y + z * z).sqrt();
     let (nx, ny, nz) = (x / len, y / len, z / len);
@@ -491,19 +523,115 @@ fn enu_screen_axes(l: &[f64], view: &[f64]) -> ScreenAxes {
         nz * east.0 - nx * east.2,
         nx * east.1 - ny * east.0,
     );
+    (east, north, (nx, ny, nz))
+}
 
-    // Rotate both into view space (w = 0), keeping the screen plane only.
-    let rot = |v: (f64, f64, f64)| {
-        (
-            view[0] * v.0 + view[4] * v.1 + view[8] * v.2,
-            view[1] * v.0 + view[5] * v.1 + view[9] * v.2,
-        )
+/// A world-space direction rotated into view space (w = 0).
+fn view_dir(view: &[f64], v: Vec3) -> Vec3 {
+    (
+        view[0] * v.0 + view[4] * v.1 + view[8] * v.2,
+        view[1] * v.0 + view[5] * v.1 + view[9] * v.2,
+        view[2] * v.0 + view[6] * v.1 + view[10] * v.2,
+    )
+}
+
+/// The anchor's east, north and up directions, projected into view space and
+/// kept as 2D screen axes.
+///
+/// Built from the same basis the vertex shader lays the label out in. Only the
+/// x/y components survive: view space shares the screen's axes, and the
+/// label's orientation is a 2D question.
+fn enu_screen_axes(l: &[f64], view: &[f64]) -> ScreenAxes {
+    let (east, north, up) = enu_basis(l);
+    let rot = |v: Vec3| {
+        let r = view_dir(view, v);
+        (r.0, r.1)
     };
     ScreenAxes {
         east: rot(east),
         north: rot(north),
-        up: rot((nx, ny, nz)),
+        up: rot(up),
     }
+}
+
+/// The anchor in view space with its east and north directions, for laying a
+/// label out on the screen rather than on the ground.
+#[derive(Clone, Copy)]
+struct ViewFrame {
+    anchor: Vec3,
+    east: Vec3,
+    north: Vec3,
+}
+
+impl ViewFrame {
+    fn new(l: &[f64], view: &[f64]) -> Self {
+        let (east, north, _) = enu_basis(l);
+        let a = raised((l[0], l[1], l[2]), l[3]);
+        let r = view_dir(view, a);
+        ViewFrame {
+            anchor: (r.0 + view[12], r.1 + view[13], r.2 + view[14]),
+            east: view_dir(view, east),
+            north: view_dir(view, north),
+        }
+    }
+
+    /// A ground offset from the anchor, east then north metres, as it lands on
+    /// the screen relative to the anchor, in metres at the anchor's depth, with
+    /// its own view depth: `nvr_screenAtAnchorDepth`.
+    fn project(&self, (e, n): (f64, f64)) -> ((f64, f64), f64) {
+        let (a, ev, nv) = (self.anchor, self.east, self.north);
+        let p = (
+            a.0 + e * ev.0 + n * nv.0,
+            a.1 + e * ev.1 + n * nv.1,
+            a.2 + e * ev.2 + n * nv.2,
+        );
+        let z = p.2.min(-1e-3);
+        let k = a.2 / z;
+        ((p.0 * k - a.0, p.1 * k - a.1), z)
+    }
+
+    fn screen(&self, g: (f64, f64)) -> (f64, f64) {
+        self.project(g).0
+    }
+}
+
+/// The fractional sample index `s` metres from the anchor along the path, the
+/// distance measured on the screen at the anchor's depth: `nvr_screenWalk`.
+/// Also whether the path ran out first, in which case the index is its end.
+///
+/// Within a segment the screen fraction is turned into a ground fraction
+/// perspective-correctly (`1/z` is what interpolates linearly on screen), so a
+/// glyph lands exactly `s` from the anchor on a straight road.
+fn screen_walk(path: &[f32], samples: usize, frame: &ViewFrame, s: f64) -> (f64, bool) {
+    let sample = |k: usize| (path[k * 2] as f64, path[k * 2 + 1] as f64);
+    let last = (samples - 1) as f64;
+    let mut t = last * 0.5;
+    // The shader's `mix` across the segment `t` falls on.
+    let seg = (t.floor() as usize).min(samples - 2);
+    let (a, b, f) = (sample(seg), sample(seg + 1), t - seg as f64);
+    let (mut q, mut z) = frame.project((a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f));
+    let mut remaining = s.abs();
+    while remaining > 0.0 {
+        let next = if s > 0.0 {
+            t.floor() + 1.0
+        } else {
+            t.ceil() - 1.0
+        };
+        if !(0.0..=last).contains(&next) {
+            return (t, true);
+        }
+        let (qn, zn) = frame.project(sample(next as usize));
+        let len = (qn.0 - q.0).hypot(qn.1 - q.1);
+        if len >= remaining {
+            let u = remaining / len.max(1e-6);
+            let f = u * z / ((1.0 - u) * zn + u * z);
+            return (t + (next - t) * f, false);
+        }
+        remaining -= len;
+        (q, z) = (qn, zn);
+        t = next;
+    }
+    (t, false)
 }
 
 /// Unit direction the label reads in, on screen.
@@ -619,21 +747,34 @@ fn basis_box(
 /// font's own units (the declutter kernel scales those to pixels at the
 /// anchor), so an upright label seen from above and a flat one seen edge-on
 /// both claim the thin strip they actually cover.
+///
+/// A glyph that faces the camera (`facing`, its `(right, up)` screen axes) is
+/// its own word, centred on the path, but its quad spans those axes rather than
+/// the segment's: `wordReach` either side across the screen, its height up it.
+/// With a `frame`, the label is laid out on the screen, so the path is carried
+/// there with perspective, as the shader's screen walk sees it, and the quads
+/// keep their size at the anchor's depth.
+///
+/// `arc` is the stretch of path the text covers, in ground metres from the
+/// anchor, already walked backwards when `flip`ped.
 fn path_box(
     l: &[f64],
     path: &[f32],
     samples: usize,
-    axes: ScreenAxes,
-    flip: bool,
+    (axes, frame): (ScreenAxes, Option<ViewFrame>),
+    (flip, (lo, hi)): (bool, (f64, f64)),
     meters_per_unit: f64,
+    facing: Option<((f64, f64), (f64, f64))>,
 ) -> (f64, f64, f64, f64) {
     let (min_y, max_y, line_offset, flat) = (l[15], l[16], l[17], l[18] != 0.0);
     let step = l[9];
     let reach = l[22] * meters_per_unit;
     let d = if flip { -1.0 } else { 1.0 };
-    // The arc the text covers, in metres along the path's own direction.
-    let (a, b) = (d * l[13] * meters_per_unit, d * l[14] * meters_per_unit);
-    let (lo, hi) = (a.min(b), a.max(b));
+    // A ground offset from the anchor, in metres, on the screen in font units.
+    let project = |g: (f64, f64)| {
+        let p = frame.map_or_else(|| axes.ground(g), |f| f.screen(g));
+        (p.0 / meters_per_unit, p.1 / meters_per_unit)
+    };
 
     let sample = |k: usize| (path[k * 2] as f64, path[k * 2 + 1] as f64);
     let centre = sample_index(samples, step, 0.0);
@@ -665,17 +806,41 @@ fn path_box(
         } else {
             (d, 0.0)
         };
-        let normal = axes.ground((-tn, te));
-        let up = if flat { normal } else { axes.up };
-        let offset = (normal.0 * line_offset, normal.1 * line_offset);
-        for t in [t0, t1] {
-            let p = axes.ground((pa.0 + ge * t, pa.1 + gn * t));
-            let (px, py) = (
-                p.0 / meters_per_unit + offset.0,
-                p.1 / meters_per_unit + offset.1,
-            );
-            for h in [min_y, max_y] {
-                let (x, y) = (px + up.0 * h, py + up.1 * h);
+        // `lineOffset` in metres, across the ground (the shader's `normal`).
+        let offset = (
+            -tn * line_offset * meters_per_unit,
+            te * line_offset * meters_per_unit,
+        );
+        // The points on the path the box is spanned from, and the quad around
+        // each: along this segment's own line for a rigid word, or a glyph's
+        // centre with its camera-facing quad.
+        let (ts, right, up, across) = match facing {
+            Some((right, up)) => (
+                [(c_lo - k_lo) / step, (c_hi - k_lo) / step],
+                right,
+                up,
+                l[22],
+            ),
+            None => (
+                [t0, t1],
+                (0.0, 0.0),
+                if flat {
+                    axes.ground((-tn, te))
+                } else {
+                    axes.up
+                },
+                0.0,
+            ),
+        };
+        for t in ts {
+            let (px, py) = project((pa.0 + ge * t + offset.0, pa.1 + gn * t + offset.1));
+            for (w, h) in [
+                (-across, min_y),
+                (-across, max_y),
+                (across, min_y),
+                (across, max_y),
+            ] {
+                let (x, y) = (px + right.0 * w + up.0 * h, py + right.1 * w + up.1 * h);
                 bounds = (
                     bounds.0.min(x),
                     bounds.1.max(x),
@@ -852,6 +1017,7 @@ mod tests {
             f64::INFINITY,
             4.0,  // widthEm
             20.0, // wordReach: one word, the whole label
+            0.0,  // facesCamera
         ]
     }
 
@@ -875,6 +1041,30 @@ mod tests {
             0.0,
             -WGS84_EQ,
             -distance_m,
+            1.0,
+        ]
+    }
+
+    /// A camera south of the anchor and as high above it, looking down at it
+    /// at 45°: screen right = east, and north recedes up the screen.
+    fn tilted_view_north(height_m: f64) -> Vec<f64> {
+        let s = std::f64::consts::FRAC_1_SQRT_2;
+        vec![
+            0.0,
+            s,
+            s,
+            0.0, // col 0: ECEF x (up)
+            1.0,
+            0.0,
+            0.0,
+            0.0, // col 1: ECEF y (east) -> screen x
+            0.0,
+            s,
+            -s,
+            0.0, // col 2: ECEF z (north)
+            0.0,
+            -s * WGS84_EQ,
+            -s * (WGS84_EQ + 2.0 * height_m),
             1.0,
         ]
     }
@@ -1112,6 +1302,127 @@ mod tests {
         );
         let (_, y0, y1) = place(true, &level);
         assert!(y0.abs() < 1e-6 && y1.abs() < 1e-6, "flat level {y0}..{y1}");
+    }
+
+    #[test]
+    fn a_glyph_facing_the_camera_spans_the_screen_not_the_road() {
+        // A road running up the screen, seen from above, with glyphs one em
+        // (10 units) wide. Rigid upright words stand their height toward the
+        // camera and run along the road, so the box is a sliver 40 tall. Glyphs
+        // that face the camera each claim their own width across the road and
+        // their height up it, whichever way they would otherwise face.
+        let path = directed_path(32, 10.0, (0.0, 1.0));
+        let place = |faces_camera: bool, flat: bool| {
+            let mut l = label(std::f64::consts::FRAC_PI_2, false, false);
+            l[9] = 10.0;
+            l[18] = if flat { 1.0 } else { 0.0 };
+            l[22] = 5.0;
+            l[23] = if faces_camera { 1.0 } else { 0.0 };
+            let out = line_label_place(&l, &path, 32, &view(), 1000.0, 1.0, SPACING);
+            (out[3] - out[2], out[5] - out[4])
+        };
+
+        let (w, h) = place(false, false);
+        assert!(w.abs() < 1e-6 && (h - 40.0).abs() < 1e-6, "rigid {w}x{h}");
+        for flat in [false, true] {
+            let (w, h) = place(true, flat);
+            assert!(
+                (w - 10.0).abs() < 1e-6 && (h - 50.0).abs() < 1e-6,
+                "facing camera, flat {flat}: {w}x{h}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_screen_walk_keeps_its_distance_on_screen() {
+        // A road receding from a tilted camera: the far side is foreshortened,
+        // so the same distance on screen covers more ground there than on the
+        // near side, and lands exactly that far from the anchor on screen.
+        let samples = 32;
+        let step = 10.0;
+        let path = directed_path(samples, step, (0.0, 1.0));
+        let l = label(0.0, false, false);
+        let frame = ViewFrame::new(&l, &tilted_view_north(300.0));
+        let centre = (samples - 1) as f64 * 0.5;
+        let on_screen = |t: f64| frame.screen((0.0, (t - centre) * step));
+
+        let mut ground = Vec::new();
+        for s in [-30.0, 30.0] {
+            let (t, ran_out) = screen_walk(&path, samples, &frame, s);
+            assert!(!ran_out);
+            let (q, a) = (on_screen(t), on_screen(centre));
+            let d = (q.0 - a.0).hypot(q.1 - a.1);
+            assert!((d - 30.0).abs() < 1e-6, "walked {s}, landed {d} away");
+            ground.push(((t - centre) * step).abs());
+        }
+        assert!(
+            ground[1] > ground[0],
+            "far {} near {}",
+            ground[1],
+            ground[0]
+        );
+
+        let (_, ran_out) = screen_walk(&path, samples, &frame, 1e6);
+        assert!(ran_out, "a walk past the samples has to say so");
+    }
+
+    #[test]
+    fn glyphs_facing_the_camera_keep_their_spacing_on_a_receding_road() {
+        // Rigid flat words foreshorten with the ground, so their box shrinks up
+        // the screen. Glyphs facing the camera are spaced on the screen, so the
+        // text keeps its full 40 units, plus one glyph's height: all of it when
+        // upright, foreshortened by the 45° tilt when flat.
+        let path = directed_path(32, 10.0, (0.0, 1.0));
+        let view = tilted_view_north(300.0);
+        let place = |faces_camera: bool, flat: bool| {
+            let mut l = label(0.0, false, false);
+            l[9] = 10.0;
+            l[18] = if flat { 1.0 } else { 0.0 };
+            l[22] = 5.0;
+            l[23] = if faces_camera { 1.0 } else { 0.0 };
+            let out = line_label_place(&l, &path, 32, &view, 1000.0, 1.0, SPACING);
+            assert_eq!(out[1], 0.0, "rejected");
+            (out[3] - out[2], out[5] - out[4])
+        };
+
+        let (_, h) = place(false, true);
+        assert!(h < 40.0, "rigid flat words foreshorten: {h}");
+        let (w, h) = place(true, false);
+        assert!(
+            (w - 10.0).abs() < 1e-6 && (h - 50.0).abs() < 1e-6,
+            "upright facing camera: {w}x{h}"
+        );
+        let (w, h) = place(true, true);
+        let flat_h = 40.0 + 10.0 * std::f64::consts::FRAC_1_SQRT_2;
+        assert!(
+            (w - 10.0).abs() < 1e-6 && (h - flat_h).abs() < 1e-6,
+            "flat facing camera: {w}x{h}"
+        );
+    }
+
+    #[test]
+    fn a_screen_walked_box_stays_on_its_anchor_off_screen_centre() {
+        // The box is anchor-relative wherever the anchor sits on screen. Slide
+        // the camera sideways so the anchor lands 100 m right of centre: the
+        // glyphs still sit on it, give or take perspective, so the box has to
+        // straddle it rather than follow the anchor's offset from the centre.
+        let path = directed_path(32, 10.0, (0.0, 1.0));
+        let mut view = tilted_view_north(300.0);
+        view[12] += 100.0;
+        for flat in [false, true] {
+            let mut l = label(0.0, false, false);
+            l[9] = 10.0;
+            l[18] = if flat { 1.0 } else { 0.0 };
+            l[22] = 5.0;
+            l[23] = 1.0;
+            let out = line_label_place(&l, &path, 32, &view, 1000.0, 1.0, SPACING);
+            assert_eq!(out[1], 0.0, "flat {flat}: rejected");
+            let (cx, cy) = ((out[2] + out[3]) * 0.5, (out[4] + out[5]) * 0.5);
+            assert!(
+                cx.abs() < 5.0 && cy.abs() < 10.0,
+                "flat {flat}: box centred at ({cx}, {cy})"
+            );
+        }
     }
 
     #[test]

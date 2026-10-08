@@ -58,6 +58,7 @@ const options = {
   lineOffset: 0,
   readFlip: () => false,
   readFlatFacing: () => true,
+  readFacesCamera: () => false,
 };
 
 /** The span the samples cover either side of the anchor. */
@@ -312,6 +313,17 @@ describe("anchor and offset", () => {
     }).labels;
     expect(packed[18]).toBe(0);
     expect(packed[LINE_LABEL_STRIDE + 18]).toBe(1);
+  });
+
+  it("resolves camera-facing glyphs per label", () => {
+    const p = path(10, 500);
+    const labels = [label({ slot: 0 }), label({ slot: 1 })];
+    const packed = packLineLabels(labels, p, {
+      ...options,
+      readFacesCamera: (slot) => slot === 1,
+    }).labels;
+    expect(packed[23]).toBe(0);
+    expect(packed[LINE_LABEL_STRIDE + 23]).toBe(1);
   });
 });
 

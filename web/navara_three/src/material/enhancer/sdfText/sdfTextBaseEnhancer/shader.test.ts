@@ -176,6 +176,7 @@ describe("sdfTextBaseEnhancer shader", () => {
       expect(shader.uniforms.uPathData).toBeDefined();
       expect(shader.uniforms.uPathTexSize).toBeDefined();
       expect(shader.uniforms.uLineOffset).toBeDefined();
+      expect(shader.uniforms.uSpreadGlyphs).toBeDefined();
     });
 
     it("gives line-placed batches their own program cache key", () => {

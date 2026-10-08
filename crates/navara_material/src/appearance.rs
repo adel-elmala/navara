@@ -437,6 +437,9 @@ pub struct TextMaterial {
     /// Flip a label that would otherwise read right-to-left, so street names
     /// stay legible whichever way the underlying line runs. Default `true`.
     pub keep_upright: bool,
+    /// Follow the line glyph by glyph instead of word by word, as MapLibre
+    /// does: each glyph turns with the line under it. Default `false`.
+    pub spread_glyphs: bool,
     /// Offset perpendicular to the line, in the same units as the font size:
     /// pixels, or metres when `size_in_meters` is set. Positive is to the left
     /// of the direction of travel. Lets a name sit above the road rather than
@@ -521,6 +524,7 @@ impl Default for TextMaterial {
             spacing: 250.0,
             max_angle: 45.0,
             keep_upright: true,
+            spread_glyphs: false,
             line_offset: 0.0,
             clamp_to_ground: true,
             height: 1.,

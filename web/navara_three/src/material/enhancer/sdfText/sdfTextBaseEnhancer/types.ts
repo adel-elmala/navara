@@ -91,6 +91,9 @@ export type SdfTextBaseProps = {
   /** Perpendicular shift away from the line, in the same units as the font
    *  size. Positive is left of the direction of travel. Line placement only. */
   lineOffset?: number;
+  /** Each glyph of an along-line label is its own piece; with
+   *  `rotateWithCamera` it also turns to the camera. Line placement only. */
+  spreadGlyphs?: boolean;
   offsetDepth?: boolean;
   outlineWidth?: number; // raw width, converted in state via sdfRadiusFor(useMsdf)
   outlineColor?: number; // hex
@@ -135,6 +138,7 @@ export type SdfTextBaseState = Readonly<{
   rotation: number; // pre-converted: degrees -> radians
   sizeInMeters: boolean;
   lineOffset: number;
+  spreadGlyphs: boolean;
   offsetDepth: boolean;
   outlineWidth: number; // pre-converted: raw / sdfRadiusFor(useMsdf)
   outlineColor: Color;
@@ -207,6 +211,7 @@ export type SdfTextBaseRefs = {
   uPathTexSize: UniformValue<Vector2>;
   /** Perpendicular shift from the line, in the same units as the font size. */
   uLineOffset: UniformValue<number>;
+  uSpreadGlyphs: UniformValue<boolean>;
   /** Shared batch data texture ref (per-feature style); growth swaps its
    *  `.value` in place. */
   batchDataTexture?: UniformValue<DataTexture | null>;

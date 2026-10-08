@@ -79,6 +79,7 @@ const params = {
   spacing: 250,
   maxAngle: 20,
   keepUpright: true,
+  spreadGlyphs: false,
   lineOffset: 0,
   size: 15,
   sizeInMeters: false,
@@ -195,8 +196,8 @@ export const run = async (view: ThreeView) => {
  * Build the label layer from the current `params`.
  *
  * `geometryTypes: ["line"]` opts the text appearance into line geometry;
- * `placement` then decides whether that means one label per vertex or labels spaced
- * along the line.
+ * `placement` then decides whether that means one label at each line's start or
+ * labels spaced along the line.
  *
  * Returned as a factory rather than a layer so the panel can rebuild it: the
  * options that decide where the anchors go are read when a tile is parsed, and
@@ -216,10 +217,13 @@ const labelsLayerFactory =
         spacing: params.spacing,
         maxAngle: params.maxAngle,
         keepUpright: params.keepUpright,
+        spreadGlyphs: params.spreadGlyphs,
         lineOffset: params.lineOffset,
         // Along a line the label takes its direction from the line, so
-        // `rotateWithCamera` and `rotation` have no effect here.
+        // `rotation` has no effect here. `rotateWithCamera` only matters with
+        // `spreadGlyphs`: off keeps each glyph on the line, as street names are.
         textFacing: "flat",
+        rotateWithCamera: false,
         size: params.size,
         sizeInMeters: params.sizeInMeters,
         clampToGround: true,
@@ -323,6 +327,7 @@ const addControls = (
       text: {
         maxAngle: params.maxAngle,
         keepUpright: params.keepUpright,
+        spreadGlyphs: params.spreadGlyphs,
         lineOffset: params.lineOffset,
         size: params.size,
         sizeInMeters: params.sizeInMeters,
@@ -356,7 +361,7 @@ const addControls = (
       options: {
         "along the line": "line",
         "line midpoint": "line-center",
-        "per vertex": "point",
+        "line start": "point",
       },
     })
     .on("change", rebuild);
@@ -367,6 +372,7 @@ const addControls = (
     .addBinding(params, "maxAngle", { min: 5, max: 180, step: 5 })
     .on("change", restyle);
   placement.addBinding(params, "keepUpright").on("change", restyle);
+  placement.addBinding(params, "spreadGlyphs").on("change", restyle);
   placement
     .addBinding(params, "lineOffset", { min: -30, max: 30, step: 1 })
     .on("change", restyle);
@@ -413,7 +419,7 @@ const addControls = (
       options: {
         "along the line": "line",
         "line midpoint": "line-center",
-        "per vertex": "point",
+        "line start": "point",
       },
     })
     .on("change", rebuildSprites);

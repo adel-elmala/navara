@@ -544,6 +544,11 @@ pub struct TextMaterial {
     #[wasm_bindgen(js_name = keepUpright)]
     #[serde(rename = "keepUpright")]
     pub keep_upright: Option<bool>,
+    /// Follow the line glyph by glyph instead of word by word, as MapLibre
+    /// does: each glyph turns with the line under it. Defaults to `false`.
+    #[wasm_bindgen(js_name = spreadGlyphs)]
+    #[serde(rename = "spreadGlyphs")]
+    pub spread_glyphs: Option<bool>,
     /// Offset perpendicular to the line, in the same units as the font size:
     /// pixels when `sizeInMeters` is false, metres when it is true. Positive is
     /// to the left of the direction of travel, which puts the name above the
@@ -705,6 +710,7 @@ impl From<TextMaterial> for navara_material::TextMaterial {
             spacing: val.spacing.unwrap_or(default.spacing),
             max_angle: val.max_angle.unwrap_or(default.max_angle),
             keep_upright: val.keep_upright.unwrap_or(default.keep_upright),
+            spread_glyphs: val.spread_glyphs.unwrap_or(default.spread_glyphs),
             line_offset: val.line_offset.unwrap_or(default.line_offset),
             height: val.height.unwrap_or(default.height),
             size_in_meters: val.size_in_meters.unwrap_or(default.size_in_meters),
@@ -761,6 +767,7 @@ impl<'a> From<&'a navara_material::TextMaterial> for TextMaterial {
             spacing: Some(value.spacing),
             max_angle: Some(value.max_angle),
             keep_upright: Some(value.keep_upright),
+            spread_glyphs: Some(value.spread_glyphs),
             line_offset: Some(value.line_offset),
             height: Some(value.height),
             size_in_meters: Some(value.size_in_meters),
@@ -814,6 +821,7 @@ impl TextMaterial {
             spacing: self.spacing.unwrap_or(other.spacing),
             max_angle: self.max_angle.unwrap_or(other.max_angle),
             keep_upright: self.keep_upright.unwrap_or(other.keep_upright),
+            spread_glyphs: self.spread_glyphs.unwrap_or(other.spread_glyphs),
             line_offset: self.line_offset.unwrap_or(other.line_offset),
             height: self.height.unwrap_or(other.height),
             size_in_meters: self.size_in_meters.unwrap_or(other.size_in_meters),

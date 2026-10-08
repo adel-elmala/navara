@@ -302,7 +302,7 @@ view.addFontFamily({
 
 **Type:** `("point" | "line" | "polygon")[] | undefined`
 
-**Description:** Source geometry categories this material consumes. Adding `"line"` emits one label per line-string vertex by default. Set [`placement`](#placement) to lay labels along the line instead. Adding `"polygon"` emits one label per polygon, placed inside it at the point farthest from its edges (each part of a MultiPolygon gets its own), or along its rings with [`placement`](#placement). Setting the array replaces the default, so include `"point"` when point geometry should keep rendering. This option applies when the layer's geometry is built: set it at layer creation. `layer.update()` applies a new value only to tiles loaded afterwards, so already-loaded tiles keep their previous geometry until the layer is re-created.
+**Description:** Source geometry categories this material consumes. Adding `"line"` emits one label per line string by default, at its first vertex, as MapLibre places a `symbol-placement: "point"` symbol on a line. Set [`placement`](#placement) to lay labels along the line instead. Adding `"polygon"` emits one label per polygon, placed inside it at the point farthest from its edges (each part of a MultiPolygon gets its own), or along its rings with [`placement`](#placement). Setting the array replaces the default, so include `"point"` when point geometry should keep rendering. This option applies when the layer's geometry is built: set it at layer creation. `layer.update()` applies a new value only to tiles loaded afterwards, so already-loaded tiles keep their previous geometry until the layer is re-created.
 
 **Default:** `["point"]`
 
@@ -548,8 +548,8 @@ import { Color } from "@navaramap/three";
 
 **Description:** How labels are placed on line and polygon geometry. Only takes effect when [`geometryTypes`](#geometrytypes) includes `"line"` or `"polygon"`. Point geometry is always labeled at the point itself.
 
-- `"point"`: one label per line-string vertex, and one label per polygon, inside it at the point farthest from its edges.
-- `"line"`: labels repeat along the line every [`spacing`](#spacing) and follow its curve word by word, like a street name on a map. Each word turns to match the line under it, and the letters within a word stay straight. Polygon boundary rings, holes included, are followed the same way.
+- `"point"`: one label per line string, at its first vertex, and one label per polygon, inside it at the point farthest from its edges. On a vector-tile source, a line whose first vertex lies outside the tile (where the tile cut it) is not labeled in that tile.
+- `"line"`: labels repeat along the line every [`spacing`](#spacing) and follow its curve word by word, like a street name on a map. Each word turns to match the line under it, and the letters within a word stay straight. Set [`spreadGlyphs`](#spreadglyphs) to turn each glyph instead. Polygon boundary rings, holes included, are followed the same way.
 - `"line-center"`: a single label at the halfway point along each line string or polygon ring, bent along it in the same way.
 
 A label along a line is hidden instead of drawn when it would not read well:
@@ -559,7 +559,7 @@ A label along a line is hidden instead of drawn when it would not read well:
 
 These checks run again as the camera moves.
 
-Along-line labels also accept [`keepUpright`](#keepupright) and [`lineOffset`](#lineoffset). They are usually combined with `textFacing: "flat"` so the text lies on the surface along the line.
+Along-line labels also accept [`keepUpright`](#keepupright), [`lineOffset`](#lineoffset), and [`spreadGlyphs`](#spreadglyphs). They are usually combined with `textFacing: "flat"` so the text lies on the surface along the line.
 
 This option applies when the layer's geometry is built: set it at layer creation. `layer.update()` does not rebuild labels that are already loaded, so remove the layer and add it again to change it.
 
@@ -640,7 +640,7 @@ When `true`, the label always faces the viewer. With [`textFacing`](#textfacing)
 
 When `false`, the label is fixed in its anchor's local east/north/up frame, and moving the camera never reorients it. With `"upright"`, it becomes a signboard standing on the surface and facing south. It is readable from a camera looking northward, seen edge-on from directly above, and mirrored from behind. With `"flat"`, it is a north-up label painted on the surface that turns with the map.
 
-Not used when [`placement`](#placement) is `"line"` or `"line-center"`: those labels follow the line's direction.
+Not used when [`placement`](#placement) is `"line"` or `"line-center"`: those labels follow the line's direction. The exception is [`spreadGlyphs`](#spreadglyphs), where `true` turns each glyph this way while it keeps its place on the line.
 
 Can also be set per feature from a [feature evaluator](../../api/feature-evaluator/).
 
@@ -782,6 +782,35 @@ This option applies when the layer's geometry is built. `layer.update()` does no
     geometryTypes: ["line"],
     placement: "line",
     spacing: 400
+  }
+}
+```
+
+### spreadGlyphs
+
+**Type:** `boolean | undefined`
+
+**Description:** Places each glyph of a label along a line on its own instead of each word. How a glyph turns depends on [`rotateWithCamera`](#rotatewithcamera):
+
+- `false`: each glyph turns to match the line under it, the way MapLibre lays out `symbol-placement: "line"` labels. A word bends with a curve instead of staying straight, and on a tight bend the letters of a word spread apart.
+- `true` (the default): each glyph turns to follow the camera, as a point label does with the same [`textFacing`](#textfacing), so the text stays readable however the line runs (MapLibre's `text-rotation-alignment: "viewport-glyph"`). The glyphs also keep one size and are spaced along the line as it appears on screen, so a name stays evenly spaced where the line runs away from the camera.
+
+Only used when [`placement`](#placement) is `"line"` or `"line-center"`. `layer.update()` applies a new value to labels that are already shown.
+
+Can also be set per feature from a [feature evaluator](../../api/feature-evaluator/), for example to keep a label in a cursive script or font word by word while the rest of the layer spreads its glyphs.
+
+**Default:** `false`
+
+**Example:**
+
+```typescript
+{
+  text: {
+    geometryTypes: ["line"],
+    placement: "line",
+    textFacing: "flat",
+    rotateWithCamera: false, // Follow the line, like a MapLibre street name
+    spreadGlyphs: true
   }
 }
 ```

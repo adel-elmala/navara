@@ -56,7 +56,7 @@ type Placement = "point" | "line" | "line-center";
 const PLACEMENT_OPTIONS = {
   "along the line": "line",
   "line midpoint": "line-center",
-  "per vertex / once per polygon": "point",
+  "line start / once per polygon (markers: per vertex)": "point",
 };
 
 /** An arrow pointing up, i.e. along the line once turned to its tangent. */
