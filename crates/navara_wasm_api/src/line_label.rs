@@ -30,7 +30,7 @@
 //! |--------|-------|---------|
 //! | 0,1,2  | anchorX/Y/Z | ECEF anchor in meters, before the height offset |
 //! | 3      | addHeight | surface-normal height offset (meters) |
-//! | 4      | reachEm | farthest the text runs from its anchor along the line, in ems |
+//! | 4      | reachEm | farthest the text's ink runs from its anchor along the line, in ems |
 //! | 5      | fontSize | px or meters, per `sizeInMeters` |
 //! | 6      | sizeInMeters | `0.0` = px, non-zero = meters |
 //! | 7      | maxAngleRad | largest turn allowed within the sliding window; `0` = straight only |
@@ -39,12 +39,12 @@
 //! | 10     | halfExtentMeters | real line either side of the anchor |
 //! | 11     | bearingRad | the line's tangent at the anchor, clockwise from north |
 //! | 12     | isFlipped | the label's current flip, for hysteresis |
-//! | 13,14  | minX/maxX | the label's unrotated box along its baseline |
+//! | 13,14  | minX/maxX | the label's unrotated box along its baseline, over its glyphs' ink |
 //! | 15,16  | minY/maxY | the same across it, +Y up, in the font's own units |
 //! | 17     | lineOffset | shift off the line along its ground normal, in the font's own units |
 //! | 18     | flatFacing | `0.0` = upright, non-zero = flat, as resolved for this label |
 //! | 19,20  | minMpp/maxMpp | the `(min, max]` ground metres per pixel the anchor shows over |
-//! | 21     | widthEm | the label's full length along the line, in ems |
+//! | 21     | widthEm | the label's full drawn length along the line, in ems |
 //! | 22     | wordReach | half the widest word's length, in the font's own units |
 //! | 23     | facesCamera | non-zero = each glyph is its own word and turns with the camera |
 //!
@@ -53,6 +53,10 @@
 //! is that side that has to fit on the line. The caller owns the `center`
 //! arithmetic (it also builds the box), so it hands over the larger of the two
 //! sides.
+//!
+//! All three horizontal measures are the glyphs' ink, not their advances: a
+//! glyph can overhang its advance, and it is the ink that has to stay on the
+//! line and inside the box.
 //!
 //! `lineOffset` and the text's own height are kept apart because they need not
 //! run along the same axis: the shader always moves the text off the line
@@ -94,12 +98,12 @@ pub const LINE_LABEL_STRIDE: usize = 24;
 /// |--------|-------|
 /// | 0,1,2  | anchorX/Y/Z — ECEF metres, before the height offset |
 /// | 3      | addHeight — surface-normal height offset (metres) |
-/// | 4      | reachEm — farthest the text runs from its anchor, in ems |
+/// | 4      | reachEm — farthest the text's ink runs from its anchor, in ems |
 /// | 5      | fontSize — px or metres, per `sizeInMeters` |
 /// | 6      | sizeInMeters — `0.0` = px, non-zero = metres |
 /// | 7      | halfExtentMeters — real line either side of the anchor |
 /// | 8,9    | minMpp/maxMpp — the anchor's scale band |
-/// | 10     | widthEm — the label's full length along the line, in ems |
+/// | 10     | widthEm — the label's full drawn length along the line, in ems |
 /// | 11     | facesCamera — non-zero = spaced on the screen, so its length is not tested here |
 ///
 /// Offsets 0–6 are the full layout's, so a fit row is a prefix of a full row

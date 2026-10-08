@@ -335,6 +335,19 @@ describe("buildLabelLayout word grouping", () => {
     expect(layout.maxWordHalfEm).toBeCloseTo(1, 5);
   });
 
+  it("bounds the ink, not the advances", () => {
+    // Glyph boxes are 1 em, as wide as their advances, unless a bearing moves
+    // them: shifting the first a fifth of an em left and the last a fifth
+    // right makes "abc" draw over [-0.2, 3.2] though it advances over [0, 3].
+    const result = shaped("abc");
+    result.metrics[0].bearingX = -0.2 * 64;
+    result.metrics[2].bearingX = 0.2 * 64;
+    const layout = buildLabelLayout(result, { ...options, text: "abc" });
+    expect(layout.widthEm).toBeCloseTo(3, 5);
+    expect(layout.minXEm).toBeCloseTo(-0.2, 5);
+    expect(layout.maxXEm).toBeCloseTo(3.2, 5);
+  });
+
   it("centres every glyph on itself with spreadGlyphs", () => {
     const layout = buildLabelLayout(shaped("ab cd"), {
       ...options,

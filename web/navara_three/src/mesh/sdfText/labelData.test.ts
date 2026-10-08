@@ -39,6 +39,23 @@ describe("LabelDataTexture", () => {
     expect(store.size.y).toBeLessThanOrEqual(MIN_MAX_TEXTURE_SIZE);
   });
 
+  it("grows no further than the GPU limit when the request fits under it", () => {
+    // Doubling from 16 overshoots 600k to 1,048,576 labels (5.2M texels),
+    // which no 2048 × 2048 texture holds; the request itself does.
+    const store = new LabelDataTexture();
+    store.ensureCapacity(600_000);
+    expect(store.capacity).toBeGreaterThanOrEqual(600_000);
+    expect(store.size.x).toBeLessThanOrEqual(MIN_MAX_TEXTURE_SIZE);
+    expect(store.size.y).toBeLessThanOrEqual(MIN_MAX_TEXTURE_SIZE);
+
+    // The same for the path texture's wider slots.
+    const path = new LabelDataTexture(16, 16);
+    path.ensureCapacity(200_000);
+    expect(path.capacity).toBeGreaterThanOrEqual(200_000);
+    expect(path.size.x).toBeLessThanOrEqual(MIN_MAX_TEXTURE_SIZE);
+    expect(path.size.y).toBeLessThanOrEqual(MIN_MAX_TEXTURE_SIZE);
+  });
+
   it("keeps a slot's linear address when a grow widens the rows", () => {
     // The path texture: 16 texels a label, with the same linear addressing.
     const store = new LabelDataTexture(16, 16);

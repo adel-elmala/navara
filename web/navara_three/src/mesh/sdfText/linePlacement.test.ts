@@ -34,16 +34,20 @@ function path(stepMeters: number, realLineMeters: number): LinePath {
   };
 }
 
+/** A label whose ink spans exactly its advance box unless told otherwise. */
 function label(over: Partial<PackableLabel> = {}): PackableLabel {
+  const widthEm = over.widthEm ?? 4;
   return {
     slot: 0,
     instanceIndex: 0,
     anchor: new Float64Array([1, 2, 3]),
     addHeight: 0,
-    widthEm: 4,
+    widthEm,
     heightEm: 1,
     minYEm: 0,
     maxYEm: 1,
+    minXEm: 0,
+    maxXEm: widthEm,
     maxWordHalfEm: 1.5,
     fontSize: 10,
     ...over,
@@ -152,6 +156,31 @@ describe("label width", () => {
     const offCentre = { ...options, center: [0, 0] as const };
     expect(packLineLabelFits([l], p, offCentre)[10]).toBe(7);
     expect(packLineLabels([l], p, offCentre).labels[21]).toBe(7);
+  });
+
+  it("measures glyphs that overhang their advance by their ink", () => {
+    // A 1-em advance whose glyph draws over [-0.2, 1.2], centred, at size 16.
+    // By advance it reaches 8 either side and fits an 8-unit half-line; it
+    // actually draws to ±11.2, so the fit, the box and the spacing stretch
+    // must all see that.
+    const p = path(10, 500);
+    const l = label({ widthEm: 1, minXEm: -0.2, maxXEm: 1.2, fontSize: 16 });
+
+    const fit = packLineLabelFits([l], p, options);
+    expect(fit[4] * l.fontSize).toBeCloseTo(11.2, 5);
+    expect(fit[10]).toBeCloseTo(1.4, 5);
+
+    const full = packLineLabels([l], p, options).labels;
+    expect(full[4] * l.fontSize).toBeCloseTo(11.2, 5);
+    expect(full[13]).toBeCloseTo(-11.2, 5);
+    expect(full[14]).toBeCloseTo(11.2, 5);
+    expect(full[21]).toBeCloseTo(1.4, 5);
+
+    // Off-centre, the ink is measured from the same origin as the advance:
+    // anchored at the left edge, it reaches 0.2 em back and 1.2 em forward.
+    const left = packLineLabels([l], p, { ...options, center: [0, 0] }).labels;
+    expect(left[13]).toBeCloseTo(-0.2 * 16, 5);
+    expect(left[14]).toBeCloseTo(1.2 * 16, 5);
   });
 
   it("sends the widest word's reach in the font's own units", () => {

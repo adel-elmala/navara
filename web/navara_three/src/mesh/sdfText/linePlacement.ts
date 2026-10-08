@@ -56,6 +56,8 @@ export type PackableLabel = {
   heightEm: number;
   minYEm: number;
   maxYEm: number;
+  minXEm: number;
+  maxXEm: number;
   maxWordHalfEm: number;
   fontSize: number;
 };
@@ -96,14 +98,36 @@ export type LinePlacementOptions = {
 };
 
 /**
+ * The text's drawn extent along the line, in ems from its anchor.
+ *
+ * The shader shifts the layout by `-cx·w` (see `wordCenterEm` in
+ * sdfText.vert.glsl), so the advance box sits over `[-cx·w, (1 - cx)·w]`. The
+ * ink is what has to fit, though, and a glyph can overhang its advance (an
+ * italic's tail, a wide accent), so the glyph boxes' own bounds are measured
+ * from that same origin.
+ */
+function drawnExtentEm(
+  label: PackableLabel,
+  centerX: number,
+): [number, number] {
+  const origin = centerX * label.widthEm;
+  return [label.minXEm - origin, label.maxXEm - origin];
+}
+
+/**
  * How far the text runs from its anchor along the line, in ems.
  *
  * The anchor is the text's centre only when `center.x` is 0.5; otherwise one
- * side is longer, and it is that side that has to fit. The shader lays glyphs
- * out over `[-cx·w, (1 - cx)·w]` (see `wordCenterEm` in sdfText.vert.glsl).
+ * side is longer, and it is that side that has to fit.
  */
 function reachEm(label: PackableLabel, centerX: number): number {
-  return Math.max(Math.abs(centerX), Math.abs(1 - centerX)) * label.widthEm;
+  const [x0, x1] = drawnExtentEm(label, centerX);
+  return Math.max(Math.abs(x0), Math.abs(x1));
+}
+
+/** The drawn text's full length along the line, in ems. */
+function drawnWidthEm(label: PackableLabel): number {
+  return Math.max(0, label.maxXEm - label.minXEm);
 }
 
 /**
@@ -143,7 +167,7 @@ export function packLineLabelFits(
     out[o + 7] = usableHalfExtentMeters(path, label.instanceIndex);
     out[o + 8] = path.scaleBands[band];
     out[o + 9] = path.scaleBands[band + 1];
-    out[o + 10] = label.widthEm;
+    out[o + 10] = drawnWidthEm(label);
     out[o + 11] = options.readOrientation(label.slot).facesCamera ? 1 : 0;
   }
   return out;
@@ -191,18 +215,20 @@ export function packLineLabels(
     // in these units but goes separately: it always moves the text across the
     // ground, while the text's height stands along the surface normal unless
     // it lies flat, so the kernel projects the two differently.
+    // Along the line it spans the glyphs' drawn bounds, which the path box
+    // clamps every word to.
     const [cx, cy] = options.center;
-    const w = label.widthEm;
     const h = label.heightEm;
-    out[o + 13] = (0 - cx * w) * label.fontSize;
-    out[o + 14] = (w - cx * w) * label.fontSize;
+    const [x0, x1] = drawnExtentEm(label, cx);
+    out[o + 13] = x0 * label.fontSize;
+    out[o + 14] = x1 * label.fontSize;
     out[o + 15] = (label.minYEm - cy * h) * label.fontSize;
     out[o + 16] = (label.maxYEm - cy * h) * label.fontSize;
     out[o + 17] = options.lineOffset;
     out[o + 18] = orientation.flatFacing ? 1 : 0;
     out[o + 19] = scaleBands[band];
     out[o + 20] = scaleBands[band + 1];
-    out[o + 21] = label.widthEm;
+    out[o + 21] = drawnWidthEm(label);
     out[o + 22] = label.maxWordHalfEm * label.fontSize;
     out[o + 23] = orientation.facesCamera ? 1 : 0;
 

@@ -88,6 +88,10 @@ and runs in two phases:
    longer than about ¾ of `spacing`, as MapLibre does), and the text's reach
    from the anchor must fit within the real line and the sampled span. Most
    labels on a dense view fail here, so their paths never cross the boundary.
+   The reach, the length and the box's ends are all the glyphs' ink
+   (`LabelLayout.minXEm`/`maxXEm`) measured from the shader's `-cx·w` origin,
+   not the advance width: a glyph can overhang its advance, and it is the ink
+   that has to stay on the line and inside the box.
 2. `lineLabelPlace`, for the survivors with their paths: the flip, the
    `maxAngle` test (the turn summed over a sliding window of about 1.5 em, at
    least two turns, must stay under the limit), and the rotated screen-axis box

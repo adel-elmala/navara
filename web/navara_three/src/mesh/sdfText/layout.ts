@@ -189,6 +189,11 @@ export type LabelLayout = {
   /** Y bounds of the actual rendered glyph bboxes, for the background quad. */
   minYEm: number;
   maxYEm: number;
+  /** X bounds of the rendered glyph bboxes, from the layout's left edge. A
+   *  glyph's ink can overhang its advance, so these can fall outside
+   *  `[0, widthEm]`; line placement measures the drawn text by them. */
+  minXEm: number;
+  maxXEm: number;
   /** Half the width of the widest piece (see `GlyphQuad.wordCenterEmX`): how
    *  far line placement's rigid pieces can run along their own tangent from
    *  where they sit on the curve. */
@@ -215,6 +220,8 @@ const EMPTY_LAYOUT: LabelLayout = {
   heightEm: 0,
   minYEm: 0,
   maxYEm: 1,
+  minXEm: 0,
+  maxXEm: 0,
   maxWordHalfEm: 0,
 };
 
@@ -285,6 +292,8 @@ export function buildLabelLayout(
   const glyphKeys = new Set<bigint>();
   let minYEm = Infinity;
   let maxYEm = -Infinity;
+  let minXEm = Infinity;
+  let maxXEm = -Infinity;
   let maxWordHalfEm = 0;
 
   for (let li = 0; li < lines.length; li++) {
@@ -318,15 +327,18 @@ export function buildLabelLayout(
           ((cursorX + glyph.xOffset) * fuToPx + m.bearingX) / px;
         const offsetEmY =
           ((cursorY + glyph.yOffset) * fuToPx + m.bearingY) / px;
+        const sizeEmX = m.atlasW / px;
         const sizeEmY = m.atlasH / px;
 
         minYEm = Math.min(minYEm, offsetEmY);
         maxYEm = Math.max(maxYEm, offsetEmY + sizeEmY);
+        minXEm = Math.min(minXEm, offsetEmX);
+        maxXEm = Math.max(maxXEm, offsetEmX + sizeEmX);
 
         quads.push({
           offsetEmX,
           offsetEmY,
-          sizeEmX: m.atlasW / px,
+          sizeEmX,
           sizeEmY,
           uvL: m.atlasX,
           uvT: m.atlasY,
@@ -361,6 +373,8 @@ export function buildLabelLayout(
       SDF_PX_SIZE,
     minYEm,
     maxYEm,
+    minXEm,
+    maxXEm,
     maxWordHalfEm,
   };
 }

@@ -17,17 +17,24 @@ export { LABEL_ROWS, LabelRow };
 /** Labels a freshly-created store is sized for, before row padding. */
 const INITIAL_CAPACITY = 16;
 
+/** Texels per side WebGL2 guarantees a texture can have. */
+const MAX_TEXTURE_SIDE = 2048;
+
 /**
  * Texels per row for `texels` texels: the power of two at or above their square
  * root, so the texture stays roughly square and neither side outgrows the label
- * count. Both sides then stay under WebGL2's guaranteed 2048-texel limit up to
- * 4M texels (800k labels), where a fixed narrow row runs out of height first.
+ * count, capped at {@link MAX_TEXTURE_SIDE}. Both sides then stay under that
+ * limit up to 4M texels (800k labels), where a fixed narrow row runs out of
+ * height first.
  *
  * Only the linear texel index is an address — the shader splits it by the
  * live `uLabelTexSize` — so a grow is free to pick a wider row.
  */
 function widthFor(texels: number): number {
-  return 2 ** Math.ceil(Math.log2(Math.sqrt(Math.max(1, texels))));
+  return Math.min(
+    MAX_TEXTURE_SIDE,
+    2 ** Math.ceil(Math.log2(Math.sqrt(Math.max(1, texels)))),
+  );
 }
 
 /** The row width and the floats needed to hold `capacity` labels, padded out
@@ -43,9 +50,10 @@ function allocationFor(
 
 /**
  * Labels an allocation can actually address — the row padding
- * {@link allocationFor} adds is usable space, not slack. Deriving capacity from the buffer instead of
- * from the requested count is what stops `ensureCapacity` from growing while
- * there are still free slots inside the current allocation.
+ * {@link allocationFor} adds is usable space, not slack. Deriving capacity
+ * from the buffer instead of from the requested count is what stops
+ * `ensureCapacity` from growing while there are still free slots inside the
+ * current allocation.
  */
 function labelsIn(floats: number, texelsPerSlot: number): number {
   return Math.max(1, Math.floor(floats / 4 / texelsPerSlot));
@@ -122,6 +130,12 @@ export class LabelDataTexture {
 
     let target = this._capacity;
     while (target < slotCount) target *= 2;
+    // Near the limit, doubling would overshoot a texture the request itself
+    // still fits in: grow only as far as the limit allows. A request past it
+    // gets exactly what it asked for, and only a GPU above the guarantee can
+    // upload that.
+    const limit = Math.floor(MAX_TEXTURE_SIDE ** 2 / this._texelsPerSlot);
+    target = Math.max(slotCount, Math.min(target, limit));
 
     const data = this._allocate(target);
     data.set(this._data);
