@@ -1,3 +1,9 @@
+## v0.2.1 - 2026-10-08
+
+### 🐛 Bug Fixes
+
+- Include navara_three_default_descs in navara_three_plugins ([#857](https://github.com/maplibre/navara/pull/857))
+
 ## v0.2.0 - 2026-10-08
 
 ### 🚀 Features
