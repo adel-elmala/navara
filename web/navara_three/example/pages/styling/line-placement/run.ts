@@ -39,6 +39,9 @@ const ARROW =
 
 type Placement = "point" | "line" | "line-center";
 
+const LABEL_COLOR = new Color().setStyle("#ffffff");
+const PICKED_COLOR = new Color().setStyle("#3ddc84");
+
 /**
  * Family name the label faces are registered under. One Navara font family
  * maps codepoints to faces by unicode range, so Latin, Arabic and Japanese
@@ -170,6 +173,9 @@ export const run = async (view: ThreeView) => {
       },
     });
 
+  /** The `index` of the curve whose label was last clicked. */
+  let pickedIndex: number | undefined;
+
   // `placement` and `spacing` decide where the anchors are, which is resolved
   // once when the features are built — rebuilding the layer is what moves them.
   const addLabels = () => {
@@ -190,7 +196,7 @@ export const run = async (view: ThreeView) => {
         size: labelParams.size,
         sizeInMeters: labelParams.sizeInMeters,
         clampToGround: true,
-        color: new Color().setStyle("#ffffff"),
+        color: LABEL_COLOR,
         outlineColor: new Color().setStyle("#111318"),
         outlineWidth: labelParams.outlineWidth,
         declutter: labelParams.declutter,
@@ -200,9 +206,10 @@ export const run = async (view: ThreeView) => {
     labels.on("featureUpdated", ({ evaluator }) => {
       evaluator.evaluate(
         ({ properties }) => {
+          const index = properties?.["index"] as number;
           const script =
             labelParams.script === "mixed"
-              ? SCRIPTS[(properties?.["index"] as number) % SCRIPTS.length]
+              ? SCRIPTS[index % SCRIPTS.length]
               : labelParams.script;
           return {
             text:
@@ -210,6 +217,7 @@ export const run = async (view: ThreeView) => {
             spreadGlyphs:
               labelParams.spreadGlyphs &&
               !(labelParams.keepArabicWords && script === "ar"),
+            color: index === pickedIndex ? PICKED_COLOR : LABEL_COLOR,
           };
         },
         { filters: ["index", "name_en", "name_ar", "name_ja"] },
@@ -245,6 +253,19 @@ export const run = async (view: ThreeView) => {
   let vertices: Layer | undefined;
   let labels: Layer | undefined = addLabels();
   let sprites: Layer | undefined = addSprites();
+
+  // Clicking a label turns every label of its line green; clicking anything
+  // else clears it. The line and its arrows share the label's feature, so the
+  // pick is matched to the label layer by id.
+  view.on("featureClick", (info) => {
+    const index =
+      info && info.layerId === labels?.id
+        ? (info.properties?.["index"] as number)
+        : undefined;
+    if (index === pickedIndex) return;
+    pickedIndex = index;
+    labels?.forceUpdate();
+  });
 
   const pane = new Pane({ title: "Line Placement" });
   addCameraControl(view, pane);

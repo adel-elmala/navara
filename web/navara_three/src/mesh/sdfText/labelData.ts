@@ -14,32 +14,36 @@ import {
 
 export { LABEL_ROWS, LabelRow };
 
-/**
- * Default texels per texture row. Fixed per store so a capacity grow never
- * changes an existing label's address — only the height grows, and previously
- * written data stays valid after the copy. Wide because the height is what
- * grows and must stay under the GPU's texture size limit: at five texels a
- * label and with capacity doubling, a 64-texel row passes 4096 rows before
- * 60k labels.
- */
-const TEXTURE_WIDTH = 1024;
-
 /** Labels a freshly-created store is sized for, before row padding. */
 const INITIAL_CAPACITY = 16;
 
-/** Floats needed to hold `capacity` labels, padded out to whole texture rows. */
-function floatsFor(
+/**
+ * Texels per row for `texels` texels: the power of two at or above their square
+ * root, so the texture stays roughly square and neither side outgrows the label
+ * count. Both sides then stay under WebGL2's guaranteed 2048-texel limit up to
+ * 4M texels (800k labels), where a fixed narrow row runs out of height first.
+ *
+ * Only the linear texel index is an address — the shader splits it by the
+ * live `uLabelTexSize` — so a grow is free to pick a wider row.
+ */
+function widthFor(texels: number): number {
+  return 2 ** Math.ceil(Math.log2(Math.sqrt(Math.max(1, texels))));
+}
+
+/** The row width and the floats needed to hold `capacity` labels, padded out
+ *  to whole texture rows. */
+function allocationFor(
   capacity: number,
   texelsPerSlot: number,
-  width: number,
-): number {
-  const rows = Math.ceil((capacity * texelsPerSlot) / width);
-  return rows * width * 4;
+): { width: number; floats: number } {
+  const texels = capacity * texelsPerSlot;
+  const width = widthFor(texels);
+  return { width, floats: Math.ceil(texels / width) * width * 4 };
 }
 
 /**
- * Labels an allocation can actually address — the row padding {@link floatsFor}
- * adds is usable space, not slack. Deriving capacity from the buffer instead of
+ * Labels an allocation can actually address — the row padding
+ * {@link allocationFor} adds is usable space, not slack. Deriving capacity from the buffer instead of
  * from the requested count is what stops `ensureCapacity` from growing while
  * there are still free slots inside the current allocation.
  */
@@ -59,14 +63,15 @@ function labelsIn(floats: number, texelsPerSlot: number): number {
  * has, and leaves label state untouched when a text change relocates the
  * label's glyph run.
  *
- * Addressing mirrors `fogLight.frag.glsl`: a linear texel index split over a
- * fixed-width texture, sampled unfiltered. The row layout itself
+ * Addressing mirrors `fogLight.frag.glsl`: a linear texel index split by the
+ * texture's width, sampled unfiltered. The row layout itself
  * ({@link LabelRow} / {@link LABEL_ROWS}) is the shader contract and lives with
  * the enhancer that owns the shader; `LABEL_ROWS` is injected there as a GLSL
  * define so the two addressing schemes can't drift.
  */
 export class LabelDataTexture {
   private _capacity = 0;
+  private _width = 1;
   private _data: Float32Array;
   private _texture: DataTexture;
   private readonly _size = new Vector2();
@@ -75,17 +80,12 @@ export class LabelDataTexture {
    * @param texelsPerSlot Texels each slot occupies. Defaults to
    *   {@link LABEL_ROWS} for the per-label state texture; the path texture
    *   (`uPathData`) uses the same machinery with its own, much wider stride.
-   * @param width Texels per row. The height is what grows, so a wide slot
-   *   needs a wide row to keep the height under the GPU's texture size limit.
    */
   constructor(
     initialCapacity = INITIAL_CAPACITY,
     private readonly _texelsPerSlot: number = LABEL_ROWS,
-    private readonly _width: number = TEXTURE_WIDTH,
   ) {
-    this._data = new Float32Array(
-      floatsFor(Math.max(1, initialCapacity), _texelsPerSlot, _width),
-    );
+    this._data = this._allocate(Math.max(1, initialCapacity));
     this._capacity = labelsIn(this._data.length, _texelsPerSlot);
     this._texture = this._createTexture();
   }
@@ -114,7 +114,8 @@ export class LabelDataTexture {
    *
    * Returns `true` when the backing `DataTexture` was replaced, in which case
    * the caller must re-point the `uLabelData` uniform and refresh
-   * `uLabelTexSize`. Existing label data survives unchanged.
+   * `uLabelTexSize`: the new texture may be wider. Existing label data
+   * survives unchanged at the same linear index.
    */
   ensureCapacity(slotCount: number): boolean {
     if (slotCount <= this._capacity) return false;
@@ -122,9 +123,7 @@ export class LabelDataTexture {
     let target = this._capacity;
     while (target < slotCount) target *= 2;
 
-    const data = new Float32Array(
-      floatsFor(target, this._texelsPerSlot, this._width),
-    );
+    const data = this._allocate(target);
     data.set(this._data);
 
     this._data = data;
@@ -186,6 +185,15 @@ export class LabelDataTexture {
 
   dispose(): void {
     this._texture.dispose();
+  }
+
+  /** A zeroed buffer for `capacity` labels; sets the row width it is laid out
+   *  on. The linear layout does not depend on the width, so the old data copies
+   *  straight in. */
+  private _allocate(capacity: number): Float32Array {
+    const { width, floats } = allocationFor(capacity, this._texelsPerSlot);
+    this._width = width;
+    return new Float32Array(floats);
   }
 
   private _createTexture(): DataTexture {

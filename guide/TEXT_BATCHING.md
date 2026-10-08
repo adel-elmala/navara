@@ -81,7 +81,7 @@ the shader's row indices never branch. `STATE.w` is the feature index into the
 batch data texture. `PATH` is all zero unless the label sits on a line (see
 [LINE_PLACEMENT.md](LINE_PLACEMENT.md)).
 
-Addressing is a linear texel index over a **fixed-width** texture, mirroring
+Addressing is a linear texel index split by the texture's width, mirroring
 `fogLight.frag.glsl`:
 
 ```glsl
@@ -91,10 +91,15 @@ vec4 nvr_readLabel(int slot, int row) {
 }
 ```
 
-The width is fixed (1024 texels) precisely so growth only changes the height —
-an existing label's address stays valid across a resize, and the old data is
-copied straight in. It is wide because that height must stay under the GPU's
-texture size limit, which WebGL2 only guarantees at 2048.
+Only that linear index is an address: the width comes from the live
+`uLabelTexSize`. So the texture is sized by the label count — the width is the
+power of two at or above the square root of the texels it holds, keeping it
+roughly square (16 labels are a 16 × 5 texture) — and a grow may widen it: the
+buffer is copied over linearly, every label keeps its index, and the caller
+refreshes `uLabelTexSize` along with the texture. Staying square is also what
+keeps both sides under WebGL2's guaranteed 2048-texel limit (up to ~800k
+labels), where a narrow fixed row would run out of height first. The path
+texture (`uPathData`) shares this class, with its own wider stride.
 
 `LabelRow` and `LABEL_ROWS` live with the **enhancer**
 (`material/enhancer/sdfText/sdfTextBaseEnhancer/types.ts`), not with the

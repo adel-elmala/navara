@@ -320,6 +320,21 @@ describe("buildLabelLayout word grouping", () => {
     ]);
   });
 
+  it("splits words at a space that draws", () => {
+    // U+1680 OGHAM SPACE MARK is whitespace with ink. It must still close the
+    // word before it, and must not join the next one: otherwise both words
+    // share one centre and turn on the line as a single rigid piece.
+    const OGHAM_SPACE = " ";
+    const text = `ab${OGHAM_SPACE}cd`;
+    const result = shaped(text);
+    result.glyphs[2].charClass = GlyphCharClass.Whitespace;
+    const layout = buildLabelLayout(result, { ...options, text });
+    // The space draws, so five quads: "ab" over [0, 2], the mark over [2, 3],
+    // "cd" over [3, 5].
+    expect(layout.quads.map((q) => q.wordCenterEmX)).toEqual([1, 1, 2.5, 4, 4]);
+    expect(layout.maxWordHalfEm).toBeCloseTo(1, 5);
+  });
+
   it("centres every glyph on itself with spreadGlyphs", () => {
     const layout = buildLabelLayout(shaped("ab cd"), {
       ...options,

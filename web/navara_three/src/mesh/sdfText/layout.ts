@@ -294,10 +294,21 @@ export function buildLabelLayout(
     // shaper's whitespace closes a word (as does the end of a line): drawing
     // nothing is not enough, since a join control (ZWJ/ZWNJ) or a glyph missing
     // from the atlas has no quad yet sits inside its word, and splitting there
-    // would turn one joined word into independently rotated pieces.
+    // would turn one joined word into independently rotated pieces. Drawing
+    // something is not enough to continue one either: a space with ink (U+1680
+    // OGHAM SPACE MARK) still separates words, and is a piece of its own.
     let wordStart = quads.length;
+    const closePiece = () => {
+      maxWordHalfEm = Math.max(
+        maxWordHalfEm,
+        assignWordCenter(quads, wordStart),
+      );
+      wordStart = quads.length;
+    };
 
     for (const glyph of lines[li]) {
+      const isSpace = glyph.charClass === GlyphCharClass.Whitespace;
+      if (isSpace) closePiece();
       const m = metricsMap.get(glyph.compositeKey);
       if (m && m.atlasW > 0 && m.atlasH > 0) {
         glyphKeys.add(glyph.compositeKey);
@@ -325,24 +336,12 @@ export function buildLabelLayout(
           // Filled in once the piece is complete.
           wordCenterEmX: 0,
         });
-        if (options.spreadGlyphs) {
-          maxWordHalfEm = Math.max(
-            maxWordHalfEm,
-            assignWordCenter(quads, wordStart),
-          );
-          wordStart = quads.length;
-        }
-      } else if (glyph.charClass === GlyphCharClass.Whitespace) {
-        maxWordHalfEm = Math.max(
-          maxWordHalfEm,
-          assignWordCenter(quads, wordStart),
-        );
-        wordStart = quads.length;
+        if (options.spreadGlyphs || isSpace) closePiece();
       }
       cursorX += glyph.xAdvance;
       cursorY += glyph.yAdvance;
     }
-    maxWordHalfEm = Math.max(maxWordHalfEm, assignWordCenter(quads, wordStart));
+    closePiece();
   }
 
   if (quads.length === 0) {

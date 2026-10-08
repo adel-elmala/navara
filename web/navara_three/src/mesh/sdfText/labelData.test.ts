@@ -22,30 +22,34 @@ describe("LabelDataTexture", () => {
   // WebGL2 guarantees only 2048 texels per side.
   const MIN_MAX_TEXTURE_SIZE = 2048;
 
+  it("sizes a small store by its label count", () => {
+    // 16 labels are 80 texels: a 16 × 5 texture, not a whole wide row.
+    const store = new LabelDataTexture(16);
+    expect(store.size.x).toBe(16);
+    expect(store.size.y).toBe(5);
+  });
+
   it("stays under the GPU texture limit when grown to a large capacity", () => {
     // Grown, not constructed: capacity doubling overshoots the request, and
     // the overshoot is what used to push a narrow texture past the limit.
     const store = new LabelDataTexture();
     store.ensureCapacity(60_000);
     expect(store.capacity).toBeGreaterThanOrEqual(60_000);
+    expect(store.size.x).toBeLessThanOrEqual(MIN_MAX_TEXTURE_SIZE);
     expect(store.size.y).toBeLessThanOrEqual(MIN_MAX_TEXTURE_SIZE);
   });
 
-  it("lays a wide slot out on a wide row", () => {
+  it("keeps a slot's linear address when a grow widens the rows", () => {
     // The path texture: 16 texels a label, with the same linear addressing.
-    const store = new LabelDataTexture(100_000, 16, 1024);
-    expect(store.size.x).toBe(1024);
-    expect(store.size.y).toBeLessThanOrEqual(MIN_MAX_TEXTURE_SIZE);
-    expect(store.capacity).toBeGreaterThanOrEqual(100_000);
+    const store = new LabelDataTexture(16, 16);
+    store.setRow(9, 3, 1, 2, 3, 4);
+    const base = (9 * 16 + 3) * 4;
+    const width = store.size.x;
 
-    store.setRow(70_000, 3, 1, 2, 3, 4);
-    const base = (70_000 * 16 + 3) * 4;
-    expect(Array.from(dataOf(store).slice(base, base + 4))).toEqual([
-      1, 2, 3, 4,
-    ]);
-    // A grow keeps the width, so existing addresses survive it.
-    store.ensureCapacity(store.capacity + 1);
-    expect(store.size.x).toBe(1024);
+    store.ensureCapacity(100_000);
+    expect(store.size.x).toBeGreaterThan(width);
+    expect(store.size.x).toBeLessThanOrEqual(MIN_MAX_TEXTURE_SIZE);
+    expect(store.size.y).toBeLessThanOrEqual(MIN_MAX_TEXTURE_SIZE);
     expect(Array.from(dataOf(store).slice(base, base + 4))).toEqual([
       1, 2, 3, 4,
     ]);
@@ -169,11 +173,12 @@ describe("LabelDataTexture", () => {
 
     it("reports the grown dimensions through size", () => {
       const store = new LabelDataTexture(2);
-      const heightBefore = store.size.y;
+      const texelsBefore = store.size.x * store.size.y;
 
       expect(store.ensureCapacity(store.capacity + 1)).toBe(true);
 
-      expect(store.size.y).toBeGreaterThan(heightBefore);
+      // Wider, taller or both: the texture stays roughly square.
+      expect(store.size.x * store.size.y).toBeGreaterThan(texelsBefore);
       expect(store.size.x).toBe(store.texture.image.width);
       expect(store.size.y).toBe(store.texture.image.height);
       expect(dataOf(store).length).toBe(store.size.x * store.size.y * 4);

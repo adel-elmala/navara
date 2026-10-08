@@ -72,12 +72,6 @@ const _tmpColor = new Color();
 const _tmpColorArray: [number, number, number] = [0, 0, 0];
 const _visibility = createAnchorVisibilityState();
 
-/**
- * Line labels per row of the path texture: at 32 samples (16 texels) per
- * label, a 1024-texel row, so the texture grows in height rather than width.
- */
-const PATH_LABELS_PER_ROW = 64;
-
 type PositionsInfoBase = {
   batchIDs: Float32Array<ArrayBufferLike> | null;
   positionSize: number;
@@ -363,9 +357,7 @@ export class BatchedSdfTextMesh
     // rather than restating it.
     const pathTexels = this._path ? this._path.stride / 4 : 0;
     this._pathData =
-      pathTexels > 0
-        ? new LabelDataTexture(16, pathTexels, pathTexels * PATH_LABELS_PER_ROW)
-        : null;
+      pathTexels > 0 ? new LabelDataTexture(16, pathTexels) : null;
 
     this.geometry = this._glyphs.geometry;
     const mat = new ShaderMaterial({

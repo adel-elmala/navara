@@ -63,8 +63,8 @@ line's real start labels it.
 ## Upload
 
 The path texture (`uPathData`) is a second `LabelDataTexture` with
-`PATH_SAMPLES / 2` texels per slot (two samples per RGBA texel) and 64 labels
-per row. A label's own slot addresses its path run, so there is no second
+`PATH_SAMPLES / 2` texels per slot (two samples per RGBA texel), sized by the
+label count like the label texture. A label's own slot addresses its path run, so there is no second
 allocator; `PATH.x` is that run's first texel and `PATH.y` the sample step (see
 the row table in [TEXT_BATCHING.md](TEXT_BATCHING.md#the-label-data-texture)).
 `NVR_LINE_PLACEMENT` and `PATH_SAMPLES` are injected as defines only when the
@@ -92,7 +92,10 @@ and runs in two phases:
    `maxAngle` test (the turn summed over a sliding window of about 1.5 em, at
    least two turns, must stay under the limit), and the rotated screen-axis box
    (`path_box`, built segment by segment the way the shader places words, in
-   the font size's units around the anchor). It repeats the fit test rather
+   the font size's units around the anchor). Each corner is projected as a 3D
+   point at its own depth (`ViewFrame::project_offset`), as the shader's
+   projection draws it, so the end of a word running toward a pitched camera
+   claims the larger space it is drawn in. It repeats the fit test rather
    than trusting phase one.
 
 Then `findRepeatedLabels` (in `linePlacement.ts`) drops a label whose text
@@ -146,8 +149,9 @@ the same walk (`screen_walk`, `ViewFrame`) to turn the label's screen arc into
 the ground arc it covers, and uses that arc for the max-angle test, for the
 length half of the fit test (`overruns`; the ground length means nothing for
 such a label, so `fits` and `lineLabelFit`, told by the fit row's
-`facesCamera`, test only its scale band), and for the box, which it projects
-the same way (`ScreenLayout`). Samples are a uniform `step` apart, so
+`facesCamera`, test only its scale band), and for the box, which projects each
+glyph's centre the same way and keeps its quad at the anchor's size. Samples
+are a uniform `step` apart, so
 the segment is `floor((s + halfSpan) / step)`: two texel fetches, no loop. The
 interpolated point plus `uLineOffset` along the ground normal places the word;
 its glyphs are then laid along that one segment's tangent from the word's
