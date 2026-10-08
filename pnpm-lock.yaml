@@ -525,6 +525,9 @@ importers:
       '@navaramap/three':
         specifier: workspace:*
         version: link:../navara_three
+      '@navaramap/three-default-descs':
+        specifier: workspace:*
+        version: link:../navara_three_default_descs
       '@navaramap/three-default-plugin':
         specifier: workspace:*
         version: link:../navara_three_default_plugin
