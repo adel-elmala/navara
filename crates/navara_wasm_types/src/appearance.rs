@@ -544,8 +544,12 @@ pub struct TextMaterial {
     #[wasm_bindgen(js_name = keepUpright)]
     #[serde(rename = "keepUpright")]
     pub keep_upright: Option<bool>,
-    /// Follow the line glyph by glyph instead of word by word, as MapLibre
-    /// does: each glyph turns with the line under it. Defaults to `false`.
+    /// Place each glyph of an along-line label on its own instead of each
+    /// word. With `rotateWithCamera: false` each glyph turns with the line
+    /// under it (MapLibre's `symbol-placement: "line"`); with `true` (the
+    /// default), each glyph turns to the camera like a point label and is
+    /// spaced on the screen (MapLibre's `viewport-glyph`). Can be overridden
+    /// per feature from a feature evaluator. Defaults to `false`.
     #[wasm_bindgen(js_name = spreadGlyphs)]
     #[serde(rename = "spreadGlyphs")]
     pub spread_glyphs: Option<bool>,

@@ -143,9 +143,11 @@ fraction within the last segment into a ground fraction perspective-correctly
 (`1/z` interpolates linearly on screen). The glyph's quad is then scaled by its
 depth over the anchor's, so every glyph has the anchor's size. The kernel runs
 the same walk (`screen_walk`, `ViewFrame`) to turn the label's screen arc into
-the ground arc it covers, and uses that arc for the max-angle test, for an exact
-fit test (`lineLabelFit` only estimates it from the ground length), and for the
-box, which it projects the same way. Samples are a uniform `step` apart, so
+the ground arc it covers, and uses that arc for the max-angle test, for the
+length half of the fit test (`overruns`; the ground length means nothing for
+such a label, so `fits` and `lineLabelFit`, told by the fit row's
+`facesCamera`, test only its scale band), and for the box, which it projects
+the same way (`ScreenLayout`). Samples are a uniform `step` apart, so
 the segment is `floor((s + halfSpan) / step)`: two texel fetches, no loop. The
 interpolated point plus `uLineOffset` along the ground normal places the word;
 its glyphs are then laid along that one segment's tangent from the word's

@@ -100,10 +100,11 @@ pub const LINE_LABEL_STRIDE: usize = 24;
 /// | 7      | halfExtentMeters — real line either side of the anchor |
 /// | 8,9    | minMpp/maxMpp — the anchor's scale band |
 /// | 10     | widthEm — the label's full length along the line, in ems |
+/// | 11     | facesCamera — non-zero = spaced on the screen, so its length is not tested here |
 ///
 /// Offsets 0–6 are the full layout's, so a fit row is a prefix of a full row
-/// plus its extent, band and width.
-pub const LINE_LABEL_FIT_STRIDE: usize = 11;
+/// plus its extent, band, width and facing.
+pub const LINE_LABEL_FIT_STRIDE: usize = 12;
 
 /// Number of `f64` values per anchor in [`line_anchor_place`]'s packed input.
 ///
@@ -210,13 +211,15 @@ pub fn line_label_place(
         // anchor's size on the screen, so they are also spaced on it: the arc
         // is walked on the screen and becomes the stretch of ground it lands on.
         let faces_camera = l[23] != 0.0;
-        let facing = faces_camera.then(|| quad_screen_basis(l, view, l[18] != 0.0, true, 0.0));
-        let frame = faces_camera.then(|| ViewFrame::new(l, view));
-        let (arc, overruns) = match &frame {
-            Some(frame) => {
+        let screen_layout = faces_camera.then(|| ScreenLayout {
+            frame: ViewFrame::new(l, view),
+            basis: quad_screen_basis(l, view, l[18] != 0.0, true, 0.0),
+        });
+        let (arc, overruns) = match &screen_layout {
+            Some(layout) => {
                 let centre = (samples_per_label - 1) as f64 * 0.5;
-                let (t0, out0) = screen_walk(path, samples_per_label, frame, arc.0);
-                let (t1, out1) = screen_walk(path, samples_per_label, frame, arc.1);
+                let walk = |s| screen_walk(path, samples_per_label, &layout.frame, s);
+                let ((t0, out0), (t1, out1)) = (walk(arc.0), walk(arc.1));
                 let ground = ((t0 - centre) * l[9], (t1 - centre) * l[9]);
                 (
                     ground,
@@ -228,10 +231,17 @@ pub fn line_label_place(
 
         // The fit test is repeated here rather than trusted from phase one, so
         // this stays correct when called with labels that never went through
-        // it. Phase one measures a screen-walked label on the ground, which is
-        // only an estimate of the arc it covers; `overruns` is the exact test.
-        let rejected = !fits(l, m, l[10], (l[19], l[20]), l[21], spacing_px)
-            || overruns
+        // it. A screen-walked label's length is judged by `overruns` alone:
+        // the ground length `fits` measures is not the arc it covers.
+        let rejected = !fits(
+            l,
+            m,
+            l[10],
+            (l[19], l[20]),
+            l[21],
+            spacing_px,
+            !faces_camera,
+        ) || overruns
             || exceeds_max_angle(
                 path,
                 samples_per_label,
@@ -250,10 +260,10 @@ pub fn line_label_place(
                 l,
                 path,
                 samples_per_label,
-                (axes, frame),
+                axes,
+                screen_layout,
                 (flip, arc),
                 meters_per_unit,
-                facing,
             )
         };
         out.extend_from_slice(&[
@@ -348,6 +358,10 @@ fn in_scale_band(m: f64, (min, max): (f64, f64), length: (f64, bool), spacing_px
 /// whose offsets 0–6 are shared; the extent, band and width sit at different
 /// offsets in each, so they are passed in. `m` is [`meters_per_px`] at the
 /// anchor.
+///
+/// `on_ground` is unset for a label spaced on the screen (`facesCamera`): its
+/// ground reach is not known until its path is walked, so only its scale band
+/// is tested here and [`line_label_place`] tests its length.
 fn fits(
     row: &[f64],
     m: f64,
@@ -355,10 +369,13 @@ fn fits(
     band: (f64, f64),
     width_em: f64,
     spacing_px: f64,
+    on_ground: bool,
 ) -> bool {
     let reach = row[4] * row[5] * meters_per_font_unit(row, m);
     let length = (width_em * row[5], row[6] != 0.0);
-    in_scale_band(m, band, length, spacing_px) && reach > 0.0 && reach <= half_extent
+    in_scale_band(m, band, length, spacing_px)
+        && reach > 0.0
+        && (!on_ground || reach <= half_extent)
 }
 
 /// Whether a label is short enough to sit on its line, using nothing but the
@@ -385,7 +402,15 @@ pub fn line_label_fit(
         .iter()
         .map(|l| {
             let m = meters_per_px((l[0], l[1], l[2]), l[3], &cam);
-            u8::from(fits(l, m, l[7], (l[8], l[9]), l[10], spacing_px))
+            u8::from(fits(
+                l,
+                m,
+                l[7],
+                (l[8], l[9]),
+                l[10],
+                spacing_px,
+                l[11] == 0.0,
+            ))
         })
         .collect()
 }
@@ -552,6 +577,15 @@ fn enu_screen_axes(l: &[f64], view: &[f64]) -> ScreenAxes {
         north: rot(north),
         up: rot(up),
     }
+}
+
+/// How a label whose glyphs face the camera is laid out on the screen: the
+/// frame its path is walked and projected in, and its glyphs' `(right, up)`
+/// screen axes.
+#[derive(Clone, Copy)]
+struct ScreenLayout {
+    frame: ViewFrame,
+    basis: ((f64, f64), (f64, f64)),
 }
 
 /// The anchor in view space with its east and north directions, for laying a
@@ -748,12 +782,12 @@ fn basis_box(
 /// anchor), so an upright label seen from above and a flat one seen edge-on
 /// both claim the thin strip they actually cover.
 ///
-/// A glyph that faces the camera (`facing`, its `(right, up)` screen axes) is
-/// its own word, centred on the path, but its quad spans those axes rather than
-/// the segment's: `wordReach` either side across the screen, its height up it.
-/// With a `frame`, the label is laid out on the screen, so the path is carried
-/// there with perspective, as the shader's screen walk sees it, and the quads
-/// keep their size at the anchor's depth.
+/// A label laid out on the screen (`screen_layout`, for glyphs that face the
+/// camera) has each glyph as its own word, centred on the path, but its quad
+/// spans the camera-facing `basis` rather than the segment's axes: `wordReach`
+/// either side across the screen, its height up it. The path is carried onto
+/// the screen with perspective through its `frame`, as the shader's screen walk
+/// sees it, and the quads keep their size at the anchor's depth.
 ///
 /// `arc` is the stretch of path the text covers, in ground metres from the
 /// anchor, already walked backwards when `flip`ped.
@@ -761,10 +795,10 @@ fn path_box(
     l: &[f64],
     path: &[f32],
     samples: usize,
-    (axes, frame): (ScreenAxes, Option<ViewFrame>),
+    axes: ScreenAxes,
+    screen_layout: Option<ScreenLayout>,
     (flip, (lo, hi)): (bool, (f64, f64)),
     meters_per_unit: f64,
-    facing: Option<((f64, f64), (f64, f64))>,
 ) -> (f64, f64, f64, f64) {
     let (min_y, max_y, line_offset, flat) = (l[15], l[16], l[17], l[18] != 0.0);
     let step = l[9];
@@ -772,7 +806,7 @@ fn path_box(
     let d = if flip { -1.0 } else { 1.0 };
     // A ground offset from the anchor, in metres, on the screen in font units.
     let project = |g: (f64, f64)| {
-        let p = frame.map_or_else(|| axes.ground(g), |f| f.screen(g));
+        let p = screen_layout.map_or_else(|| axes.ground(g), |s| s.frame.screen(g));
         (p.0 / meters_per_unit, p.1 / meters_per_unit)
     };
 
@@ -814,8 +848,10 @@ fn path_box(
         // The points on the path the box is spanned from, and the quad around
         // each: along this segment's own line for a rigid word, or a glyph's
         // centre with its camera-facing quad.
-        let (ts, right, up, across) = match facing {
-            Some((right, up)) => (
+        let (ts, right, up, across) = match screen_layout {
+            Some(ScreenLayout {
+                basis: (right, up), ..
+            }) => (
                 [(c_lo - k_lo) / step, (c_hi - k_lo) / step],
                 right,
                 up,
@@ -1586,8 +1622,23 @@ mod tests {
     /// by comment alone.
     fn fit_row(l: &[f64]) -> [f64; LINE_LABEL_FIT_STRIDE] {
         [
-            l[0], l[1], l[2], l[3], l[4], l[5], l[6], l[10], l[19], l[20], l[21],
+            l[0], l[1], l[2], l[3], l[4], l[5], l[6], l[10], l[19], l[20], l[21], l[23],
         ]
+    }
+
+    #[test]
+    fn the_fit_phase_leaves_a_screen_spaced_label_to_its_walk() {
+        // A 2-em reach (20 m) on 5 m of line: too long on the ground, but a
+        // label spaced on the screen covers whatever ground its walk lands on,
+        // which only phase two knows. Phase one keeps it; a ground-spaced one
+        // with the same row is rejected.
+        let view = view();
+        let mut l = label(std::f64::consts::FRAC_PI_2, false, false);
+        l[10] = 5.0;
+        let ground = line_label_fit(&fit_row(&l), &view, 1000.0, 1.0, SPACING);
+        l[23] = 1.0;
+        let screen = line_label_fit(&fit_row(&l), &view, 1000.0, 1.0, SPACING);
+        assert_eq!((ground[0], screen[0]), (0, 1));
     }
 
     #[test]

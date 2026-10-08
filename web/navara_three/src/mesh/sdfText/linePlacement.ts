@@ -17,7 +17,7 @@ export const LINE_LABEL_STRIDE = 24;
 export const LINE_LABEL_RESULT_STRIDE = 7;
 
 /** `f64` values per label in the `lineLabelFit` pre-pass's packed input. */
-export const LINE_LABEL_FIT_STRIDE = 11;
+export const LINE_LABEL_FIT_STRIDE = 12;
 
 /** Scalars the engine sends per anchor alongside its path samples. */
 export const PATH_META_STRIDE = 2;
@@ -74,6 +74,9 @@ export type LinePath = {
   scaleBands: Float32Array<ArrayBufferLike>;
 };
 
+/** A label's facing, as the kernel reads it. */
+export type LabelOrientation = { flatFacing: boolean; facesCamera: boolean };
+
 export type LinePlacementOptions = {
   sizeInMeters: boolean;
   maxAngleDeg: number;
@@ -82,12 +85,11 @@ export type LinePlacementOptions = {
   center: readonly [number, number];
   /** Perpendicular offset from the line, in the font size's units. */
   lineOffset: number;
-  /** Whether the label lies flat rather than standing upright, resolved per
-   *  label since a feature can override the material's facing. */
-  readFlatFacing: (slot: number) => boolean;
-  /** Whether each glyph is its own word and turns with the camera
-   *  (`spreadGlyphs` with `rotateWithCamera`), resolved per label likewise. */
-  readFacesCamera: (slot: number) => boolean;
+  /** How the label faces, resolved per label since a feature can override the
+   *  material's: whether it lies flat rather than standing upright, and
+   *  whether each glyph is its own word turned to the camera (`spreadGlyphs`
+   *  with `rotateWithCamera`). */
+  readOrientation: (slot: number) => LabelOrientation;
   /** Whether the label is currently walked backwards, which feeds the kernel's
    *  flip hysteresis. */
   readFlip: (slot: number) => boolean;
@@ -120,7 +122,10 @@ function reachEm(label: PackableLabel, centerX: number): number {
 export function packLineLabelFits(
   labels: readonly PackableLabel[],
   path: LinePath,
-  options: Pick<LinePlacementOptions, "sizeInMeters" | "center">,
+  options: Pick<
+    LinePlacementOptions,
+    "sizeInMeters" | "center" | "readOrientation"
+  >,
 ): Float64Array {
   const out = new Float64Array(labels.length * LINE_LABEL_FIT_STRIDE);
   const metric = options.sizeInMeters ? 1 : 0;
@@ -139,6 +144,7 @@ export function packLineLabelFits(
     out[o + 8] = path.scaleBands[band];
     out[o + 9] = path.scaleBands[band + 1];
     out[o + 10] = label.widthEm;
+    out[o + 11] = options.readOrientation(label.slot).facesCamera ? 1 : 0;
   }
   return out;
 }
@@ -164,6 +170,7 @@ export function packLineLabels(
     const label = labels[i];
     const o = i * LINE_LABEL_STRIDE;
     const band = label.instanceIndex * SCALE_BAND_STRIDE;
+    const orientation = options.readOrientation(label.slot);
     out[o] = label.anchor[0];
     out[o + 1] = label.anchor[1];
     out[o + 2] = label.anchor[2];
@@ -192,12 +199,12 @@ export function packLineLabels(
     out[o + 15] = (label.minYEm - cy * h) * label.fontSize;
     out[o + 16] = (label.maxYEm - cy * h) * label.fontSize;
     out[o + 17] = options.lineOffset;
-    out[o + 18] = options.readFlatFacing(label.slot) ? 1 : 0;
+    out[o + 18] = orientation.flatFacing ? 1 : 0;
     out[o + 19] = scaleBands[band];
     out[o + 20] = scaleBands[band + 1];
     out[o + 21] = label.widthEm;
     out[o + 22] = label.maxWordHalfEm * label.fontSize;
-    out[o + 23] = options.readFacesCamera(label.slot) ? 1 : 0;
+    out[o + 23] = orientation.facesCamera ? 1 : 0;
 
     // Labels are created lazily and sparsely, so their path runs are gathered
     // into input order rather than passed as one contiguous slice.

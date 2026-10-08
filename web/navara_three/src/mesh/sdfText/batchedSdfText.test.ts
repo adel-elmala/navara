@@ -10,6 +10,7 @@ import {
   readBatchScalar,
   readBatchShowOpacity,
   readBatchVec3,
+  unpackOrientation,
 } from "../../batchTexture";
 import type { EventContext } from "../../event/context";
 
@@ -333,6 +334,10 @@ describe("BatchedSdfTextMesh per-feature spreadGlyphs", () => {
   const reachOf = (mesh: BatchedSdfTextMesh, slot: number) =>
     (mesh as unknown as { _labels: { maxWordHalfEm: number }[] })._labels[slot]
       .maxWordHalfEm;
+  const spreadOf = (mesh: BatchedSdfTextMesh, batchIndex: number) =>
+    unpackOrientation(
+      readBatchScalar(batchMat(mesh), batchIndex, "orientation") ?? NaN,
+    ).spreadGlyphs;
 
   it("lays out only the overridden feature glyph by glyph", () => {
     const { mesh } = makeMesh();
@@ -356,6 +361,37 @@ describe("BatchedSdfTextMesh per-feature spreadGlyphs", () => {
     expect(reachOf(mesh, 1)).toBeGreaterThan(glyph);
     // Feature 0, never styled, keeps the material's value from the backfill.
     expect(reachOf(mesh, 0)).toBe(glyph);
+  });
+
+  it("keeps a feature's override through a material change to another field", async () => {
+    const { mesh } = makeMesh(material({ spreadGlyphs: true }));
+    mesh.setTextByBatchIndex(0, "ABCD");
+    mesh.setTextByBatchIndex(1, "ABCD");
+    mesh.setFeatureSpreadGlyphsByBatchIndex(1, false);
+    const word = reachOf(mesh, 1);
+
+    // Only the facing changed: the override must survive, and with it the
+    // word-by-word layout the label was given.
+    await mesh._update(
+      textMeshEvent(material({ spreadGlyphs: true, textFacing: "flat" })),
+    );
+    expect(spreadOf(mesh, 1)).toBe(false);
+    expect(reachOf(mesh, 1)).toBe(word);
+  });
+
+  it("writes a material change through to features with no label yet", async () => {
+    const { mesh } = makeMesh();
+    mesh.setTextByBatchIndex(0, "ABCD");
+    const word = reachOf(mesh, 0);
+    // Allocates the orientation slot, backfilling feature 1 with the
+    // material's `spreadGlyphs: false`.
+    mesh.setFeatureRotateWithCameraByBatchIndex(0, true);
+
+    await mesh._update(textMeshEvent(material({ spreadGlyphs: true })));
+    // Feature 1's label is created only now, and must be laid out spread.
+    mesh.setTextByBatchIndex(1, "ABCD");
+    expect(spreadOf(mesh, 1)).toBe(true);
+    expect(reachOf(mesh, 1)).toBeLessThan(word);
   });
 });
 

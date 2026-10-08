@@ -57,8 +57,7 @@ const options = {
   center: [0.5, 0] as const,
   lineOffset: 0,
   readFlip: () => false,
-  readFlatFacing: () => true,
-  readFacesCamera: () => false,
+  readOrientation: () => ({ flatFacing: true, facesCamera: false }),
 };
 
 /** The span the samples cover either side of the anchor. */
@@ -304,26 +303,21 @@ describe("anchor and offset", () => {
     expect(lifted.slice(13, 17)).toEqual(plain.slice(13, 17));
   });
 
-  it("resolves the facing per label", () => {
+  it("resolves the facing per label, in both phases", () => {
     const p = path(10, 500);
     const labels = [label({ slot: 0 }), label({ slot: 1 })];
-    const packed = packLineLabels(labels, p, {
+    const perLabel = {
       ...options,
-      readFlatFacing: (slot) => slot === 1,
-    }).labels;
-    expect(packed[18]).toBe(0);
-    expect(packed[LINE_LABEL_STRIDE + 18]).toBe(1);
-  });
-
-  it("resolves camera-facing glyphs per label", () => {
-    const p = path(10, 500);
-    const labels = [label({ slot: 0 }), label({ slot: 1 })];
-    const packed = packLineLabels(labels, p, {
-      ...options,
-      readFacesCamera: (slot) => slot === 1,
-    }).labels;
-    expect(packed[23]).toBe(0);
-    expect(packed[LINE_LABEL_STRIDE + 23]).toBe(1);
+      readOrientation: (slot: number) => ({
+        flatFacing: slot === 1,
+        facesCamera: slot === 0,
+      }),
+    };
+    const packed = packLineLabels(labels, p, perLabel).labels;
+    expect([packed[18], packed[LINE_LABEL_STRIDE + 18]]).toEqual([0, 1]);
+    expect([packed[23], packed[LINE_LABEL_STRIDE + 23]]).toEqual([1, 0]);
+    const fit = packLineLabelFits(labels, p, perLabel);
+    expect([fit[11], fit[LINE_LABEL_FIT_STRIDE + 11]]).toEqual([1, 0]);
   });
 });
 

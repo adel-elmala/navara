@@ -437,8 +437,11 @@ pub struct TextMaterial {
     /// Flip a label that would otherwise read right-to-left, so street names
     /// stay legible whichever way the underlying line runs. Default `true`.
     pub keep_upright: bool,
-    /// Follow the line glyph by glyph instead of word by word, as MapLibre
-    /// does: each glyph turns with the line under it. Default `false`.
+    /// Place each glyph of an along-line label on its own instead of each
+    /// word. With `rotate_with_camera` off each glyph turns with the line
+    /// under it (MapLibre's `symbol-placement: "line"`); on, each glyph turns
+    /// to the camera like a point label and is spaced on the screen (MapLibre's
+    /// `viewport-glyph`). Can be overridden per feature. Default `false`.
     pub spread_glyphs: bool,
     /// Offset perpendicular to the line, in the same units as the font size:
     /// pixels, or metres when `size_in_meters` is set. Positive is to the left

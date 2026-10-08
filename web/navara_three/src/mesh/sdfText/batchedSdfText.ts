@@ -56,6 +56,7 @@ import {
 import { ALIGN_FACTORS, buildLabelLayout, type LayoutOptions } from "./layout";
 import {
   LINE_LABEL_RESULT_STRIDE,
+  type LabelOrientation,
   type LinePath,
   PATH_META_STRIDE,
   findRepeatedLabels,
@@ -112,6 +113,9 @@ type PositionsInfo = PositionsInfoBase &
       }
   );
 
+/** A feature's packed orientation, as `unpackOrientation` returns it. */
+type Orientation = ReturnType<typeof unpackOrientation>;
+
 /**
  * One label in the batch.
  *
@@ -121,9 +125,6 @@ type PositionsInfo = PositionsInfoBase &
  * because the declutter pass and the glyph-retain bookkeeping need them on the
  * CPU every frame.
  */
-/** A feature's packed orientation, as `unpackOrientation` returns it. */
-type Orientation = ReturnType<typeof unpackOrientation>;
-
 type LabelRecord = {
   /** Row block in the label data texture, and this label's declutter handle. */
   slot: number;
@@ -572,9 +573,25 @@ export class BatchedSdfTextMesh
       Math.min(Math.max(state.center[1], -0.5), 0.5),
     ] as const;
 
+    const materialOrientation = this._orientationDefaults();
+    const readOrientation = (slot: number): LabelOrientation => {
+      const o = this._resolveOrientation(
+        this._labels[slot]?.batchIndex,
+        materialOrientation,
+      );
+      return {
+        flatFacing: o.flatFacing,
+        facesCamera: o.spreadGlyphs && o.rotateWithCamera,
+      };
+    };
+
     // Phase one: which labels are short enough to sit on their line at all.
     const fits = lineLabelFit(
-      packLineLabelFits(placeable, line, { sizeInMeters, center }),
+      packLineLabelFits(placeable, line, {
+        sizeInMeters,
+        center,
+        readOrientation,
+      }),
       view,
       heightPx,
       fovRad,
@@ -603,6 +620,7 @@ export class BatchedSdfTextMesh
         sizeInMeters,
         center,
         lineOffset: state.lineOffset,
+        readOrientation,
       });
 
     for (const record of placeable) {
@@ -624,6 +642,7 @@ export class BatchedSdfTextMesh
       sizeInMeters: boolean;
       center: readonly [number, number];
       lineOffset: number;
+      readOrientation: (slot: number) => LabelOrientation;
     },
   ): void {
     const line = this._path;
@@ -631,12 +650,6 @@ export class BatchedSdfTextMesh
     const rejected = this._lineRejected;
     invariant(line && boxes && rejected, "line placement buffers");
     const { heightPx, fovRad, spacingPx, sizeInMeters, center } = pass;
-    const materialOrientation = this._orientationDefaults();
-    const orientationOf = (slot: number) =>
-      this._resolveOrientation(
-        this._labels[slot]?.batchIndex,
-        materialOrientation,
-      );
 
     const packed = packLineLabels(survivors, line, {
       sizeInMeters,
@@ -646,11 +659,7 @@ export class BatchedSdfTextMesh
       lineOffset: pass.lineOffset,
       readFlip: (slot) =>
         this._labelData.getComponent(slot, LabelRow.PATH, 2) !== 0,
-      readFlatFacing: (slot) => orientationOf(slot).flatFacing,
-      readFacesCamera: (slot) => {
-        const o = orientationOf(slot);
-        return o.spreadGlyphs && o.rotateWithCamera;
-      },
+      readOrientation: pass.readOrientation,
     });
 
     const result = lineLabelPlace(
@@ -1728,15 +1737,50 @@ export class BatchedSdfTextMesh
     // value. Once a slot exists every feature reads the texture, so a changed
     // material value must be written through or evaluator overrides would
     // outlive it — the same "a material update overwrites per-feature style"
-    // rule the style/size writes above follow.
-    const rotationChanged =
-      rotationDeg !== (prevMaterial.rotation ?? 0) &&
-      hasBatchScalarSlot(mat, "rotation");
-    const orientationChanged =
-      (flatFacing !== (prevMaterial.textFacing === "flat") ||
-        followCamera !== (prevMaterial.rotateWithCamera ?? true) ||
-        nextSpreadGlyphs !== (prevMaterial.spreadGlyphs ?? false)) &&
-      hasBatchScalarSlot(mat, "orientation");
+    // rule the style/size writes above follow. Only the fields that changed,
+    // and for every feature: one without a label yet reads the texture when its
+    // label is created.
+    const hasOrientation = hasBatchScalarSlot(mat, "orientation");
+    const writeThrough = {
+      rotation:
+        rotationDeg !== (prevMaterial.rotation ?? 0) &&
+        hasBatchScalarSlot(mat, "rotation"),
+      flatFacing:
+        flatFacing !== (prevMaterial.textFacing === "flat") && hasOrientation,
+      rotateWithCamera:
+        followCamera !== (prevMaterial.rotateWithCamera ?? true) &&
+        hasOrientation,
+      spreadGlyphs:
+        nextSpreadGlyphs !== (prevMaterial.spreadGlyphs ?? false) &&
+        hasOrientation,
+    };
+    if (Object.values(writeThrough).some(Boolean)) {
+      const defaults = this._orientationDefaults();
+      for (let batchIndex = 0; batchIndex < this._batchLength; batchIndex++) {
+        if (writeThrough.rotation) {
+          this._updateBatchAttribute(
+            batchIndex,
+            "rotation",
+            defaults.rotation,
+            defaults,
+          );
+        }
+        for (const key of [
+          "flatFacing",
+          "rotateWithCamera",
+          "spreadGlyphs",
+        ] as const) {
+          if (writeThrough[key]) {
+            this._updateBatchAttribute(
+              batchIndex,
+              key,
+              defaults[key],
+              defaults,
+            );
+          }
+        }
+      }
+    }
 
     // A changed material show clobbers evaluator overrides — including hide
     // intents parked on anchors that never got a label.
@@ -1756,28 +1800,6 @@ export class BatchedSdfTextMesh
         record.addHeight = addHeight;
         this._writeAddHeight(record);
       }
-      if (rotationChanged) {
-        this.setFeatureRotationByBatchIndex(record.batchIndex, rotationDeg);
-      }
-      if (orientationChanged) {
-        this.setFeatureFacingByBatchIndex(
-          record.batchIndex,
-          flatFacing ? "flat" : "upright",
-        );
-        this.setFeatureRotateWithCameraByBatchIndex(
-          record.batchIndex,
-          followCamera,
-        );
-        // Written without the setter's re-layout: `layoutChanged` lays every
-        // label out again below.
-        this._updateBatchAttribute(
-          record.batchIndex,
-          "spreadGlyphs",
-          nextSpreadGlyphs,
-          this._orientationDefaults(),
-        );
-      }
-
       if (showChanged) record.requestedShow = materialShow;
       if (materialText !== undefined && materialText !== "") {
         // The material text overrides whatever the evaluator asked for —
@@ -1975,6 +1997,8 @@ export class BatchedSdfTextMesh
       facing === "flat",
       this._orientationDefaults(),
     );
+    // Both decide an along-line label's collision box.
+    this._markDeclutterDirty();
   }
 
   setFeatureRotateWithCameraByBatchIndex(batchIndex: number, follow: boolean) {
@@ -1984,6 +2008,7 @@ export class BatchedSdfTextMesh
       follow,
       this._orientationDefaults(),
     );
+    this._markDeclutterDirty();
   }
 
   /** Whether one feature's labels place each glyph on its own along their
