@@ -106,9 +106,11 @@ impl Facing {
 /// through `geometry_types`; point geometry always places at the point itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Placement {
-    /// One anchor per line vertex. A polygon gets one label at its pole of
-    /// inaccessibility from text and billboards, as MapLibre places a
-    /// polygon's symbol, and one marker per ring vertex from points.
+    /// Text and billboards get one anchor per line string, at its first
+    /// vertex, and one per polygon, at its pole of inaccessibility, as
+    /// MapLibre places a point-placed symbol. Points get one marker per line
+    /// vertex and per polygon-ring vertex, as a MapLibre circle layer draws
+    /// them.
     #[default]
     Point,
     /// Anchors repeated along the line, or each polygon ring, at `spacing`
@@ -334,9 +336,9 @@ pub struct BillboardMaterial {
     /// `declutter` is enabled.
     pub declutter_priority: f32,
     /// Source geometry types this appearance consumes. Defaults to the native
-    /// geometry only; opting in `Line` also emits a billboard per line-string
-    /// vertex, and `Polygon` one per polygon — or along either with
-    /// `placement`.
+    /// geometry only; opting in `Line` also emits a billboard per line string,
+    /// at its first vertex, and `Polygon` one per polygon — or along either
+    /// with `placement`.
     pub geometry_types: Vec<SourceGeometryType>,
     // post effect
     pub effect_ids: Option<Vec<String>>,
@@ -503,8 +505,8 @@ pub struct TextMaterial {
     /// `declutter` is enabled.
     pub declutter_priority: f32,
     /// Source geometry types this appearance consumes. Defaults to the native
-    /// geometry only; opting in `Line` also emits a label per line-string
-    /// vertex, and `Polygon` one per polygon — or along either with
+    /// geometry only; opting in `Line` also emits a label per line string, at
+    /// its first vertex, and `Polygon` one per polygon — or along either with
     /// `placement`.
     pub geometry_types: Vec<SourceGeometryType>,
     // post effect

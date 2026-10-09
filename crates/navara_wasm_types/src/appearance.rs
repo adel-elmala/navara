@@ -295,10 +295,11 @@ pub struct BillboardMaterial {
     /// inside the sprite the pivot sits. Defaults to `0.0`.
     pub rotation: Option<f32>,
     /// How anchors are derived from line and polygon geometry: `"point"` (the
-    /// default) puts one at every line vertex and one per polygon, `"line"`
-    /// repeats them along the line every `spacing`, `"line-center"` places a
-    /// single one at the line's midpoint. Polygon rings are walked like lines. Requires `geometryTypes`
-    /// to include `"line"` or `"polygon"`.
+    /// default) puts one per line string, at its first vertex, and one per
+    /// polygon, `"line"` repeats them along the line every `spacing`,
+    /// `"line-center"` places a single one at the line's midpoint. Polygon
+    /// rings are walked like lines. Requires `geometryTypes` to include
+    /// `"line"` or `"polygon"`.
     #[wasm_bindgen(getter_with_clone)]
     pub placement: Option<String>,
     /// Distance between repeated anchors along a line, in screen pixels, for
@@ -359,7 +360,8 @@ pub struct BillboardMaterial {
     pub declutter_priority: Option<f32>,
     /// Source geometry types this appearance consumes: `"point"`, `"line"`,
     /// `"polygon"`. Defaults to `["point"]`; adding `"line"` also emits a
-    /// billboard per line-string vertex, and `"polygon"` one per polygon.
+    /// billboard per line string, at its first vertex, and `"polygon"` one per
+    /// polygon.
     #[wasm_bindgen(getter_with_clone, js_name = geometryTypes)]
     #[serde(rename = "geometryTypes")]
     pub geometry_types: Option<Vec<String>>,
@@ -514,11 +516,11 @@ pub struct TextMaterial {
     #[serde(rename = "rotateWithCamera")]
     pub rotate_with_camera: Option<bool>,
     /// How anchors are derived from line and polygon geometry: `"point"` (the
-    /// default) puts a label at every line vertex and one per polygon, `"line"`
-    /// repeats labels along the line every `spacing` with the glyphs bending
-    /// to follow it, `"line-center"` places a single label at the line's
-    /// midpoint. Polygon rings are walked like lines. Requires `geometryTypes`
-    /// to include `"line"` or `"polygon"`.
+    /// default) puts a label per line string, at its first vertex, and one
+    /// per polygon, `"line"` repeats labels along the line every `spacing`
+    /// with the glyphs bending to follow it, `"line-center"` places a single
+    /// label at the line's midpoint. Polygon rings are walked like lines.
+    /// Requires `geometryTypes` to include `"line"` or `"polygon"`.
     #[wasm_bindgen(getter_with_clone)]
     pub placement: Option<String>,
     /// Distance between repeated labels along a line, in screen pixels, for
@@ -679,7 +681,8 @@ pub struct TextMaterial {
     pub declutter_priority: Option<f32>,
     /// Source geometry types this appearance consumes: `"point"`, `"line"`,
     /// `"polygon"`. Defaults to `["point"]`; adding `"line"` also emits a
-    /// label per line-string vertex, and `"polygon"` one per polygon.
+    /// label per line string, at its first vertex, and `"polygon"` one per
+    /// polygon.
     #[wasm_bindgen(getter_with_clone, js_name = geometryTypes)]
     #[serde(rename = "geometryTypes")]
     pub geometry_types: Option<Vec<String>>,
