@@ -610,22 +610,22 @@
       "status": "✅"
     },
     "center": {
-      "status": "❌"
+      "status": "✅"
     },
     "centerAltitude": {
-      "status": "❌"
+      "status": "⚠️ Camera positions correctly, but zoom calculation uses sea-level distance"
     },
     "zoom": {
-      "status": "❌"
+      "status": "✅"
     },
     "bearing": {
-      "status": "❌"
+      "status": "✅"
     },
     "pitch": {
-      "status": "❌"
+      "status": "✅"
     },
     "roll": {
-      "status": "❌"
+      "status": "✅"
     },
     "sources": {
       "status": "⚠️"

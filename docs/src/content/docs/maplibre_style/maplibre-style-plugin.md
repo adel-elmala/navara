@@ -136,6 +136,7 @@ Creates a new MapLibre Style plugin instance.
 type MapLibreStylePluginOptions = {
   overrides?: Partial<StyleSpecification>;
   tileJsonPlugin?: TileJsonPlugin;
+  forceMapLibreFov?: boolean;
 };
 ```
 
@@ -143,6 +144,7 @@ type MapLibreStylePluginOptions = {
 |--------|------|---------|-------------|
 | `overrides` | `Partial<StyleSpecification>` | `undefined` | Partial style overrides; currently the plugin merges only `font-faces`. |
 | `tileJsonPlugin` | `TileJsonPlugin` | `undefined` | Custom TileJsonPlugin instance. If not provided, a new one will be created and managed internally. |
+| `forceMapLibreFov` | `boolean` | `false` | When `true`, forces MapLibre's fixed FOV (~36.87°) for camera calculations. When `false` or `undefined`, uses Navara's default FOV. |
 
 ### Example
 
@@ -354,6 +356,7 @@ The plugin follows the standard Navara plugin lifecycle:
    - Parses and validates the style
    - Registers fonts from `font-faces`
    - Initializes background handler
+   - Applies camera position from root properties (center, zoom, pitch, bearing, etc.)
    - Adds all sources and layers
    - Sets up zoom change detection
 4. **Usage** - The plugin is now active and managing the style
