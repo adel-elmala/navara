@@ -995,6 +995,8 @@ fn corner_angle(path: &[f32], k: usize) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use navara_core::WGS84_A_64;
+
     use super::*;
 
     /// A camera hovering over the equator at longitude 0, looking straight down
@@ -1020,7 +1022,7 @@ mod tests {
             0.0, //
             0.0,
             0.0,
-            -WGS84_EQ - distance_m,
+            -WGS84_A_64 - distance_m,
             1.0,
         ]
     }
@@ -1034,7 +1036,7 @@ mod tests {
         [
             // Anchor on the equator at longitude 0, so east is ECEF +y and
             // north is ECEF +z.
-            WGS84_EQ,
+            WGS84_A_64,
             0.0,
             0.0,  //
             0.0,  // addHeight
@@ -1080,7 +1082,7 @@ mod tests {
             -1.0,
             0.0, // col 2: ECEF z (north) -> into the screen
             0.0,
-            -WGS84_EQ,
+            -WGS84_A_64,
             -distance_m,
             1.0,
         ]
@@ -1104,13 +1106,11 @@ mod tests {
             -s,
             0.0, // col 2: ECEF z (north)
             0.0,
-            -s * WGS84_EQ,
-            -s * (WGS84_EQ + 2.0 * height_m),
+            -s * WGS84_A_64,
+            -s * (WGS84_A_64 + 2.0 * height_m),
             1.0,
         ]
     }
-
-    const WGS84_EQ: f64 = 6378137.0;
 
     /// The layer's `spacing`, in pixels.
     const SPACING: f64 = 250.0;
@@ -1790,7 +1790,7 @@ mod tests {
         bearing: f64,
     ) -> [f64; LINE_ANCHOR_STRIDE] {
         [
-            WGS84_EQ,
+            WGS84_A_64,
             0.0,
             0.0,
             0.0,
@@ -2089,7 +2089,7 @@ mod tests {
                 v[2] * x + v[6] * y + v[10] * z + v[14],
             )
         };
-        let a = to_view((WGS84_EQ, 0.0, 0.0));
+        let a = to_view((WGS84_A_64, 0.0, 0.0));
         for flat in [false, true] {
             let mut l = label(0.0, false, false);
             l[9] = 10.0;
@@ -2102,7 +2102,7 @@ mod tests {
             for s in [-20.0, 20.0] {
                 for h in [0.0, 10.0] {
                     let (up, west) = if flat { (0.0, h) } else { (h, 0.0) };
-                    let p = to_view((WGS84_EQ + up, -west, s));
+                    let p = to_view((WGS84_A_64 + up, -west, s));
                     let k = a.2 / p.2;
                     let (x, y) = (p.0 * k - a.0, p.1 * k - a.1);
                     assert!(

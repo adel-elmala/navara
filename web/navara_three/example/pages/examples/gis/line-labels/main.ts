@@ -12,8 +12,8 @@ await view.init();
 
 view.addFontFamily(
   await fetchFontFamilyFromCss(
-    "Chakra Petch",
-    "https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500",
+    "Arsenal",
+    "https://fonts.googleapis.com/css2?family=Arsenal:wght@700",
   ),
 );
 
@@ -42,7 +42,7 @@ const labels = view.addLayer({
   source: streets,
   sourceLayers: ["transportation_name"],
   text: {
-    font: "Chakra Petch",
+    font: "Arsenal",
     // Derive labels from line geometry, repeated every `spacing` screen pixels.
     geometryTypes: ["line"],
     placement: "line",

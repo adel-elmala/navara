@@ -2,11 +2,10 @@ use bevy_ecs::entity::Entity;
 use bevy_ecs::system::Commands;
 
 use navara_buffer_store::BufferStore;
-use navara_core::CRS;
+use navara_core::{CRS, WGS84_64};
 use navara_feature_component::batch::BatchTable;
 use navara_geometry::{
-    Hierarchy, WindingOrder, close_flat_ring, mercator_y_to_lat, open_ring_len,
-    pole_of_inaccessibility,
+    Hierarchy, WindingOrder, close_flat_ring, open_ring_len, pole_of_inaccessibility,
 };
 use navara_material::{Appearance, Placement, SourceGeometryType};
 use navara_math::Vec3;
@@ -281,7 +280,7 @@ fn add_label_point(
     kind: GeometryAppearanceKind,
     height: f32,
 ) {
-    let world = 2.0 * std::f64::consts::PI * MERCATOR_RADIUS_M;
+    let world = WGS84_64.web_mercator_world_width();
     let mut projected: Vec<Vec<(f64, f64)>> = rings.iter().map(|r| project_unwrapped(r)).collect();
     let Some(&(origin, _)) = projected.first().and_then(|outer| outer.first()) else {
         return;
@@ -308,37 +307,29 @@ fn add_label_point(
 
     let vertices = ring_vertices(&rings[0]);
     let z = vertices.iter().map(|p| coords(p).z).sum::<f64>() / vertices.len() as f64;
-    let anchor = Vec3::new(
-        wrap_lon((x / MERCATOR_RADIUS_M).to_degrees()),
-        mercator_lat(y),
-        z,
-    );
+    let (lon, lat) = from_mercator((x, y));
+    let anchor = Vec3::new(wrap_lon(lon), lat, z);
     builder.add_point(kind, anchor, CRS::Geographic, height);
 }
-
-/// Radius of the Web Mercator sphere (EPSG:3857).
-const MERCATOR_RADIUS_M: f64 = 6_378_137.0;
 
 /// Latitude, in degrees, that [`to_mercator`] holds the poles at. Web Mercator
 /// sends a pole itself to infinity, but a GeoJSON line is drawn on the globe
 /// all the way to it, so the walk must not stop at the ±85.05° that
-/// [`navara_geometry::mercator_y`] clamps tile coordinates to. A vertex on a pole moves about
-/// 0.1 m.
+/// [`navara_geometry::mercator_y`] clamps tile coordinates to. A vertex on a
+/// pole moves about 0.1 m.
 const MAX_LAT_DEG: f64 = 90.0 - 1e-6;
 
-/// Web Mercator position of a longitude/latitude in degrees, in metres at the
-/// equator, with y growing southward as [`LinePath`] expects.
+/// Web Mercator position of a longitude/latitude in degrees, in metres, with y
+/// growing southward as [`LinePath`] expects.
 fn to_mercator(lon: f64, lat: f64) -> (f64, f64) {
-    let lat = lat.clamp(-MAX_LAT_DEG, MAX_LAT_DEG).to_radians();
-    (
-        lon.to_radians() * MERCATOR_RADIUS_M,
-        -(lat * 0.5 + std::f64::consts::FRAC_PI_4).tan().ln() * MERCATOR_RADIUS_M,
-    )
+    let (x, y) = WGS84_64.to_web_mercator(lon, lat.clamp(-MAX_LAT_DEG, MAX_LAT_DEG));
+    (x, -y)
 }
 
-/// Latitude in degrees of a [`to_mercator`] y.
-fn mercator_lat(y: f64) -> f64 {
-    mercator_y_to_lat(-y / MERCATOR_RADIUS_M).to_degrees()
+/// Longitude and latitude in degrees of a [`to_mercator`] position. The
+/// longitude may run past ±180° (see [`wrap_lon`]).
+fn from_mercator((x, y): (f64, f64)) -> (f64, f64) {
+    WGS84_64.from_web_mercator(x, -y)
 }
 
 /// Web Mercator positions of a line-string, unwrapped across the antimeridian.
@@ -396,18 +387,18 @@ fn add_line_anchors(
     };
     let spacing_px = spacing_px as f64;
     let (mid, _) = path.sample(path.length() * 0.5);
-    let finest = spacing_px * FINEST_METERS_PER_PX / mercator_lat(mid.1).to_radians().cos();
+    let finest = spacing_px * FINEST_METERS_PER_PX / from_mercator(mid).1.to_radians().cos();
     // Only text bends its glyphs along the line; a sprite is one quad at the
     // anchor and needs nothing but the tangent bearing.
     let wants_path = kind == GeometryAppearanceKind::Text;
 
     for a in path.anchors(placement, finest, wants_path) {
         let (pos, tangent) = path.sample(a.s);
-        let lat = mercator_lat(pos.1);
+        let (lon, lat) = from_mercator(pos);
         let (seg, t) = path.segment_at(a.s);
         let z0 = coords(&line[seg]).z;
         let z = z0 + (coords(&line[seg + 1]).z - z0) * t;
-        let anchor = Vec3::new(wrap_lon((pos.0 / MERCATOR_RADIUS_M).to_degrees()), lat, z);
+        let anchor = Vec3::new(wrap_lon(lon), lat, z);
         let meters_per_unit = lat.to_radians().cos();
         let along = AlongLine {
             bearing: tangent_to_bearing(tangent),
@@ -489,6 +480,7 @@ mod test {
     use bevy_ecs::query::With;
     use bevy_ecs::system::{Commands, ResMut};
     use navara_buffer_store::BufferStore;
+    use navara_core::WGS84_A_64;
     use navara_feature_component::{
         batch::{BatchTable, BatchedFeature, FeatureBatchId, GlobalBatchIds},
         batched_geometry::{BatchedPointGeometry, BatchedPolygonGeometry, BatchedPolylineGeometry},
@@ -1922,7 +1914,7 @@ mod test {
     }
 
     /// Ground metres per degree of longitude on the Web Mercator sphere.
-    const M_PER_DEG: f64 = MERCATOR_RADIUS_M * std::f64::consts::PI / 180.0;
+    const M_PER_DEG: f64 = WGS84_A_64 * std::f64::consts::PI / 180.0;
 
     #[test]
     fn line_placement_sizes_levels_in_ground_metres() {
