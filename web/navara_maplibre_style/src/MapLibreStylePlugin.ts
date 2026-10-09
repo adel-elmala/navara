@@ -14,6 +14,7 @@ import ThreeView, {
   type FeatureInfo,
   TERRARIUM_ELEVATION_DECODER,
   MAPBOX_ELEVATION_DECODER,
+  radianToDegree,
 } from "@navaramap/three";
 import { TileJsonPlugin } from "@navaramap/three-plugins";
 
@@ -27,6 +28,11 @@ import { BackgroundHandler } from "./BackgroundHandler";
 import { JsStyleEngine } from "./engine/JsStyleEngine";
 import type { ParsedStyle, StyleLayer } from "./engine/types";
 import { convertFontFacesToFontFamilies } from "./fontHelper";
+import {
+  zoomToCameraDistance,
+  maplibrePitchToNavaraPitch,
+  MAPLIBRE_TILE_SIZE,
+} from "./utils/cameraHelpers";
 import { expressionUsesZoom } from "./utils/expressionHelpers";
 
 /**
@@ -35,6 +41,7 @@ import { expressionUsesZoom } from "./utils/expressionHelpers";
 type MapLibreStylePluginOptions = {
   overrides?: Partial<StyleSpecification>;
   tileJsonPlugin?: TileJsonPlugin;
+  forceMapLibreFov?: boolean;
 };
 
 export class MapLibreStylePlugin extends Plugin<ThreeView, ViewContext> {
@@ -65,6 +72,12 @@ export class MapLibreStylePlugin extends Plugin<ThreeView, ViewContext> {
    */
   private readonly overrides?: Partial<StyleSpecification>;
   /**
+   * Whether to force MapLibre's FOV (field of view) when applying camera.
+   * When true, uses MapLibre's fixed FOV of ~36.87° for camera calculations.
+   * When false or undefined, uses Navara's default FOV.
+   */
+  private readonly forceMapLibreFov?: boolean;
+  /**
    * Style engine for evaluating MapLibre expressions.
    * Uses JsStyleEngine internally.
    */
@@ -84,6 +97,11 @@ export class MapLibreStylePlugin extends Plugin<ThreeView, ViewContext> {
    */
   private zoomChangeListener?: () => void;
   /**
+   * Camera ready listener function reference for cleanup in destroy.
+   * Listens for frustumChanged event to apply camera position when ready.
+   */
+  private cameraReadyListener?: () => void;
+  /**
    * Layers that have zoom-dependent expressions (filter, paint, or layout).
    * Only these layers need to be updated when zoom changes.
    */
@@ -101,6 +119,7 @@ export class MapLibreStylePlugin extends Plugin<ThreeView, ViewContext> {
    * @param options.overrides - Optional partial style overrides to merge with the base style.
    *                            Use fontFamilyToStyleOverrides([...fonts]) or fetchFontStyleOverrides() to inject font configuration.
    * @param options.tileJsonPlugin - Optional TileJsonPlugin instance. If not provided, a new one will be created internally and disposed when this plugin is disposed.
+   * @param options.forceMapLibreFov - When true, forces MapLibre's FOV (~36.87°) for camera calculations. When false or undefined, uses Navara's default FOV.
    *
    * @example
    * ```ts
@@ -127,6 +146,7 @@ export class MapLibreStylePlugin extends Plugin<ThreeView, ViewContext> {
     this.overrides = options?.overrides;
     this.tileJsonPlugin = options?.tileJsonPlugin ?? new TileJsonPlugin();
     this.ownsTileJsonPlugin = !options?.tileJsonPlugin;
+    this.forceMapLibreFov = options?.forceMapLibreFov;
   }
 
   /**
@@ -325,7 +345,7 @@ export class MapLibreStylePlugin extends Plugin<ThreeView, ViewContext> {
 
     // Step 2: Apply initial background (set globe color)
     // Use current camera zoom, or default to 0 if not yet available
-    const initialZoom = view.camera.zoom ?? 0;
+    const initialZoom = view.getZoomLevel(MAPLIBRE_TILE_SIZE) ?? 0;
     this.backgroundHandler.apply(view, initialZoom);
 
     // Step 3: Set up zoom change detection for re-evaluating features
@@ -363,6 +383,54 @@ export class MapLibreStylePlugin extends Plugin<ThreeView, ViewContext> {
         // Continue without terrain
       }
     }
+
+    // Step 7: Set FOV and apply camera position from style
+    this.setupCameraFromStyle(view);
+  }
+
+  /**
+   * Initialize camera FOV and position from style root properties.
+   * Sets MapLibre-compatible FOV and applies camera position if style defines it.
+   *
+   * Camera readiness detection:
+   * - Uses getZoomLevel() !== undefined as a proxy for "camera ready"
+   * - getZoomLevel() requires: FOV, viewport height, camera position, and WASM initialized
+   * - Returns undefined when any of these resources are unavailable
+   * - When ready, frustumChanged event indicates FOV/viewport are initialized
+   * - Listener is invoked immediately after registration to catch already-ready state
+   */
+  private setupCameraFromStyle(view: ThreeView): void {
+    if (!this.parsedStyle?.center || this.parsedStyle?.zoom === undefined) {
+      return;
+    }
+
+    // MapLibre uses a fixed FOV of 0.6435011087932844 radians (≈36.87°)
+    const MAPLIBRE_FOV_RAD = 0.6435011087932844;
+
+    // Define listener function for checking camera readiness
+    const listener = () => {
+      // getZoomLevel requires FOV, viewport, camera position, and WASM to be initialized
+      // Returns undefined if any resource is unavailable
+      if (view.getZoomLevel(MAPLIBRE_TILE_SIZE) !== undefined) {
+        view.camera.off("frustumChanged", listener);
+        this.cameraReadyListener = undefined;
+
+        // Conditionally apply MapLibre's FOV based on forceMapLibreFov option
+        if (this.forceMapLibreFov) {
+          view.camera.fov = radianToDegree(MAPLIBRE_FOV_RAD);
+          this.applyCamera(view, MAPLIBRE_FOV_RAD);
+        } else {
+          // Use Navara's default FOV
+          this.applyCamera(view);
+        }
+      }
+    };
+
+    this.cameraReadyListener = listener;
+    view.camera.on("frustumChanged", listener);
+
+    // Invoke immediately to catch already-ready state (avoid missing fired events)
+    listener();
   }
 
   /**
@@ -460,7 +528,7 @@ export class MapLibreStylePlugin extends Plugin<ThreeView, ViewContext> {
   private setupZoomChangeDetection(view: ThreeView): void {
     // Create and store listener function for later removal in destroy()
     this.zoomChangeListener = () => {
-      const currentZoom = view.camera.zoom;
+      const currentZoom = view.getZoomLevel(MAPLIBRE_TILE_SIZE);
 
       // Skip if zoom is not available yet (camera not fully initialized)
       if (currentZoom === undefined) return;
@@ -470,6 +538,10 @@ export class MapLibreStylePlugin extends Plugin<ThreeView, ViewContext> {
         this.lastZoom = currentZoom;
         if (this.backgroundHandler?.needsZoomUpdate()) {
           this.backgroundHandler.apply(view, currentZoom);
+        }
+        // On initial zoom, also update zoom-dependent features
+        for (const layer of this.zoomDependentLayers) {
+          layer.forceUpdate();
         }
         return;
       }
@@ -491,8 +563,13 @@ export class MapLibreStylePlugin extends Plugin<ThreeView, ViewContext> {
       }
     };
 
-    // Register the listener
-    view.on("preRender", this.zoomChangeListener);
+    // Register the listener on multiple camera events to catch all zoom changes:
+    // - move: camera position changes during drag/pan
+    // - moveend: camera stops moving (catches idle startup and instantaneous setCamera)
+    // - frustumChanged: FOV or viewport size changes
+    view.camera.on("move", this.zoomChangeListener);
+    view.camera.on("moveend", this.zoomChangeListener);
+    view.camera.on("frustumChanged", this.zoomChangeListener);
   }
 
   /**
@@ -791,7 +868,8 @@ export class MapLibreStylePlugin extends Plugin<ThreeView, ViewContext> {
       evaluator: FeatureEvaluator;
     }) => {
       // Get camera zoom once before evaluate to avoid recursive WASM borrowing
-      const cameraZoom = this.view?.camera.zoom ?? 0;
+      // Use MapLibre tile size (512px) to match background layer zoom calculations
+      const cameraZoom = this.view?.getZoomLevel(MAPLIBRE_TILE_SIZE) ?? 0;
 
       evaluator.evaluate(
         ({ properties, meshGeomType: meshGeometryType }: FeatureInfo) => {
@@ -836,15 +914,86 @@ export class MapLibreStylePlugin extends Plugin<ThreeView, ViewContext> {
   }
 
   /**
+   * Apply camera position from MapLibre Style specification.
+   * Reads center, zoom, centerAltitude, bearing, pitch, roll from the parsed style
+   * and sets the initial camera position.
+   *
+   * MapLibre Style Spec defines these optional root properties:
+   * - center: [lng, lat] - the map center point (target point) in degrees
+   * - zoom: Web Mercator zoom level - controls camera distance from target
+   * - centerAltitude: altitude of the target point in meters (defaults to 0)
+   * - bearing: compass bearing in degrees (0 = north)
+   * - pitch: tilt angle in degrees (0 = straight down, 60 = towards horizon)
+   * - roll: camera roll in degrees
+   *
+   * Note: MapLibre pitch convention differs from Navara:
+   * - MapLibre: pitch 0 = straight down, pitch 60 = towards horizon
+   * - Navara: pitch -90 = straight down, pitch 0 = towards horizon
+   *
+   * @param view - ThreeView instance
+   * @param fovRad - Optional FOV override in radians for zoom calculation
+   */
+  private applyCamera(view: ThreeView, fovRad?: number): void {
+    if (!this.parsedStyle) return;
+
+    const { center, zoom, centerAltitude, bearing, pitch, roll } =
+      this.parsedStyle;
+
+    // Only apply if center and zoom are specified
+    if (!center || zoom === undefined) {
+      return;
+    }
+
+    const [lng, lat] = center;
+
+    // Convert zoom to camera viewing distance (camera-to-target distance)
+    const cameraDistance = zoomToCameraDistance(
+      zoom,
+      view,
+      lat,
+      MAPLIBRE_TILE_SIZE,
+      fovRad,
+    );
+
+    // Convert MapLibre pitch to Navara pitch
+    const navaraPitch =
+      pitch !== undefined ? maplibrePitchToNavaraPitch(pitch) : -90;
+
+    // Build camera position using target + distance mode
+    // This matches MapLibre's semantics where center is the target point
+    const cameraPos = {
+      lng, // Target point longitude
+      lat, // Target point latitude
+      height: centerAltitude ?? 0, // Target point altitude (ground elevation)
+      distance: cameraDistance, // Camera-to-target viewing distance
+      // MapLibre uses 'bearing' which maps to Navara's 'heading'
+      heading: bearing ?? 0,
+      pitch: navaraPitch,
+      roll: roll ?? 0,
+    };
+
+    // Set camera instantly (no animation)
+    view.setCamera(cameraPos);
+  }
+
+  /**
    * Clean up all resources when the plugin is disposed.
    * Removes event listeners, deletes layers/sources, and disposes child plugins.
    * Call this method when removing the plugin to prevent memory leaks.
    */
   dispose(): void {
-    // Clean up zoom change listener
+    // Clean up zoom change listener (registered on three events)
     if (this.view && this.zoomChangeListener) {
-      this.view.off("preRender", this.zoomChangeListener);
+      this.view.camera.off("move", this.zoomChangeListener);
+      this.view.camera.off("moveend", this.zoomChangeListener);
+      this.view.camera.off("frustumChanged", this.zoomChangeListener);
       this.zoomChangeListener = undefined;
+    }
+
+    // Clean up camera ready listener
+    if (this.view && this.cameraReadyListener) {
+      this.view.camera.off("frustumChanged", this.cameraReadyListener);
+      this.cameraReadyListener = undefined;
     }
 
     // Delete all layers (layers reference sources)

@@ -180,6 +180,7 @@ new MapLibreStylePlugin(
 type MapLibreStylePluginOptions = {
   overrides?: Partial<StyleSpecification>;
   tileJsonPlugin?: TileJsonPlugin;
+  forceMapLibreFov?: boolean;
 };
 ```
 
@@ -187,6 +188,7 @@ type MapLibreStylePluginOptions = {
 |--------|------|---------|-------------|
 | `overrides` | `Partial<StyleSpecification>` | `undefined` | 部分的なスタイルオーバーライド。現在、プラグインがマージするのは `font-faces` のみです。 |
 | `tileJsonPlugin` | `TileJsonPlugin` | `undefined` | カスタム TileJsonPlugin インスタンス。提供されない場合、新しいものが作成され内部で管理されます。 |
+| `forceMapLibreFov` | `boolean` | `false` | `true` の場合、カメラ計算に MapLibre の固定 FOV（~36.87°）を強制適用します。`false` または `undefined` の場合、Navara のデフォルト FOV を使用します。 |
 
 ### 例
 
@@ -398,6 +400,7 @@ type FontFaceSpecification = {
    - スタイルを解析して検証
    - `font-faces` からフォントを登録
    - 背景ハンドラーを初期化
+   - ルートプロパティからカメラ位置を適用（center、zoom、pitch、bearing など）
    - すべてのソースとレイヤーを追加
    - zoom 変更検出を設定
 4. **使用** - プラグインがアクティブになりスタイルを管理
