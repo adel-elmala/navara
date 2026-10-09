@@ -2,9 +2,10 @@
 
 How `@navaramap/three` draws every text label in a tile-layer with a **single
 draw call**, and how a label can change its text without rebuilding the batch.
-For the placement pass that decides which of those labels stay visible, see
-[DECLUTTER.md](DECLUTTER.md); for the broader pipeline, see
-[ARCHITECTURE.md](ARCHITECTURE.md).
+For how a label is placed and bent along a line, see
+[LINE_PLACEMENT.md](LINE_PLACEMENT.md); for the placement pass that decides
+which labels stay visible, see [DECLUTTER.md](DECLUTTER.md); for the broader
+pipeline, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Overview
 
@@ -30,16 +31,23 @@ knowing before touching either shader.
 ```mermaid
 flowchart LR
   subgraph U["Tier 1 · batch-wide<br/>uniforms"]
-    U1["outline width/color/opacity<br/>background color/border<br/>uCenter, uSizeInMeters, uOffsetDepth<br/>atlas samplers + sizes<br/>camera fov / screen height / far plane<br/>RTE eye split, RTC center<br/>nvr_uPickable"]
+    U1["outline width/color/opacity<br/>background color/border<br/>uCenter, uSizeInMeters, uOffsetDepth<br/>atlas samplers + sizes<br/>label + path samplers + sizes<br/>(uPathData, uPathTexSize), uLineOffset<br/>camera fov / screen height / far plane<br/>RTE eye split, RTC center<br/>nvr_uPickable"]
   end
   subgraph L["Tier 2 · per-label<br/>uLabelData texels"]
-    L1["anchor, fontSize, addHeight<br/>color, opacity<br/>text box metrics<br/>declutterHide, batchId, show"]
+    L1["anchor (RTE high/low)<br/>text box metrics<br/>declutterHide, batchId, show, batchIndex<br/>PATH: path run, step, flip, rejected"]
   end
   subgraph G["Tier 3 · per-glyph<br/>instanced attributes"]
-    G1["glyphOffset, glyphSize<br/>glyphUvRect, glyphKind<br/>labelIndex"]
+    G1["glyphOffset, glyphSize<br/>glyphUvRect, glyphKind<br/>labelIndex, glyphWordCenter"]
   end
   G -->|"labelIndex indexes into"| L
 ```
+
+Per-*feature* style — color, opacity, font size, height, orientation,
+rotation — is not in any of the three. It lives in the shared batch data
+texture, keyed by the feature index the label carries in `STATE.w` (see
+[BATCH_TEXTURE.md](BATCH_TEXTURE.md)); a feature can own several labels
+(MultiPoint, along-line repeats), so the label rows only hold what differs per
+anchor.
 
 **Tier 1** works because a batch is already keyed by `(font, quality)` and
 built from one material — these were never actually per-label. Text quality is
@@ -60,19 +68,20 @@ that the **vertex** shader reads with `texelFetch`
 
 | row | x | y | z | w |
 | --- | --- | --- | --- | --- |
-| 0 `POSITION_HIGH_SIZE` | anchor high .x | .y | .z | `fontSize` |
-| 1 `POSITION_LOW_HEIGHT` | anchor low .x | .y | .z | `addHeight` |
-| 2 `COLOR_OPACITY` | color.r | .g | .b | `opacity` |
-| 3 `BOX` | textWidth | textHeight | bgMinY | bgMaxY |
-| 4 `STATE` | declutterHide | batchId | show | *(reserved)* |
+| 0 `POSITION_HIGH` | anchor high .x | .y | .z | *(reserved)* |
+| 1 `POSITION_LOW` | anchor low .x | .y | .z | *(reserved)* |
+| 2 `BOX` | textWidth | textHeight | bgMinY | bgMaxY |
+| 3 `STATE` | declutterHide | batchId | show | batchIndex |
+| 4 `PATH` | first texel of the path run | metres between samples | flip | rejected |
 
 Rows 0–1 carry the RTE high/low anchor split (see
 [RTC_VS_RTE.md](RTC_VS_RTE.md)); in RTC mode row 0 holds the tile-relative
 position and row 1's `xyz` is unused. The layout is identical across both so
-the shader's row indices never branch. The anchor only needs `xyz`, so the
-leftover `w` channels absorb two scalars at no cost.
+the shader's row indices never branch. `STATE.w` is the feature index into the
+batch data texture. `PATH` is all zero unless the label sits on a line (see
+[LINE_PLACEMENT.md](LINE_PLACEMENT.md)).
 
-Addressing is a linear texel index over a **fixed-width** texture, mirroring
+Addressing is a linear texel index split by the texture's width, mirroring
 `fogLight.frag.glsl`:
 
 ```glsl
@@ -82,16 +91,26 @@ vec4 nvr_readLabel(int slot, int row) {
 }
 ```
 
-The width is fixed (64 texels) precisely so growth only changes the height —
-an existing label's address stays valid across a resize, and the old data is
-copied straight in.
+Only that linear index is an address: the width comes from the live
+`uLabelTexSize`. So the texture is sized by the label count — the width is the
+power of two at or above the square root of the texels it holds, keeping it
+roughly square (16 labels are a 16 × 5 texture) — and a grow may widen it: the
+buffer is copied over linearly, every label keeps its index, and the caller
+refreshes `uLabelTexSize` along with the texture. Staying square is also what
+keeps both sides under WebGL2's guaranteed 2048-texel limit (up to ~800k
+labels), where a narrow fixed row would run out of height first. The path
+texture (`uPathData`) shares this class, with its own wider stride.
 
 `LabelRow` and `LABEL_ROWS` live with the **enhancer**
 (`material/enhancer/sdfText/sdfTextBaseEnhancer/types.ts`), not with the
 texture, because they are a shader contract: the enhancer injects `LABEL_ROWS`
 as a GLSL define, so the CPU row table and the shader's stride cannot drift.
-`shader.test.ts` pins that, including that the rows form a dense `0..n-1`
-range.
+The individual row indices are restated in GLSL as `LABEL_ROW_*` defines;
+`shader.test.ts` pins those against `LabelRow`, and that the rows form a dense
+`0..n-1` range.
+
+`setComponent` skips a write whose value is already stored, so a placement
+pass that rewrites every label's unchanged decisions requests no upload.
 
 > **Why a texture rather than replicating per-label values onto every glyph
 > attribute?** Both render identically, but replication makes a per-label
@@ -259,7 +278,7 @@ labels and negligible at street scale.
 > north lies along the view axis. Freezing the quad in the world frame, as
 > above, is what makes the mode well-posed.
 
-Two consequences worth knowing:
+Consequences worth knowing:
 
 - **The background strips share the basis and the bend**, so the box stays
   on the same surface as its glyphs in every mode.
@@ -280,19 +299,23 @@ Two consequences worth knowing:
   tests the anchor). An upright camera-following quad never presents a back
   face, and `screenSpaceNormal()` in both fragment shaders already flips an
   away-facing normal before it reaches the G-buffer.
-- **Declutter still measures a screen-aligned box.** The Rust kernel projects
-  the anchor and scales the label's em box by pixels-per-meter
-  (`crates/navara_wasm_api/src/declutter.rs`), which ignores the foreshortening
-  and rotation a flat label picks up. The box is therefore an over-estimate for
-  `textFacing: "flat"` — conservative (it hides slightly more than it must),
-  never an under-estimate.
+- **A point label's declutter box is its unrotated block.** The Rust kernel
+  projects the anchor and scales the label's em box by pixels-per-meter
+  (`crates/navara_wasm_api/src/declutter.rs`), ignoring the basis above. That
+  over-estimates a foreshortened flat or frozen label, which is conservative,
+  but does not follow `rotation`: a rotated label can overrun its box. Line
+  labels are the exception — the line-placement pass hands declutter the
+  rotated box they actually cover (see [LINE_PLACEMENT.md](LINE_PLACEMENT.md)).
+- **A label along a line skips this basis.** Its axes come from the line under
+  each word (see
+  [LINE_PLACEMENT.md](LINE_PLACEMENT.md#drawing-along-a-line)).
 
 ## Picking
 
 `sdfText.frag.glsl` deliberately does **not** include
 `chunks/batch_definition.glsl`, which declares `nvr_uBatchId` as a uniform —
 that only works when one material draws one feature. The batch id instead
-travels per-label (row 4) into a `flat varying vBatchID`, the same approach
+travels per-label (`STATE.y`) into a `flat varying vBatchID`, the same approach
 `instancedSprite.frag.glsl` takes. `nvr_uPickable` stays a uniform because pick
 mode is batch-wide.
 
@@ -332,22 +355,23 @@ requires reading the instance count at the GL level, e.g. patching
   sparse `batchIndex → label` map. MVT tiles routinely carry thousands of
   features where only a handful get text; sizing eagerly to the anchor count
   would waste hundreds of KB per tile.
-- **A material update overwrites per-feature style.** `_applyUpdate` writes the
-  material's `color`/`opacity`/`size`/`height` to every label, clobbering
-  evaluator overrides. This predates batching and is preserved deliberately.
+- **A changed material field overwrites per-feature style.** Engine change
+  events re-send the whole material, so `_applyUpdate` compares against the
+  previous one and writes only the fields that actually changed to every
+  label, clobbering evaluator overrides for those fields alone.
 
 ## Key files
 
 | File | Role |
 | --- | --- |
 | `shaders/glsl/sdfText.vert.glsl` | `nvr_readLabel`, the `GLYPH_KIND_*` culls, RTE/RTC transform |
-| `shaders/glsl/chunks/quad_orientation.glsl` | `nvr_quadOrientation` / `nvr_quadBasis` — the orientation basis; `nvr_quadOffset` — the vertex offset, wrapped onto the globe when flat. Shared with instancedSprite |
+| `shaders/glsl/chunks/quad_orientation.glsl` | `nvr_enuBasis`; `nvr_quadOrientation` / `nvr_quadBasis` — the orientation basis; `nvr_quadOffset` / `nvr_wrapOffset` — the vertex offset, wrapped onto the globe when flat. Shared with instancedSprite |
 | `shaders/glsl/sdfText.frag.glsl` | SDF/MTSDF and COLRv1 sampling, outline, background, pick encoding via `vBatchID` |
 | `web/navara_three/src/mesh/sdfText/batchedSdfText.ts` | `BatchedSdfTextMesh` — label records, the engine/evaluator API, declutter participation, atlas retain/release |
 | `web/navara_three/src/mesh/sdfText/glyphBuffers.ts` | Instance attributes, partial uploads, capacity growth, `GlyphKind` |
 | `web/navara_three/src/mesh/sdfText/glyphSlots.ts` | `GlyphSlotAllocator` — size classes, free lists, `realloc` |
-| `web/navara_three/src/mesh/sdfText/labelData.ts` | `LabelDataTexture` — addressing, writes, growth |
-| `web/navara_three/src/mesh/sdfText/layout.ts` | Pure layout: line breaking, RTL direction, shaping result → glyph quads |
+| `web/navara_three/src/mesh/sdfText/labelData.ts` | `LabelDataTexture` — addressing, writes, growth; also backs the path texture |
+| `web/navara_three/src/mesh/sdfText/layout.ts` | Pure layout: line breaking, RTL direction, shaping result → glyph quads, word centres |
 | `.../enhancer/sdfText/sdfTextBaseEnhancer/types.ts` | Batch-wide props/state/refs, plus `LabelRow` / `LABEL_ROWS` (the shader contract) |
 | `web/navara_three/src/event/features/text.ts` | Creates one batch per Rust `TextMesh` event |
 | `web/navara_three/src/mesh/sprite/instancedSprite.ts` | The sibling batched mesh; text follows its conventions |

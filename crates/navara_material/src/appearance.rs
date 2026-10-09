@@ -31,7 +31,9 @@ pub struct HillshadeConfig {
 /// appearances consume [`SourceGeometryType::Point`], polyline consumes
 /// [`SourceGeometryType::Line`]). Opting extra entries into a material's
 /// `geometry_types` derives additional representations: polygon boundary
-/// rings render as polylines, and line/polygon vertices render as points.
+/// rings render as polylines, line vertices render as points, and polygons
+/// render as one label per polygon (text, billboards) or one marker per ring
+/// vertex (points) — see [`Placement`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceGeometryType {
     Point,
@@ -93,6 +95,49 @@ impl Facing {
         match self {
             Self::Upright => "upright",
             Self::Flat => "flat",
+        }
+    }
+}
+
+/// How a label or sprite is positioned relative to the geometry it was derived
+/// from.
+///
+/// Only meaningful once the appearance opts into line or polygon geometry
+/// through `geometry_types`; point geometry always places at the point itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Placement {
+    /// Text and billboards get one anchor per line string, at its first
+    /// vertex, and one per polygon, at its pole of inaccessibility, as
+    /// MapLibre places a point-placed symbol. Points get one marker per line
+    /// vertex and per polygon-ring vertex, as a MapLibre circle layer draws
+    /// them.
+    #[default]
+    Point,
+    /// Anchors repeated along the line, or each polygon ring, at `spacing`
+    /// intervals.
+    Line,
+    /// A single anchor at the arc-length midpoint of the line, or of each
+    /// polygon ring.
+    LineCenter,
+}
+
+impl Placement {
+    /// Parse the JS-facing name (`"point" | "line" | "line-center"`).
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "point" => Some(Self::Point),
+            "line" => Some(Self::Line),
+            "line-center" => Some(Self::LineCenter),
+            _ => None,
+        }
+    }
+
+    /// JS-facing name of this placement mode.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Point => "point",
+            Self::Line => "line",
+            Self::LineCenter => "line-center",
         }
     }
 }
@@ -163,6 +208,16 @@ pub struct PointMaterial {
     /// in degrees, clockwise seen from the front. `center` decides where
     /// inside the quad the pivot sits. Default `0.0`.
     pub rotation: f32,
+    /// How anchors are derived from line and polygon geometry. See
+    /// [`TextMaterial::placement`]. Default [`Placement::Point`].
+    pub placement: Placement,
+    /// Distance between repeated anchors along a line, in screen pixels. See
+    /// [`TextMaterial::spacing`]. Default `250.0`.
+    pub spacing: f32,
+    /// Add the line's tangent bearing at the anchor to `rotation`, so the
+    /// sprite turns with the line it sits on. Only used by
+    /// [`Placement::Line`]/[`Placement::LineCenter`]. Default `true`.
+    pub rotate_to_line: bool,
     pub center: Vec2,
     pub height: f32,
     pub size_in_meters: bool,
@@ -185,7 +240,7 @@ pub struct PointMaterial {
     pub declutter_priority: f32,
     /// Source geometry types this appearance consumes. Defaults to the native
     /// geometry only; opting in `Line`/`Polygon` also emits a point per
-    /// line-string / polygon-ring vertex.
+    /// line-string / polygon-ring vertex, or along them with `placement`.
     pub geometry_types: Vec<SourceGeometryType>,
     // post effect
     pub effect_ids: Option<Vec<String>>,
@@ -202,6 +257,9 @@ impl Default for PointMaterial {
             point_facing: Facing::Upright,
             rotate_with_camera: true,
             rotation: 0.0,
+            placement: Placement::Point,
+            spacing: 250.0,
+            rotate_to_line: true,
             center: Vec2::new(0.0, 0.),
             clamp_to_ground: true,
             height: 1.,
@@ -245,6 +303,16 @@ pub struct BillboardMaterial {
     /// in degrees, clockwise seen from the front. `center` decides where
     /// inside the sprite the pivot sits. Default `0.0`.
     pub rotation: f32,
+    /// How anchors are derived from line and polygon geometry. See
+    /// [`TextMaterial::placement`]. Default [`Placement::Point`].
+    pub placement: Placement,
+    /// Distance between repeated anchors along a line, in screen pixels. See
+    /// [`TextMaterial::spacing`]. Default `250.0`.
+    pub spacing: f32,
+    /// Add the line's tangent bearing at the anchor to `rotation`, so the
+    /// sprite turns with the line it sits on. Only used by
+    /// [`Placement::Line`]/[`Placement::LineCenter`]. Default `true`.
+    pub rotate_to_line: bool,
     pub center: Vec2,
     pub height: f32,
     pub url: String,
@@ -268,8 +336,9 @@ pub struct BillboardMaterial {
     /// `declutter` is enabled.
     pub declutter_priority: f32,
     /// Source geometry types this appearance consumes. Defaults to the native
-    /// geometry only; opting in `Line`/`Polygon` also emits a billboard per
-    /// line-string / polygon-ring vertex.
+    /// geometry only; opting in `Line` also emits a billboard per line string,
+    /// at its first vertex, and `Polygon` one per polygon — or along either
+    /// with `placement`.
     pub geometry_types: Vec<SourceGeometryType>,
     // post effect
     pub effect_ids: Option<Vec<String>>,
@@ -286,6 +355,9 @@ impl Default for BillboardMaterial {
             billboard_facing: Facing::Upright,
             rotate_with_camera: true,
             rotation: 0.0,
+            placement: Placement::Point,
+            spacing: 250.0,
+            rotate_to_line: true,
             center: Vec2::new(0.0, 0.),
             clamp_to_ground: true,
             height: 1.,
@@ -344,6 +416,40 @@ pub struct TextMaterial {
     /// signboard standing on the surface, [`Facing::Flat`] a north-up
     /// label painted on it.
     pub rotate_with_camera: bool,
+    /// How anchors are derived from line and polygon geometry. See
+    /// [`Placement`]. Requires `geometry_types` to include `Line` or
+    /// `Polygon`; ignored otherwise. Default [`Placement::Point`].
+    pub placement: Placement,
+    /// Distance between repeated anchors along a line, in screen pixels, for
+    /// every source. The line gets nested levels of anchors and the renderer
+    /// shows, per anchor, the level whose spacing on screen is the smallest at
+    /// least this — see `navara_parser::line_placement`. A symbol longer than
+    /// three quarters of it asks for its own length plus a quarter of it
+    /// instead, and text also drops a repeat of the same name within half of
+    /// it, both as MapLibre resolves `symbol-spacing`. Default `250.0`,
+    /// matching MapLibre's default.
+    pub spacing: f32,
+    /// Largest turn, in degrees, the line may make under the label within a
+    /// window of about one and a half ems before the label is dropped as
+    /// unreadable. Measured over that sliding window rather than per glyph or
+    /// over the whole label: a few small corners close together add up and
+    /// are rejected, while a long gentle curve is accepted however far it
+    /// turns in total. Default `45.0`.
+    pub max_angle: f32,
+    /// Flip a label that would otherwise read right-to-left, so street names
+    /// stay legible whichever way the underlying line runs. Default `true`.
+    pub keep_upright: bool,
+    /// Place each glyph of an along-line label on its own instead of each
+    /// word. With `rotate_with_camera` off each glyph turns with the line
+    /// under it (MapLibre's `symbol-placement: "line"`); on, each glyph turns
+    /// to the camera like a point label and is spaced on the screen (MapLibre's
+    /// `viewport-glyph`). Can be overridden per feature. Default `false`.
+    pub spread_glyphs: bool,
+    /// Offset perpendicular to the line, in the same units as the font size:
+    /// pixels, or metres when `size_in_meters` is set. Positive is to the left
+    /// of the direction of travel. Lets a name sit above the road rather than
+    /// on it. Default `0.0`.
+    pub line_offset: f32,
     pub height: f32,
     pub size_in_meters: bool,
     pub clamp_to_ground: bool,
@@ -399,8 +505,9 @@ pub struct TextMaterial {
     /// `declutter` is enabled.
     pub declutter_priority: f32,
     /// Source geometry types this appearance consumes. Defaults to the native
-    /// geometry only; opting in `Line`/`Polygon` also emits a label per
-    /// line-string / polygon-ring vertex.
+    /// geometry only; opting in `Line` also emits a label per line string, at
+    /// its first vertex, and `Polygon` one per polygon — or along either with
+    /// `placement`.
     pub geometry_types: Vec<SourceGeometryType>,
     // post effect
     pub effect_ids: Option<Vec<String>>,
@@ -418,6 +525,12 @@ impl Default for TextMaterial {
             text_facing: Facing::Upright,
             rotate_with_camera: true,
             rotation: 0.0,
+            placement: Placement::Point,
+            spacing: 250.0,
+            max_angle: 45.0,
+            keep_upright: true,
+            spread_glyphs: false,
+            line_offset: 0.0,
             clamp_to_ground: true,
             height: 1.,
             size_in_meters: true,

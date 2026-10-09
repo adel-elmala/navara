@@ -75,4 +75,16 @@ export type DeclutterParticipant = {
    * promoted labels join a *later* pass once their text is applied.
    */
   prepareDeferredLabels?: (camera: PerspectiveCamera) => void;
+  /**
+   * Optional: re-decide along-line placement for this participant's anchors.
+   * Called at the start of every placement pass, before candidates are
+   * collected.
+   *
+   * Which level of anchors is on screen, the box each one covers, and for text
+   * which way it reads and whether it still fits its line all depend on the
+   * camera, so none can be baked when the tile is parsed. Running before
+   * `collectDeclutterCandidates` means an anchor rejected here never competes
+   * for screen space.
+   */
+  placeLineLabels?: (camera: PerspectiveCamera, heightPx: number) => void;
 };

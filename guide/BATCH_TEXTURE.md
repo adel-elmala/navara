@@ -50,7 +50,8 @@ never styled has no texture at all. Slots come in two sizes:
 
 Two attributes can also **share** one scalar component when each needs only a
 bit or two: `show`+`opacity` pack into `showOpacity`, and `facing`+
-`rotateWithCamera` into `orientation`. Both are slot keys rather than public
+`rotateWithCamera` (+ text's `spreadGlyphs`, the 4s bit, decoded in
+`sdfText.vert.glsl` rather than the shared chunk) into `orientation`. Both are slot keys rather than public
 attribute names — callers still write the halves by name, and the write is a
 read-modify-write of the shared component.
 

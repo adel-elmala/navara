@@ -105,9 +105,12 @@ export class DeclutterManager {
   }
 
   /** Signal that candidates changed (text, positions, visibility, style) so
-   *  the next update re-runs placement even if the camera is still. */
-  markDirty(): void {
+   *  the next update re-runs placement even if the camera is still.
+   *  `immediate` also lifts the throttle, for labels that stay undrawn until a
+   *  pass judges them — along-line labels in a batch a tile swap activated. */
+  markDirty(immediate = false): void {
     this._dirty = true;
+    if (immediate) this._lastRunAt = Number.NEGATIVE_INFINITY;
   }
 
   /**
@@ -198,6 +201,7 @@ export class DeclutterManager {
     // labels.
     for (const p of this._participants) {
       p.prepareDeferredLabels?.(camera);
+      p.placeLineLabels?.(camera, heightPx);
     }
 
     const candidates = this._candidates;

@@ -150,6 +150,7 @@ The callback function can return an object containing the following properties:
 | `image` | `string \| null` | Image URL (for billboard features). Each distinct URL is loaded once and packed into the layer's texture atlas. Return `null` to clear a previous per-feature image and revert to the billboard material's default `url` (the feature becomes invisible if the material has no `url`) |
 | `facing` | `"upright" \| "flat"` | Whether the point, billboard, or label stands up or lies on the globe surface (for points/billboards/text). Overrides the material's `pointFacing`/`billboardFacing`/`textFacing` |
 | `rotateWithCamera` | `boolean` | Whether the point, billboard, or label turns to follow the camera (for points/billboards/text). `false` fixes it in the anchor's east/north/up frame. Overrides the material's `rotateWithCamera` |
+| `spreadGlyphs` | `boolean` | Whether the label places each glyph on its own along its line (for text placed along a line). Overrides the material's `spreadGlyphs`, for example to keep cursive scripts or fonts word by word in a layer that spreads the rest |
 | `rotation` | `number` | In-plane rotation around the anchor, in degrees, clockwise as seen from the front (for points/billboards/text). Lets every feature in one layer point a different way. Overrides the material's `rotation` |
 | `emissive` | `Color` | Emissive color (for batched polygons/3D Tiles models/points/billboards/text, ignored on models without batch/feature ids). Pairs with `emissiveIntensity` and drives selective bloom. On text only the glyph fill glows, while the outline and background stay dark |
 | `emissiveIntensity` | `number` | Emissive intensity multiplier (for batched polygons/3D Tiles models/points/billboards/text) |
@@ -330,6 +331,9 @@ type EvaluatedValue = {
   /** Whether the point, billboard, or label turns to follow the camera (for
    * points/billboards/text) */
   rotateWithCamera?: boolean;
+  /** Whether the label places each glyph on its own along its line (for
+   * text placed along a line) */
+  spreadGlyphs?: boolean;
   /** In-plane rotation around the anchor, in degrees, clockwise as seen from
    * the front (for points/billboards/text) */
   rotation?: number;

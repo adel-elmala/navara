@@ -302,7 +302,7 @@ view.addFontFamily({
 
 **Type:** `("point" | "line" | "polygon")[] | undefined`
 
-**Description:** Source geometry categories this material consumes. Adding `"line"` emits one label per line-string vertex, and adding `"polygon"` emits one label per polygon-ring vertex (the closing duplicate vertex is skipped). Setting the array replaces the default, so include `"point"` when point geometry should keep rendering. This option applies when the layer's geometry is built: set it at layer creation. `layer.update()` applies a new value only to tiles loaded afterwards, so already-loaded tiles keep their previous geometry until the layer is re-created.
+**Description:** Source geometry categories this material consumes. Adding `"line"` emits one label per line string by default, at its first vertex, as MapLibre places a `symbol-placement: "point"` symbol on a line. Set [`placement`](#placement) to lay labels along the line instead. Adding `"polygon"` emits one label per polygon, placed inside it at the point farthest from its edges (each part of a MultiPolygon gets its own), or along its rings with [`placement`](#placement). Setting the array replaces the default, so include `"point"` when point geometry should keep rendering. This option applies when the layer's geometry is built: set it at layer creation. `layer.update()` applies a new value only to tiles loaded afterwards, so already-loaded tiles keep their previous geometry until the layer is re-created.
 
 **Default:** `["point"]`
 
@@ -330,6 +330,26 @@ view.addFontFamily({
 {
   text: {
     height: 100 // 100 meters
+  }
+}
+```
+
+### keepUpright
+
+**Type:** `boolean | undefined`
+
+**Description:** Flips a label placed along a line when it would otherwise read upside down, so that names stay legible whichever way the line was drawn. Only used when [`placement`](#placement) is `"line"` or `"line-center"`. Which way a label reads depends on the camera, so it is decided again as the camera moves, and `layer.update()` applies a new value to labels that are already shown.
+
+**Default:** `true`
+
+**Example:**
+
+```typescript
+{
+  text: {
+    geometryTypes: ["line"],
+    placement: "line",
+    keepUpright: false // Always read in the direction the line was drawn
   }
 }
 ```
@@ -366,6 +386,48 @@ view.addFontFamily({
 {
   text: {
     lineHeight: 1.2
+  }
+}
+```
+
+### lineOffset
+
+**Type:** `number | undefined`
+
+**Description:** Shifts a label placed along a line sideways, away from the line. Positive values move it to the left of the line's direction of travel, which puts it above the line when the label reads left to right. The value uses the same unit as [`size`](#size): meters when [`sizeInMeters`](#sizeinmeters) is `true`, pixels otherwise. Use it to set a name beside a road instead of on top of it. Only used when [`placement`](#placement) is `"line"` or `"line-center"`. `layer.update()` applies a new value to labels that are already shown.
+
+**Default:** `0.0`
+
+**Example:**
+
+```typescript
+{
+  text: {
+    geometryTypes: ["line"],
+    placement: "line",
+    size: 14,
+    sizeInMeters: false,
+    lineOffset: 10 // 10 pixels beside the line
+  }
+}
+```
+
+### maxAngle
+
+**Type:** `number | undefined`
+
+**Description:** The largest turn, in degrees, that the line may make under a label placed along it before the label is hidden as unreadable. The turn is added up over a short stretch of the label, about one and a half times the font size, which slides along it: several small corners close together count together and can hide the label, while a long gentle curve is kept however far it turns in total. Only used when [`placement`](#placement) is `"line"` or `"line-center"`. Whether a label fits is decided again as the camera moves, and `layer.update()` applies a new value to labels that are already shown.
+
+**Default:** `45.0`
+
+**Example:**
+
+```typescript
+{
+  text: {
+    geometryTypes: ["line"],
+    placement: "line",
+    maxAngle: 90 // Allow labels on tighter curves
   }
 }
 ```
@@ -480,6 +542,41 @@ import { Color } from "@navaramap/three";
 }
 ```
 
+### placement
+
+**Type:** `"point" | "line" | "line-center" | undefined`
+
+**Description:** How labels are placed on line and polygon geometry. Only takes effect when [`geometryTypes`](#geometrytypes) includes `"line"` or `"polygon"`. Point geometry is always labeled at the point itself.
+
+- `"point"`: one label per line string, at its first vertex, and one label per polygon, inside it at the point farthest from its edges. On a vector-tile source, a line whose first vertex lies outside the tile (where the tile cut it) is not labeled in that tile.
+- `"line"`: labels repeat along the line every [`spacing`](#spacing) and follow its curve word by word, like a street name on a map. Each word turns to match the line under it, and the letters within a word stay straight. Set [`spreadGlyphs`](#spreadglyphs) to turn each glyph instead. Polygon boundary rings, holes included, are followed the same way.
+- `"line-center"`: a single label at the halfway point along each line string or polygon ring, bent along it in the same way.
+
+A label along a line is hidden instead of drawn when it would not read well:
+
+- it is longer than the line left on either side of its anchor, or
+- it bends through more than [`maxAngle`](#maxangle).
+
+These checks run again as the camera moves.
+
+Along-line labels also accept [`keepUpright`](#keepupright), [`lineOffset`](#lineoffset), and [`spreadGlyphs`](#spreadglyphs). They are usually combined with `textFacing: "flat"` so the text lies on the surface along the line.
+
+This option applies when the layer's geometry is built: set it at layer creation. `layer.update()` does not rebuild labels that are already loaded, so remove the layer and add it again to change it.
+
+**Default:** `"point"`
+
+**Example:**
+
+```typescript
+{
+  text: {
+    geometryTypes: ["line"],
+    placement: "line", // Repeat along the line, bending with it
+    textFacing: "flat"
+  }
+}
+```
+
 ### rotateWithCamera
 
 **Type:** `boolean | undefined`
@@ -489,6 +586,8 @@ import { Color } from "@navaramap/three";
 When `true`, the label always faces the viewer. With [`textFacing`](#textfacing) set to `"upright"`, it is a screen-aligned billboard. With `"flat"`, the label turns around the globe's surface normal so the text still reads left to right.
 
 When `false`, the label is fixed in its anchor's local east/north/up frame, and moving the camera never reorients it. With `"upright"`, it becomes a signboard standing on the surface and facing south. It is readable from a camera looking northward, seen edge-on from directly above, and mirrored from behind. With `"flat"`, it is a north-up label painted on the surface that turns with the map.
+
+Not used when [`placement`](#placement) is `"line"` or `"line-center"`: those labels follow the line's direction. The exception is [`spreadGlyphs`](#spreadglyphs), where `true` turns each glyph this way while it keeps its place on the line.
 
 Can also be set per feature from a [feature evaluator](../../api/feature-evaluator/).
 
@@ -509,7 +608,7 @@ Can also be set per feature from a [feature evaluator](../../api/feature-evaluat
 
 **Type:** `number | undefined`
 
-**Description:** Rotates the label within its own plane around its anchor point, in degrees, clockwise as seen from the front. The rotation is applied on top of the orientation that [`textFacing`](#textfacing) and [`rotateWithCamera`](#rotatewithcamera) resolve to. It spins a billboard on screen and turns a surface label like a compass bearing.
+**Description:** Rotates the label within its own plane around its anchor point, in degrees, clockwise as seen from the front. The rotation is applied on top of the orientation that [`textFacing`](#textfacing) and [`rotateWithCamera`](#rotatewithcamera) resolve to. It spins a billboard on screen and turns a surface label like a compass bearing. Not used when [`placement`](#placement) is `"line"` or `"line-center"`.
 
 [`center`](#center) decides where inside the text the pivot sits. For example, `{ x: 0.5, y: 0.5 }` turns the label around its middle, and `{ x: 0.5, y: 0.0 }` turns it around the bottom of the text block.
 
@@ -598,6 +697,67 @@ Can also be set per feature from a [feature evaluator](../../api/feature-evaluat
 {
   text: {
     size: 16
+  }
+}
+```
+
+### spacing
+
+**Type:** `number | undefined`
+
+**Description:** The distance between repeated labels when [`placement`](#placement) is `"line"`, in screen pixels. The unit is the same on `geojson` and `vector-tile` sources.
+
+The labels shown on a line are decided again as the camera moves. Pulling the camera back thins them out, and moving closer fills in more labels between them. Labels never slide along the line: they only appear or disappear. The gap on screen stays between one and two times `spacing`, also in a tilted view, where the near and far parts of the view each get their own density.
+
+A line always keeps the label at its halfway point, and a line shorter than `spacing` on screen gets only that one. Labels stop filling in very close to the ground (street level) on a GeoJSON source, and when a vector tile is shown much deeper than its own zoom level (overscaled). There they sit farther apart than `spacing`.
+
+Three more rules follow MapLibre's `symbol-spacing`:
+
+- A label longer than three quarters of `spacing` spreads its repeats to its own length plus a quarter of `spacing`, so long names are spaced out instead of hidden.
+- A label closer than half of `spacing` to an earlier label with the same text in the same tile is hidden, so a road split into several lines, or two carriageways with one name, is not labeled twice in the same spot.
+- On a vector tile source, each tile places labels only inside its own bounds. Each tile spaces its own labels, so repeats end up at most about one tile apart (512 to 1024 screen pixels) however large `spacing` is.
+
+This option applies when the layer's geometry is built. `layer.update()` does not rebuild labels that are already loaded, so remove the layer and add it again to change it.
+
+**Default:** `250.0`
+
+**Example:**
+
+```typescript
+{
+  text: {
+    geometryTypes: ["line"],
+    placement: "line",
+    spacing: 400
+  }
+}
+```
+
+### spreadGlyphs
+
+**Type:** `boolean | undefined`
+
+**Description:** Places each glyph of a label along a line on its own instead of each word. How a glyph turns depends on [`rotateWithCamera`](#rotatewithcamera):
+
+- `false`: each glyph turns to match the line under it, the way MapLibre lays out `symbol-placement: "line"` labels. A word bends with a curve instead of staying straight, and on a tight bend the letters of a word spread apart.
+- `true` (the default): each glyph turns to follow the camera, as a point label does with the same [`textFacing`](#textfacing), so the text stays readable however the line runs (MapLibre's `text-rotation-alignment: "viewport-glyph"`). The glyphs also keep one size and are spaced along the line as it appears on screen, so a name stays evenly spaced where the line runs away from the camera.
+
+Only used when [`placement`](#placement) is `"line"` or `"line-center"`. `layer.update()` applies a new value to labels that are already shown.
+
+Can also be set per feature from a [feature evaluator](../../api/feature-evaluator/), for example to keep a label in a cursive script or font word by word while the rest of the layer spreads its glyphs.
+
+**Default:** `false`
+
+**Example:**
+
+```typescript
+{
+  text: {
+    geometryTypes: ["line"],
+    placement: "line",
+    textFacing: "flat",
+    rotateWithCamera: false, // Follow the line, like a MapLibre street name
+    spreadGlyphs: true
   }
 }
 ```

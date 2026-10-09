@@ -10,6 +10,7 @@ import {
   readBatchScalar,
   readBatchShowOpacity,
   readBatchVec3,
+  unpackOrientation,
 } from "../../batchTexture";
 import type { EventContext } from "../../event/context";
 
@@ -327,6 +328,73 @@ describe("BatchedSdfTextMesh multi-instance fan-out", () => {
   });
 });
 
+describe("BatchedSdfTextMesh per-feature spreadGlyphs", () => {
+  /** How far a label's widest rigid piece reaches: its whole word, or one
+   *  glyph once spread. */
+  const reachOf = (mesh: BatchedSdfTextMesh, slot: number) =>
+    (mesh as unknown as { _labels: { maxWordHalfEm: number }[] })._labels[slot]
+      .maxWordHalfEm;
+  const spreadOf = (mesh: BatchedSdfTextMesh, batchIndex: number) =>
+    unpackOrientation(
+      readBatchScalar(batchMat(mesh), batchIndex, "orientation") ?? NaN,
+    ).spreadGlyphs;
+
+  it("lays out only the overridden feature glyph by glyph", () => {
+    const { mesh } = makeMesh();
+    mesh.setTextByBatchIndex(0, "ABCD");
+    mesh.setTextByBatchIndex(1, "ABCD");
+    const word = reachOf(mesh, 0);
+    expect(reachOf(mesh, 1)).toBe(word);
+
+    mesh.setFeatureSpreadGlyphsByBatchIndex(0, true);
+    expect(reachOf(mesh, 0)).toBeLessThan(word);
+    expect(reachOf(mesh, 1)).toBe(word);
+  });
+
+  it("lets a feature opt out of the material's spreadGlyphs", () => {
+    const { mesh } = makeMesh(material({ spreadGlyphs: true }));
+    mesh.setTextByBatchIndex(0, "ABCD");
+    mesh.setTextByBatchIndex(1, "ABCD");
+    const glyph = reachOf(mesh, 0);
+
+    mesh.setFeatureSpreadGlyphsByBatchIndex(1, false);
+    expect(reachOf(mesh, 1)).toBeGreaterThan(glyph);
+    // Feature 0, never styled, keeps the material's value from the backfill.
+    expect(reachOf(mesh, 0)).toBe(glyph);
+  });
+
+  it("keeps a feature's override through a material change to another field", async () => {
+    const { mesh } = makeMesh(material({ spreadGlyphs: true }));
+    mesh.setTextByBatchIndex(0, "ABCD");
+    mesh.setTextByBatchIndex(1, "ABCD");
+    mesh.setFeatureSpreadGlyphsByBatchIndex(1, false);
+    const word = reachOf(mesh, 1);
+
+    // Only the facing changed: the override must survive, and with it the
+    // word-by-word layout the label was given.
+    await mesh._update(
+      textMeshEvent(material({ spreadGlyphs: true, textFacing: "flat" })),
+    );
+    expect(spreadOf(mesh, 1)).toBe(false);
+    expect(reachOf(mesh, 1)).toBe(word);
+  });
+
+  it("writes a material change through to features with no label yet", async () => {
+    const { mesh } = makeMesh();
+    mesh.setTextByBatchIndex(0, "ABCD");
+    const word = reachOf(mesh, 0);
+    // Allocates the orientation slot, backfilling feature 1 with the
+    // material's `spreadGlyphs: false`.
+    mesh.setFeatureRotateWithCameraByBatchIndex(0, true);
+
+    await mesh._update(textMeshEvent(material({ spreadGlyphs: true })));
+    // Feature 1's label is created only now, and must be laid out spread.
+    mesh.setTextByBatchIndex(1, "ABCD");
+    expect(spreadOf(mesh, 1)).toBe(true);
+    expect(reachOf(mesh, 1)).toBeLessThan(word);
+  });
+});
+
 // Unprepared text costs a worker round-trip and font-face fetches, and a
 // low-zoom tile spans far more world than the screen shows. With declutter on,
 // `setTextByBatchIndex` therefore parks preparation until a placement pass
@@ -489,5 +557,37 @@ describe("BatchedSdfTextMesh deferred font preparation", () => {
     finishPrepare();
     await flushMicrotasks();
     expect(settled).toBe(true);
+  });
+});
+
+// `_applyUpdate` rebuilds the enhancer's props from scratch, and the state
+// merge reads `props.x ?? currentState.x` — so a field left out of that object
+// is not "unchanged", it is unreachable forever.
+describe("BatchedSdfTextMesh style updates reach the enhancer", () => {
+  const enhancerState = (mesh: BatchedSdfTextMesh) =>
+    (
+      mesh as unknown as {
+        _enhancer: { states: () => { lineOffset: number } };
+      }
+    )._enhancer.states();
+
+  it("applies a changed lineOffset", async () => {
+    const { mesh } = makeMesh(material({ lineOffset: 0 } as never));
+    expect(enhancerState(mesh).lineOffset).toBe(0);
+
+    await mesh._update(textMeshEvent(material({ lineOffset: 12 } as never)));
+
+    expect(enhancerState(mesh).lineOffset).toBe(12);
+  });
+
+  it("treats a dropped lineOffset as the default rather than keeping the old one", async () => {
+    // Clearing the field in a style update must return the label to the line,
+    // not strand it at whatever offset it last had.
+    const { mesh } = makeMesh(material({ lineOffset: 12 } as never));
+    expect(enhancerState(mesh).lineOffset).toBe(12);
+
+    await mesh._update(textMeshEvent(material()));
+
+    expect(enhancerState(mesh).lineOffset).toBe(0);
   });
 });

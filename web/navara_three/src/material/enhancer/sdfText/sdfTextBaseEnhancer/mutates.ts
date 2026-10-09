@@ -64,6 +64,10 @@ export const createBaseMutates = (
     // Non-zero so the shader's `i % width` / `i / width` never divide by zero
     // before the mesh binds its label texture.
     uLabelTexSize: { value: new Vector2(1, 1) },
+    uPathData: { value: null },
+    uPathTexSize: { value: new Vector2(1, 1) },
+    uLineOffset: { value: 0 },
+    uSpreadGlyphs: { value: false },
   };
 
   return {
@@ -73,6 +77,8 @@ export const createBaseMutates = (
       refs.uRotateWithCamera.value = state.rotateWithCamera;
       refs.uRotation.value = state.rotation;
       refs.uSizeInMeters.value = state.sizeInMeters;
+      refs.uLineOffset.value = state.lineOffset;
+      refs.uSpreadGlyphs.value = state.spreadGlyphs;
       refs.uOffsetDepth.value = state.offsetDepth;
       refs.uOutlineWidth.value = state.outlineWidth;
       refs.uOutlineColor.value.set(state.outlineColor);
@@ -120,6 +126,12 @@ export const createBaseMutates = (
       uniforms.uColorAtlasSize = refs.uColorAtlasSize;
       uniforms.uLabelData = refs.uLabelData;
       uniforms.uLabelTexSize = refs.uLabelTexSize;
+      // Bound unconditionally: `updateUniforms` has no state, and an unused
+      // uniform costs nothing when NVR_LINE_PLACEMENT is off.
+      uniforms.uPathData = refs.uPathData;
+      uniforms.uPathTexSize = refs.uPathTexSize;
+      uniforms.uLineOffset = refs.uLineOffset;
+      uniforms.uSpreadGlyphs = refs.uSpreadGlyphs;
       if (refs.batchDataTexture) {
         uniforms.batchDataTexture = refs.batchDataTexture;
       }
@@ -185,6 +197,16 @@ export const createBaseMutates = (
       refs.uLabelData.value = texture;
       // Guard against a zero size reaching the shader's modulo/divide.
       refs.uLabelTexSize.value.set(Math.max(1, width), Math.max(1, height));
+    },
+
+    setPathDataTexture: (
+      texture: DataTexture | null,
+      width: number,
+      height: number,
+    ) => {
+      refs.uPathData.value = texture;
+      // Guard against a zero size reaching the shader's modulo/divide.
+      refs.uPathTexSize.value.set(Math.max(1, width), Math.max(1, height));
     },
 
     setRtcCenter: (center: [number, number, number]) => {

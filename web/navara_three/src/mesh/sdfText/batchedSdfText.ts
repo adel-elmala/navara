@@ -3,6 +3,7 @@ import type {
   TextMaterial as NavaraTextMaterial,
   Transform,
 } from "@navaramap/engine";
+import { lineLabelFit, lineLabelPlace } from "@navaramap/engine-api";
 import type { FontManager } from "@navaramap/font";
 import { degreeToRadian } from "@navaramap/three-api";
 import {
@@ -17,8 +18,10 @@ import invariant from "tiny-invariant";
 
 import {
   hasBatchScalarSlot,
+  readBatchScalar,
   registerBatchedMaterial,
   TEXT_BATCH_SUPPORT,
+  unpackOrientation,
   updateBatchAttribute,
   type BatchAttributeDefaults,
   type BatchedAttributeName,
@@ -51,6 +54,16 @@ import {
   syncAnchorVisibilityState,
 } from "./labelVisibility";
 import { ALIGN_FACTORS, buildLabelLayout, type LayoutOptions } from "./layout";
+import {
+  LINE_LABEL_RESULT_STRIDE,
+  type LabelOrientation,
+  type LinePath,
+  PATH_META_STRIDE,
+  findRepeatedLabels,
+  packLineLabelFits,
+  packLineLabels,
+  takeLinePath,
+} from "./linePlacement";
 import { PendingSettlement } from "./pendingSettlement";
 
 /** Reusable scratch to avoid per-frame / per-write allocations. */
@@ -64,6 +77,19 @@ type PositionsInfoBase = {
   positionSize: number;
   batchIDSize: number;
   nPositions: number;
+  /** Per-anchor east/north metre offsets sampling the line the anchor sits on,
+   *  at `pathStride` floats per anchor. Only present under line placement. */
+  pathSamples: Float32Array<ArrayBufferLike> | null;
+  /** Floats per anchor in {@link pathSamples} — twice the sample count. */
+  pathStride: number;
+  /** Per-anchor `(metres between path samples, metres of real line either side
+   *  of the anchor)`. */
+  pathMeta: Float32Array<ArrayBufferLike> | null;
+  /** Per-anchor tangent bearing in degrees clockwise from north. */
+  bearings: Float32Array<ArrayBufferLike> | null;
+  /** Per-anchor `(min, max]` ground metres per screen pixel it is shown over,
+   *  `SCALE_BAND_STRIDE` floats each. Present exactly when `bearings` is. */
+  scaleBands: Float32Array<ArrayBufferLike> | null;
 };
 
 type PositionsInfo = PositionsInfoBase &
@@ -81,6 +107,9 @@ type PositionsInfo = PositionsInfoBase &
       }
   );
 
+/** A feature's packed orientation, as `unpackOrientation` returns it. */
+type Orientation = ReturnType<typeof unpackOrientation>;
+
 /**
  * One label in the batch.
  *
@@ -95,7 +124,7 @@ type LabelRecord = {
   slot: number;
   /** Anchor (position) slot this label sits on, NOT the feature index: a
    * feature spans several anchors for MultiPoint geometry and for labels
-   * derived from line/polygon vertices via `geometryTypes`. */
+   * derived from line/polygon geometry via `geometryTypes`. */
   instanceIndex: number;
   batchId: number;
   /** Feature index — the column in the shared batch data texture holding
@@ -143,6 +172,11 @@ type LabelRecord = {
   heightEm: number;
   minYEm: number;
   maxYEm: number;
+  /** See `LabelLayout.minXEm`. */
+  minXEm: number;
+  maxXEm: number;
+  /** See `LabelLayout.maxWordHalfEm`. */
+  maxWordHalfEm: number;
   /** Current animated hide factor and the placement target it fades toward. */
   declutterHide: number;
   declutterTarget: number;
@@ -181,6 +215,9 @@ export class BatchedSdfTextMesh
   /** Per-batch text quality. All labels in the batch share it because they
    *  sample the same atlas texture; flipping quality requires a new batch. */
   private _highQuality: boolean;
+  /** The material's `spacing` the engine built this batch's scale bands for,
+   *  so as fixed as the bands. */
+  private readonly _spacingPx: number;
   private _fontManager: FontManager;
   private _needRender?: () => void;
   /** Unsubscribe from the font manager's atlas-eviction notifications. */
@@ -208,7 +245,7 @@ export class BatchedSdfTextMesh
   /**
    * Feature (batch) index → this feature's anchor slots. A feature owns
    * multiple anchors for MultiPoint geometry and for labels derived from
-   * line/polygon vertices via `geometryTypes`, so per-feature styling must fan
+   * line/polygon geometry via `geometryTypes`, so per-feature styling must fan
    * out to all of them. `null` means anchors and features are 1:1.
    */
   private _batchIndexToInstances: Map<number, number[]> | null = null;
@@ -223,11 +260,47 @@ export class BatchedSdfTextMesh
   private _glyphs: GlyphBuffers;
   private _slots = new GlyphSlotAllocator();
   private _labelData: LabelDataTexture;
+  /** Per-label resampled line, only allocated under along-line placement. Uses
+   *  the same slotted-float-texture machinery as `_labelData`, with its own
+   *  much wider stride: two samples per RGBA texel. */
+  private _pathData: LabelDataTexture | null = null;
+  /**
+   * The resampled line each anchor sits on, held apart from {@link _positions}.
+   *
+   * A geometry update replaces the position info wholesale, and its buffers are
+   * consumed out of the store on extraction — so re-extracting for a terrain
+   * height change can hand back position data with no path attached. The path
+   * itself never changes for a given tile, so it is kept here and only replaced
+   * when an update actually brings a new one. Losing it would leave every label
+   * unvalidated, and therefore culled, for the life of the batch.
+   */
+  private _path: LinePath | null = null;
+  /** Per-label screen-space collision box from the last placement pass, four
+   *  values per slot (minX, maxX, minY, maxY). A line label is turned to follow
+   *  its road, so the unrotated block metrics would model a north-south street
+   *  name as a wide horizontal box and let its neighbours sit on top of it. */
+  private _lineBoxes: Float64Array | null = null;
+  /** Per-label rejection from the same pass: the label's level is not the one
+   *  on screen, it does not fit its road, or the road bends too far under it.
+   *  Such labels draw nothing, so they must not claim declutter space either. */
+  private _lineRejected: Uint8Array | null = null;
+  /** {@link _lineRejected} as the previous pass left it, to tell which labels a
+   *  pass turned on or off. */
+  private _linePrevRejected: Uint8Array | null = null;
+  /** Reused gather buffer for the labels a placement pass actually has to
+   *  judge. */
+  private _linePlaceable: LabelRecord[] = [];
+  /** The subset of those that passed the fit phase and so need their path sent
+   *  to the full placement. */
+  private _linePlaceSurvivors: LabelRecord[] = [];
+  /** Reused copy of the view matrix both kernel phases read. */
+  private _lineViewMatrix = new Float64Array(16);
 
   /** Layout inputs baked into glyph quads; a change forces a re-layout. */
   private _maxWidth: number;
   private _lineHeight: number;
   private _textAlign: number;
+  private _spreadGlyphs: boolean;
 
   /** Labels currently parked in `prepareDeferred`, so the per-pass promotion
    *  scan can bail without touching `_labels` when nothing is parked. */
@@ -267,18 +340,27 @@ export class BatchedSdfTextMesh
     this._material = material;
     this._transform = m.transform;
     this._highQuality = material.highQuality ?? false;
+    this._spacingPx = material.spacing ?? 250;
 
     this._maxWidth = material.maxWidth ?? 0;
     this._lineHeight = material.lineHeight ?? 1.0;
     this._textAlign = ALIGN_FACTORS[material.textAlign ?? "center"] ?? 0.5;
+    this._spreadGlyphs = material.spreadGlyphs ?? false;
     this._declutter = material.declutter ?? true;
     this._declutterPriority = material.declutterPriority ?? 0;
 
     this._positions = this.extractPositions(m);
+    this._path = takeLinePath(this._positions);
     this._rebuildBatchIndexMap(m);
     this._batchLength = m.batch_length;
     this._glyphs = new GlyphBuffers();
     this._labelData = new LabelDataTexture();
+    // The stride comes from the data the engine actually sent, so the GLSL
+    // define and the texture layout are both derived from the Rust constant
+    // rather than restating it.
+    const pathTexels = this._path ? this._path.stride / 4 : 0;
+    this._pathData =
+      pathTexels > 0 ? new LabelDataTexture(16, pathTexels) : null;
 
     this.geometry = this._glyphs.geometry;
     const mat = new ShaderMaterial({
@@ -298,6 +380,7 @@ export class BatchedSdfTextMesh
     this.frustumCulled = false;
 
     this._syncLabelDataUniform();
+    this._syncPathDataUniform();
     this._initLabels();
 
     // When the shared atlas evicts glyphs, a still-in-flight glyph this batch
@@ -330,6 +413,13 @@ export class BatchedSdfTextMesh
       base: {
         useRTE: this._positions?.RTE ?? false,
         useMsdf: this._highQuality,
+        // Driven by the geometry rather than by `material.placement`: the
+        // engine only ships a path when it actually resampled a line, so the
+        // shader branch and the data it reads can never disagree.
+        linePlacement: this._pathData !== null,
+        pathSamples: (this._path?.stride ?? 0) / 2,
+        lineOffset: material.lineOffset ?? 0,
+        spreadGlyphs: this._spreadGlyphs,
         center: material.center
           ? [material.center.x, material.center.y]
           : undefined,
@@ -406,6 +496,345 @@ export class BatchedSdfTextMesh
     this._enhancer.mutates().setLabelDataTexture(texture, size.x, size.y);
   }
 
+  /**
+   * Re-decide which way each line label reads and whether it still fits.
+   *
+   * Both answers move with the camera — a pixel-sized label grows in world
+   * metres as the camera pulls back — so they are resolved here, at the
+   * placement pass's cadence, rather than baked when the tile was parsed. The
+   * numeric work is the Rust `lineLabelPlace`, which mirrors the vertex
+   * shader's own sizing; see `crates/navara_wasm_api/src/line_label.rs`.
+   *
+   * Only labels that could become declutter candidates are judged, under the
+   * same two conditions {@link collectDeclutterCandidates} applies — an
+   * invisible batch, and a label with no shaped text, are both dropped there a
+   * moment later. Whatever marks those conditions dirty already has to mark
+   * the declutter pass dirty for collection to be correct, so this filter
+   * inherits that guarantee — keep the two predicates identical.
+   *
+   * What survives that filter then goes through the kernel in two phases. The
+   * fit test needs no path samples, so it runs first over a compact array;
+   * only survivors have their path points gathered and sent. See the "Two
+   * phases" section of `line_label.rs`.
+   *
+   * The fit test also rejects every anchor whose level is not the one on
+   * screen. Each position along a line carries one anchor per level, each with
+   * a path sized for it, so zooming across a level boundary retires one label
+   * and admits its stack-mate at the same spot — see {@link _handOffLineLabel}.
+   */
+  placeLineLabels(camera: PerspectiveCamera, heightPx: number): void {
+    const line = this._path;
+    if (!this.visible) return;
+    if (!this._pathData || !line || this._labels.length === 0) return;
+
+    const placeable = this._linePlaceable;
+    placeable.length = 0;
+    for (const record of this._labels) {
+      if (!record.show || record.widthEm <= 0 || record.fontSize <= 0) continue;
+      // A plain point sharing the batch has no path to be placed along.
+      if (!this._isAlongLine(record)) continue;
+      placeable.push(record);
+    }
+    if (placeable.length === 0) return;
+
+    // Sized by the label count, not the placed count: both arrays are addressed
+    // by slot, and the labels skipped above still occupy slots between the ones
+    // that were placed.
+    const slotCount = this._labels.length;
+    if ((this._lineBoxes?.length ?? 0) < slotCount * 4) {
+      this._lineBoxes = new Float64Array(slotCount * 4);
+      // Kept across the grow: the next pass compares against it.
+      const grown = new Uint8Array(slotCount);
+      if (this._lineRejected) grown.set(this._lineRejected);
+      this._lineRejected = grown;
+      this._linePrevRejected = new Uint8Array(slotCount);
+    }
+    const boxes = this._lineBoxes;
+    const rejected = this._lineRejected;
+    const prevRejected = this._linePrevRejected;
+    invariant(boxes && rejected && prevRejected, "line placement buffers");
+    prevRejected.set(rejected);
+
+    const sizeInMeters = this._material.sizeInMeters ?? true;
+    const spacingPx = this._spacingPx;
+    const fovRad = MathUtils.degToRad(camera.fov);
+    camera.updateMatrixWorld();
+    const view = this._lineViewMatrix;
+    view.set(camera.matrixWorldInverse.elements);
+
+    const state = this._enhancer.states();
+    const center = [
+      Math.min(Math.max(state.center[0], -0.5), 0.5),
+      Math.min(Math.max(state.center[1], -0.5), 0.5),
+    ] as const;
+
+    const materialOrientation = this._orientationDefaults();
+    const readOrientation = (slot: number): LabelOrientation => {
+      const o = this._resolveOrientation(
+        this._labels[slot]?.batchIndex,
+        materialOrientation,
+      );
+      return {
+        flatFacing: o.flatFacing,
+        facesCamera: o.spreadGlyphs && o.rotateWithCamera,
+      };
+    };
+
+    // Phase one: which labels are short enough to sit on their line at all.
+    const fits = lineLabelFit(
+      packLineLabelFits(placeable, line, {
+        sizeInMeters,
+        center,
+        readOrientation,
+      }),
+      view,
+      heightPx,
+      fovRad,
+      spacingPx,
+    );
+
+    const survivors = this._linePlaceSurvivors;
+    survivors.length = 0;
+    for (let i = 0; i < placeable.length; i++) {
+      const slot = placeable[i].slot;
+      if (fits[i] !== 0) {
+        survivors.push(placeable[i]);
+        continue;
+      }
+      // Rejected here, so it never reaches phase two. Its box is left alone:
+      // `collectDeclutterCandidates` skips rejected labels, and the shader
+      // culls them, so nothing reads it.
+      this._labelData.setComponent(slot, LabelRow.PATH, 3, 1);
+      rejected[slot] = 1;
+    }
+    if (survivors.length > 0)
+      this._placeLineSurvivors(survivors, view, {
+        heightPx,
+        fovRad,
+        spacingPx,
+        sizeInMeters,
+        center,
+        lineOffset: state.lineOffset,
+        readOrientation,
+      });
+
+    for (const record of placeable) {
+      if (!rejected[record.slot]) continue;
+      if (!prevRejected[record.slot]) this._handOffLineLabel(record);
+      this._hideRejectedLineLabel(record);
+    }
+  }
+
+  /** Phase two of {@link placeLineLabels}: reading direction, curvature and
+   *  the collision box — all of which need the path — then the repeat test. */
+  private _placeLineSurvivors(
+    survivors: LabelRecord[],
+    view: Float64Array,
+    pass: {
+      heightPx: number;
+      fovRad: number;
+      spacingPx: number;
+      sizeInMeters: boolean;
+      center: readonly [number, number];
+      lineOffset: number;
+      readOrientation: (slot: number) => LabelOrientation;
+    },
+  ): void {
+    const line = this._path;
+    const boxes = this._lineBoxes;
+    const rejected = this._lineRejected;
+    invariant(line && boxes && rejected, "line placement buffers");
+    const { heightPx, fovRad, spacingPx, sizeInMeters, center } = pass;
+
+    const packed = packLineLabels(survivors, line, {
+      sizeInMeters,
+      maxAngleDeg: this._material.maxAngle ?? 45,
+      keepUpright: this._material.keepUpright ?? true,
+      center,
+      lineOffset: pass.lineOffset,
+      readFlip: (slot) =>
+        this._labelData.getComponent(slot, LabelRow.PATH, 2) !== 0,
+      readOrientation: pass.readOrientation,
+    });
+
+    const result = lineLabelPlace(
+      packed.labels,
+      packed.paths,
+      line.stride / 2,
+      view,
+      heightPx,
+      fovRad,
+      spacingPx,
+    );
+
+    const accepted: LabelRecord[] = [];
+    const metersPerPx: number[] = [];
+    for (let i = 0; i < survivors.length; i++) {
+      const slot = survivors[i].slot;
+      const r = i * LINE_LABEL_RESULT_STRIDE;
+      this._labelData.setComponent(slot, LabelRow.PATH, 2, result[r]);
+      this._labelData.setComponent(slot, LabelRow.PATH, 3, result[r + 1]);
+      rejected[slot] = result[r + 1] > 0.5 ? 1 : 0;
+      boxes[slot * 4] = result[r + 2];
+      boxes[slot * 4 + 1] = result[r + 3];
+      boxes[slot * 4 + 2] = result[r + 4];
+      boxes[slot * 4 + 3] = result[r + 5];
+      if (!rejected[slot]) {
+        accepted.push(survivors[i]);
+        metersPerPx.push(result[r + 6]);
+      }
+    }
+
+    // Last, as in MapLibre: a label dropped for its angle must not have hidden
+    // a same-name neighbour first.
+    for (const i of findRepeatedLabels(accepted, metersPerPx, spacingPx)) {
+      const slot = accepted[i].slot;
+      this._labelData.setComponent(slot, LabelRow.PATH, 3, 1);
+      rejected[slot] = 1;
+    }
+  }
+
+  /**
+   * Whether this label sits on a line, as opposed to a plain point sharing the
+   * batch (`geometryTypes: ["point", "line"]`). The engine keeps the path
+   * buffers one entry per point and marks plain points with a zero sample
+   * step, which the shader tests the same way.
+   */
+  private _isAlongLine(record: LabelRecord): boolean {
+    const meta = this._path?.meta;
+    return !!meta && meta[record.instanceIndex * PATH_META_STRIDE] > 0;
+  }
+
+  /**
+   * Pass a label's declutter state to the stack-mate that takes over its
+   * position, when a placement pass has just rejected it.
+   *
+   * Crossing a level boundary retires the anchor sized for the old level and
+   * admits the one sized for the new, at the same spot with the same text.
+   * Left alone the newcomer would enter declutter as a fresh candidate and fade
+   * in while the label it replaces snaps out — a blink along every line on
+   * screen at once. The stack's anchors are adjacent instances sharing one
+   * anchor point.
+   */
+  private _handOffLineLabel(from: LabelRecord): void {
+    if (!this._declutter) return;
+    const rejected = this._lineRejected;
+    const prevRejected = this._linePrevRejected;
+    invariant(rejected && prevRejected, "line placement buffers");
+    const [x, y, z] = from.anchor;
+    for (const direction of [-1, 1]) {
+      for (let i = from.instanceIndex + direction; ; i += direction) {
+        const to = this._labelByInstance[i];
+        if (
+          !to ||
+          to.anchor[0] !== x ||
+          to.anchor[1] !== y ||
+          to.anchor[2] !== z
+        )
+          break;
+        if (rejected[to.slot] || !prevRejected[to.slot]) continue;
+        to.declutterHide = from.declutterHide;
+        to.declutterTarget = from.declutterTarget;
+        this._writeDeclutterHide(to);
+        if (to.declutterHide !== to.declutterTarget) {
+          this._declutterAnimating = true;
+        }
+        return;
+      }
+    }
+  }
+
+  /**
+   * Drop a rejected line label to hidden in the declutter pass's eyes.
+   *
+   * The shader culls it and `collectDeclutterCandidates` skips it, so the
+   * declutter pass never gets to tell it that it lost. Left alone its target
+   * would still say "shown", and when it fits again it would come back as an
+   * incumbent — winning equal-priority ties and the sticky collision shrink
+   * over labels that really were on screen. Snapped rather than faded: it
+   * draws nothing either way, so it comes back as a fresh candidate and fades
+   * in like one.
+   */
+  private _hideRejectedLineLabel(record: LabelRecord): void {
+    if (!this._declutter) return;
+    record.declutterTarget = 1;
+    if (record.declutterHide === 1) return;
+    record.declutterHide = 1;
+    this._writeDeclutterHide(record);
+  }
+
+  /**
+   * A feature's facing, camera following and glyph spreading, as the shader
+   * resolves them: the feature's own once any feature has one (the batch
+   * texture then governs every feature), the material's until then.
+   */
+  private _resolveOrientation(
+    batchIndex: number | undefined,
+    material: Orientation = this._orientationDefaults(),
+  ): Orientation {
+    const packed =
+      batchIndex === undefined
+        ? undefined
+        : readBatchScalar(
+            this.material as ShaderMaterial,
+            batchIndex,
+            "orientation",
+          );
+    return packed === undefined ? material : unpackOrientation(packed);
+  }
+
+  /** Same, for the path texture. */
+  private _syncPathDataUniform(): void {
+    if (!this._pathData) return;
+    const { texture, size } = this._pathData;
+    this._enhancer.mutates().setPathDataTexture(texture, size.x, size.y);
+  }
+
+  /**
+   * Copy this anchor's resampled line into the path texture and record where it
+   * landed, so the vertex shader can find it from the label's PATH row.
+   *
+   * Texels per label are fixed, so the label's own slot index addresses its
+   * path run too — no second allocator.
+   */
+  private _writePath(record: LabelRecord): void {
+    const line = this._path;
+    const path = this._pathData;
+    if (!line || !path) return;
+
+    const texelsPerLabel = line.stride / 4;
+    if (path.ensureCapacity(record.slot + 1)) this._syncPathDataUniform();
+
+    const src = record.instanceIndex * line.stride;
+    for (let texel = 0; texel < texelsPerLabel; texel++) {
+      const i = src + texel * 4;
+      path.setRow(
+        record.slot,
+        texel,
+        line.samples[i],
+        line.samples[i + 1],
+        line.samples[i + 2],
+        line.samples[i + 3],
+      );
+    }
+
+    const alongLine = this._isAlongLine(record);
+    this._labelData.setRow(
+      record.slot,
+      LabelRow.PATH,
+      record.slot * texelsPerLabel,
+      // Zero for a plain point, which is what tells the shader to lay it out
+      // as an ordinary label.
+      line.meta[record.instanceIndex * PATH_META_STRIDE],
+      0, // flip — decided per pass by `placeLineLabels`
+      // Rejected until that pass has judged it. A label drawn before its first
+      // placement runs has no flip yet, so it would appear for a frame or two
+      // reading backwards — and while tiles stream in there is always a fresh
+      // batch in that state. A plain point is never judged, so never waits.
+      alongLine ? 1 : 0,
+    );
+  }
+
   // --- Label lifecycle ---
 
   /**
@@ -464,6 +893,9 @@ export class BatchedSdfTextMesh
       heightEm: 0,
       minYEm: 0,
       maxYEm: 1,
+      minXEm: 0,
+      maxXEm: 0,
+      maxWordHalfEm: 0,
       // Decluttered labels start hidden and fade in once the placement pass
       // grants them space — otherwise dense tiles flash their full clutter for
       // a frame before the first pass runs.
@@ -477,6 +909,7 @@ export class BatchedSdfTextMesh
     this._labelByInstance[instanceIndex] = record;
 
     this._writeAnchor(record);
+    this._writePath(record);
     this._writeStyle(record);
     this._writeFontSize(record);
     this._writeAddHeight(record);
@@ -558,11 +991,12 @@ export class BatchedSdfTextMesh
   }
 
   /** The material's orientation/rotation, backfilled into a new batch slot. */
-  private _orientationDefaults(): BatchAttributeDefaults {
+  private _orientationDefaults(): Required<BatchAttributeDefaults> {
     return {
       rotation: (this._material.rotation ?? 0) * MathUtils.DEG2RAD,
       flatFacing: this._material.textFacing === "flat",
       rotateWithCamera: this._material.rotateWithCamera ?? true,
+      spreadGlyphs: this._spreadGlyphs,
     };
   }
 
@@ -626,12 +1060,13 @@ export class BatchedSdfTextMesh
 
   // --- Glyph runs ---
 
-  private _layoutOptions(text: string): LayoutOptions {
+  private _layoutOptions(record: LabelRecord, text: string): LayoutOptions {
     return {
       text,
       maxWidth: this._maxWidth,
       lineHeight: this._lineHeight,
       textAlign: this._textAlign,
+      spreadGlyphs: this._resolveOrientation(record.batchIndex).spreadGlyphs,
     };
   }
 
@@ -670,12 +1105,18 @@ export class BatchedSdfTextMesh
       return;
     }
 
-    const layout = buildLabelLayout(shapeResult, this._layoutOptions(text));
+    const layout = buildLabelLayout(
+      shapeResult,
+      this._layoutOptions(record, text),
+    );
 
     record.widthEm = layout.widthEm;
     record.heightEm = layout.heightEm;
     record.minYEm = layout.minYEm;
     record.maxYEm = layout.maxYEm;
+    record.minXEm = layout.minXEm;
+    record.maxXEm = layout.maxXEm;
+    record.maxWordHalfEm = layout.maxWordHalfEm;
     this._writeBox(record);
 
     if (layout.quads.length === 0) {
@@ -801,6 +1242,12 @@ export class BatchedSdfTextMesh
     const next = record.requestedShow && !!record.text;
     if (record.show === next) return;
     record.show = next;
+    // A hidden label is not placed, so by the time it shows again its last
+    // decision is stale: it waits to be judged, as a new label does.
+    if (!next && this._isAlongLine(record)) {
+      this._labelData.setComponent(record.slot, LabelRow.PATH, 3, 1);
+      if (this._lineRejected) this._lineRejected[record.slot] = 1;
+    }
     this._writeShow(record);
     this._syncGlyphRefs(record);
   }
@@ -865,22 +1312,38 @@ export class BatchedSdfTextMesh
     const cx = Math.min(Math.max(state.center[0], -0.5), 0.5);
     const cy = Math.min(Math.max(state.center[1], -0.5), 0.5);
 
+    const boxes = this._lineBoxes;
     for (const record of this._labels) {
       if (!record.show || record.widthEm <= 0) continue;
       const size = record.fontSize;
       if (size <= 0) continue;
+      // A rejected line label draws nothing, so it must not evict a label that
+      // does.
+      if (this._lineRejected?.[record.slot]) continue;
 
       const w = record.widthEm;
       const h = record.heightEm;
+      // Line labels are turned to follow their road, so the placement pass
+      // hands back the box they actually cover; everything else is a
+      // screen-aligned block around its anchor.
+      //
+      // A label created since the last pass has no box yet. Falling back to the
+      // unrotated block matters: reading past the array would put `undefined`
+      // — and then NaN — into the packed candidate, and a NaN box never
+      // registers a collision, so the label would silently overlap everything.
+      // A plain point in a line batch is screen-aligned like any other label.
+      const b = record.slot * 4;
+      const hasBox =
+        boxes !== null && b + 3 < boxes.length && this._isAlongLine(record);
       out.push({
         anchorX: record.anchor[0],
         anchorY: record.anchor[1],
         anchorZ: record.anchor[2],
         addHeight: record.addHeight,
-        minX: (0 - cx * w) * size,
-        maxX: (w - cx * w) * size,
-        minY: (record.minYEm - cy * h) * size,
-        maxY: (record.maxYEm - cy * h) * size,
+        minX: hasBox ? boxes[b] : (0 - cx * w) * size,
+        maxX: hasBox ? boxes[b + 1] : (w - cx * w) * size,
+        minY: hasBox ? boxes[b + 2] : (record.minYEm - cy * h) * size,
+        maxY: hasBox ? boxes[b + 3] : (record.maxYEm - cy * h) * size,
         sizeInMeters: state.sizeInMeters,
         priority: record.priorityOverride ?? this._declutterPriority,
         isShown: record.declutterTarget === 0,
@@ -950,7 +1413,9 @@ export class BatchedSdfTextMesh
         }
       }
     }
-    this._markDeclutterDirty();
+    // Line labels are culled until placed, and a hidden batch is never
+    // placed, so the swap must not wait out the throttle.
+    this.ctx.declutter?.markDirty(activating && this._path !== null);
   }
 
   /**
@@ -998,6 +1463,17 @@ export class BatchedSdfTextMesh
     const batchIDs = buf.removeF32(batchIdsData.data);
     const batchIDSize = batchIdsData.size;
 
+    // Present only for along-line placement, where the engine resampled each
+    // anchor's line so the shader can bend glyphs onto it.
+    const pathSamplesData = g.path_samples;
+    const pathSamples = pathSamplesData
+      ? buf.removeF32(pathSamplesData.data)
+      : null;
+    const pathStride = pathSamplesData?.size ?? 0;
+    const pathMeta = g.path_meta ? buf.removeF32(g.path_meta.data) : null;
+    const bearings = g.bearings ? buf.removeF32(g.bearings.data) : null;
+    const scaleBands = g.scale_bands ? buf.removeF32(g.scale_bands.data) : null;
+
     const positionData = g.position;
     const position = positionData
       ? buf.removeF32(positionData.data)
@@ -1014,6 +1490,11 @@ export class BatchedSdfTextMesh
         positionSize,
         nPositions,
         RTE: false,
+        pathSamples,
+        pathStride,
+        pathMeta,
+        bearings,
+        scaleBands,
       };
     }
 
@@ -1043,6 +1524,11 @@ export class BatchedSdfTextMesh
         positionSize: positionHighSize,
         nPositions,
         RTE: true,
+        pathSamples,
+        pathStride,
+        pathMeta,
+        bearings,
+        scaleBands,
       };
     }
 
@@ -1089,6 +1575,7 @@ export class BatchedSdfTextMesh
         "Number of positions in the updated geometry must match the initial geometry",
       );
       this._positions = positionInfo;
+      this._path = takeLinePath(positionInfo) ?? this._path;
       this._rebuildBatchIndexMap(m);
       this._enhancer
         .mutates()
@@ -1162,13 +1649,16 @@ export class BatchedSdfTextMesh
     const nextMaxWidth = material.maxWidth ?? 0;
     const nextLineHeight = material.lineHeight ?? 1.0;
     const nextTextAlign = ALIGN_FACTORS[material.textAlign ?? "center"] ?? 0.5;
+    const nextSpreadGlyphs = material.spreadGlyphs ?? false;
     const layoutChanged =
       nextMaxWidth !== this._maxWidth ||
       nextLineHeight !== this._lineHeight ||
-      nextTextAlign !== this._textAlign;
+      nextTextAlign !== this._textAlign ||
+      nextSpreadGlyphs !== this._spreadGlyphs;
     this._maxWidth = nextMaxWidth;
     this._lineHeight = nextLineHeight;
     this._textAlign = nextTextAlign;
+    this._spreadGlyphs = nextSpreadGlyphs;
 
     // Read before applying visibility: the declutter pass consults these even
     // while other style state is skipped for hidden labels.
@@ -1186,6 +1676,14 @@ export class BatchedSdfTextMesh
 
     this._enhancer.update({
       base: {
+        // `useRTE` / `useMsdf` / `linePlacement` / `pathSamples` are absent on
+        // purpose: they pick the shader program and are driven by the geometry,
+        // so they are settled at mount and on re-init, not by a style update.
+        // Everything else the material owns belongs here — a field left out
+        // keeps its mounted value forever, since the state merge reads
+        // `props.x ?? currentState.x`.
+        lineOffset: material.lineOffset ?? 0,
+        spreadGlyphs: this._spreadGlyphs,
         center: material.center
           ? [material.center.x, material.center.y]
           : [0.5, 0.0],
@@ -1238,14 +1736,50 @@ export class BatchedSdfTextMesh
     // value. Once a slot exists every feature reads the texture, so a changed
     // material value must be written through or evaluator overrides would
     // outlive it — the same "a material update overwrites per-feature style"
-    // rule the style/size writes above follow.
-    const rotationChanged =
-      rotationDeg !== (prevMaterial.rotation ?? 0) &&
-      hasBatchScalarSlot(mat, "rotation");
-    const orientationChanged =
-      (flatFacing !== (prevMaterial.textFacing === "flat") ||
-        followCamera !== (prevMaterial.rotateWithCamera ?? true)) &&
-      hasBatchScalarSlot(mat, "orientation");
+    // rule the style/size writes above follow. Only the fields that changed,
+    // and for every feature: one without a label yet reads the texture when its
+    // label is created.
+    const hasOrientation = hasBatchScalarSlot(mat, "orientation");
+    const writeThrough = {
+      rotation:
+        rotationDeg !== (prevMaterial.rotation ?? 0) &&
+        hasBatchScalarSlot(mat, "rotation"),
+      flatFacing:
+        flatFacing !== (prevMaterial.textFacing === "flat") && hasOrientation,
+      rotateWithCamera:
+        followCamera !== (prevMaterial.rotateWithCamera ?? true) &&
+        hasOrientation,
+      spreadGlyphs:
+        nextSpreadGlyphs !== (prevMaterial.spreadGlyphs ?? false) &&
+        hasOrientation,
+    };
+    if (Object.values(writeThrough).some(Boolean)) {
+      const defaults = this._orientationDefaults();
+      for (let batchIndex = 0; batchIndex < this._batchLength; batchIndex++) {
+        if (writeThrough.rotation) {
+          this._updateBatchAttribute(
+            batchIndex,
+            "rotation",
+            defaults.rotation,
+            defaults,
+          );
+        }
+        for (const key of [
+          "flatFacing",
+          "rotateWithCamera",
+          "spreadGlyphs",
+        ] as const) {
+          if (writeThrough[key]) {
+            this._updateBatchAttribute(
+              batchIndex,
+              key,
+              defaults[key],
+              defaults,
+            );
+          }
+        }
+      }
+    }
 
     // A changed material show clobbers evaluator overrides — including hide
     // intents parked on anchors that never got a label.
@@ -1265,20 +1799,6 @@ export class BatchedSdfTextMesh
         record.addHeight = addHeight;
         this._writeAddHeight(record);
       }
-      if (rotationChanged) {
-        this.setFeatureRotationByBatchIndex(record.batchIndex, rotationDeg);
-      }
-      if (orientationChanged) {
-        this.setFeatureFacingByBatchIndex(
-          record.batchIndex,
-          flatFacing ? "flat" : "upright",
-        );
-        this.setFeatureRotateWithCameraByBatchIndex(
-          record.batchIndex,
-          followCamera,
-        );
-      }
-
       if (showChanged) record.requestedShow = materialShow;
       if (materialText !== undefined && materialText !== "") {
         // The material text overrides whatever the evaluator asked for —
@@ -1476,6 +1996,8 @@ export class BatchedSdfTextMesh
       facing === "flat",
       this._orientationDefaults(),
     );
+    // Both decide an along-line label's collision box.
+    this._markDeclutterDirty();
   }
 
   setFeatureRotateWithCameraByBatchIndex(batchIndex: number, follow: boolean) {
@@ -1485,6 +2007,25 @@ export class BatchedSdfTextMesh
       follow,
       this._orientationDefaults(),
     );
+    this._markDeclutterDirty();
+  }
+
+  /** Whether one feature's labels place each glyph on its own along their
+   *  line, overriding the material's `spreadGlyphs`. Glyph pieces are baked
+   *  into the layout, so the feature's labels are laid out again. */
+  setFeatureSpreadGlyphsByBatchIndex(batchIndex: number, spread: boolean) {
+    if (this._resolveOrientation(batchIndex).spreadGlyphs === spread) return;
+    this._updateBatchAttribute(
+      batchIndex,
+      "spreadGlyphs",
+      spread,
+      this._orientationDefaults(),
+    );
+    for (const instanceIndex of this._instancesOfBatchIndex(batchIndex)) {
+      const record = this._labelByInstance[instanceIndex];
+      if (record) this._applyText(record, record.text);
+    }
+    this._markDeclutterDirty();
   }
 
   setFeatureRotationByBatchIndex(batchIndex: number, degrees: number) {
@@ -1581,6 +2122,7 @@ export class BatchedSdfTextMesh
     this._instanceBatchIndex = null;
 
     this._labelData.dispose();
+    this._pathData?.dispose();
     this._glyphs.dispose();
     (this.material as ShaderMaterial).dispose();
 

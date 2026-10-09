@@ -49,6 +49,22 @@ fn parse_facing(field: &str, value: &Option<String>) -> Option<navara_material::
         }
     }
 }
+
+/// Parse a JS-facing placement name, warning on an unknown value so the caller
+/// keeps the material's current value.
+fn parse_placement(value: &Option<String>) -> Option<navara_material::Placement> {
+    let name = value.as_ref()?;
+    match navara_material::Placement::parse(name) {
+        Some(p) => Some(p),
+        None => {
+            bevy_log::warn!(
+                "placement: unknown value {name:?} (expected \"point\", \"line\" or \"line-center\")"
+            );
+            None
+        }
+    }
+}
+
 #[wasm_bindgen]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PointMaterial {
@@ -72,6 +88,28 @@ pub struct PointMaterial {
     /// degrees, clockwise seen from the front. `center` decides where inside
     /// the quad the pivot sits. Defaults to `0.0`.
     pub rotation: Option<f32>,
+    /// How anchors are derived from line and polygon geometry: `"point"` (the
+    /// default) puts one at every line and polygon-ring vertex, `"line"`
+    /// repeats them along the line every `spacing`, `"line-center"` places a
+    /// single one at the line's midpoint. Polygon rings are walked like lines. Requires `geometryTypes`
+    /// to include `"line"` or `"polygon"`.
+    #[wasm_bindgen(getter_with_clone)]
+    pub placement: Option<String>,
+    /// Distance between repeated anchors along a line, in screen pixels, for
+    /// `vector-tile` and `geojson` sources alike. Resolved per anchor as the
+    /// camera moves: anchors thin out as it pulls back and fill in as it
+    /// closes, never moving, so the gap on screen stays between one and two
+    /// times `spacing` across a pitched view. As MapLibre does with
+    /// `symbol-spacing`, a sprite wider than three quarters of the spacing
+    /// spreads its repeats to its width plus a quarter of the spacing, and a
+    /// vector tile places anchors only inside its own bounds. Only used by
+    /// `placement: "line"`. Defaults to `250.0`.
+    pub spacing: Option<f32>,
+    /// Add the line's tangent bearing at the anchor to `rotation`, so the
+    /// sprite turns with the line it sits on. Defaults to `true`.
+    #[wasm_bindgen(js_name = rotateToLine)]
+    #[serde(rename = "rotateToLine")]
+    pub rotate_to_line: Option<bool>,
     /// anchor point of the sprite, range is (-0.5, -0.5) to (0.5, 0.5).
     /// Default is (0.0, 0.0) which means the center of the sprite.
     pub center: Option<Vec2>,
@@ -139,6 +177,9 @@ impl From<PointMaterial> for navara_material::PointMaterial {
                 .unwrap_or(default.point_facing),
             rotate_with_camera: val.rotate_with_camera.unwrap_or(default.rotate_with_camera),
             rotation: val.rotation.unwrap_or(default.rotation),
+            placement: parse_placement(&val.placement).unwrap_or(default.placement),
+            spacing: val.spacing.unwrap_or(default.spacing),
+            rotate_to_line: val.rotate_to_line.unwrap_or(default.rotate_to_line),
             color: val.color.unwrap_or(default.color),
             center: val.center.unwrap_or(default.center.into()).into(),
             height: val.height.unwrap_or(default.height),
@@ -167,6 +208,9 @@ impl<'a> From<&'a navara_material::PointMaterial> for PointMaterial {
             point_facing: Some(value.point_facing.as_str().to_string()),
             rotate_with_camera: Some(value.rotate_with_camera),
             rotation: Some(value.rotation),
+            placement: Some(value.placement.as_str().to_string()),
+            spacing: Some(value.spacing),
+            rotate_to_line: Some(value.rotate_to_line),
             color: Some(value.color),
             center: Some(value.center.into()),
             height: Some(value.height),
@@ -197,6 +241,9 @@ impl PointMaterial {
                 .unwrap_or(other.point_facing),
             rotate_with_camera: self.rotate_with_camera.unwrap_or(other.rotate_with_camera),
             rotation: self.rotation.unwrap_or(other.rotation),
+            placement: parse_placement(&self.placement).unwrap_or(other.placement),
+            spacing: self.spacing.unwrap_or(other.spacing),
+            rotate_to_line: self.rotate_to_line.unwrap_or(other.rotate_to_line),
             center: self.center.unwrap_or(other.center.into()).into(),
             height: self.height.unwrap_or(other.height),
             size_in_meters: self.size_in_meters.unwrap_or(other.size_in_meters),
@@ -247,6 +294,29 @@ pub struct BillboardMaterial {
     /// in degrees, clockwise seen from the front. `center` decides where
     /// inside the sprite the pivot sits. Defaults to `0.0`.
     pub rotation: Option<f32>,
+    /// How anchors are derived from line and polygon geometry: `"point"` (the
+    /// default) puts one per line string, at its first vertex, and one per
+    /// polygon, `"line"` repeats them along the line every `spacing`,
+    /// `"line-center"` places a single one at the line's midpoint. Polygon
+    /// rings are walked like lines. Requires `geometryTypes` to include
+    /// `"line"` or `"polygon"`.
+    #[wasm_bindgen(getter_with_clone)]
+    pub placement: Option<String>,
+    /// Distance between repeated anchors along a line, in screen pixels, for
+    /// `vector-tile` and `geojson` sources alike. Resolved per anchor as the
+    /// camera moves: anchors thin out as it pulls back and fill in as it
+    /// closes, never moving, so the gap on screen stays between one and two
+    /// times `spacing` across a pitched view. As MapLibre does with
+    /// `symbol-spacing`, a sprite wider than three quarters of the spacing
+    /// spreads its repeats to its width plus a quarter of the spacing, and a
+    /// vector tile places anchors only inside its own bounds. Only used by
+    /// `placement: "line"`. Defaults to `250.0`.
+    pub spacing: Option<f32>,
+    /// Add the line's tangent bearing at the anchor to `rotation`, so the
+    /// sprite turns with the line it sits on. Defaults to `true`.
+    #[wasm_bindgen(js_name = rotateToLine)]
+    #[serde(rename = "rotateToLine")]
+    pub rotate_to_line: Option<bool>,
     /// anchor point of the sprite, range is (-0.5, -0.5) to (0.5, 0.5).
     /// Default is (0.0, 0.0) which means the center of the sprite.
     pub center: Option<Vec2>,
@@ -289,8 +359,9 @@ pub struct BillboardMaterial {
     #[serde(rename = "declutterPriority")]
     pub declutter_priority: Option<f32>,
     /// Source geometry types this appearance consumes: `"point"`, `"line"`,
-    /// `"polygon"`. Defaults to `["point"]`; adding `"line"`/`"polygon"` also
-    /// emits a billboard per line-string / polygon-ring vertex.
+    /// `"polygon"`. Defaults to `["point"]`; adding `"line"` also emits a
+    /// billboard per line string, at its first vertex, and `"polygon"` one per
+    /// polygon.
     #[wasm_bindgen(getter_with_clone, js_name = geometryTypes)]
     #[serde(rename = "geometryTypes")]
     pub geometry_types: Option<Vec<String>>,
@@ -320,6 +391,9 @@ impl From<BillboardMaterial> for navara_material::BillboardMaterial {
                 .unwrap_or(default.billboard_facing),
             rotate_with_camera: val.rotate_with_camera.unwrap_or(default.rotate_with_camera),
             rotation: val.rotation.unwrap_or(default.rotation),
+            placement: parse_placement(&val.placement).unwrap_or(default.placement),
+            spacing: val.spacing.unwrap_or(default.spacing),
+            rotate_to_line: val.rotate_to_line.unwrap_or(default.rotate_to_line),
             center: val.center.unwrap_or(default.center.into()).into(),
             height: val.height.unwrap_or(default.height),
             url: val.url.unwrap_or(default.url),
@@ -351,6 +425,9 @@ impl<'a> From<&'a navara_material::BillboardMaterial> for BillboardMaterial {
             billboard_facing: Some(value.billboard_facing.as_str().to_string()),
             rotate_with_camera: Some(value.rotate_with_camera),
             rotation: Some(value.rotation),
+            placement: Some(value.placement.as_str().to_string()),
+            spacing: Some(value.spacing),
+            rotate_to_line: Some(value.rotate_to_line),
             height: Some(value.height),
             url: Some(value.url.clone()),
             size_in_meters: Some(value.size_in_meters),
@@ -384,6 +461,9 @@ impl BillboardMaterial {
                 .unwrap_or(other.billboard_facing),
             rotate_with_camera: self.rotate_with_camera.unwrap_or(other.rotate_with_camera),
             rotation: self.rotation.unwrap_or(other.rotation),
+            placement: parse_placement(&self.placement).unwrap_or(other.placement),
+            spacing: self.spacing.unwrap_or(other.spacing),
+            rotate_to_line: self.rotate_to_line.unwrap_or(other.rotate_to_line),
             center: self.center.unwrap_or(other.center.into()).into(),
             height: self.height.unwrap_or(other.height),
             url: self.url.clone().unwrap_or(other.url.clone()),
@@ -435,6 +515,53 @@ pub struct TextMaterial {
     #[wasm_bindgen(js_name = rotateWithCamera)]
     #[serde(rename = "rotateWithCamera")]
     pub rotate_with_camera: Option<bool>,
+    /// How anchors are derived from line and polygon geometry: `"point"` (the
+    /// default) puts a label per line string, at its first vertex, and one
+    /// per polygon, `"line"` repeats labels along the line every `spacing`
+    /// with the glyphs bending to follow it, `"line-center"` places a single
+    /// label at the line's midpoint. Polygon rings are walked like lines.
+    /// Requires `geometryTypes` to include `"line"` or `"polygon"`.
+    #[wasm_bindgen(getter_with_clone)]
+    pub placement: Option<String>,
+    /// Distance between repeated labels along a line, in screen pixels, for
+    /// `vector-tile` and `geojson` sources alike. Resolved per label as the
+    /// camera moves: labels thin out as it pulls back and fill in as it
+    /// closes, never moving, so the gap on screen stays between one and two
+    /// times `spacing` across a pitched view. As MapLibre does with
+    /// `symbol-spacing`, a label longer than three quarters of the spacing
+    /// spreads its repeats to its own length plus a quarter of the spacing, a
+    /// label within half the spacing of an earlier one with the same text is
+    /// dropped, and a vector tile places labels only inside its own bounds.
+    /// Defaults to `250.0`.
+    pub spacing: Option<f32>,
+    /// Largest turn, in degrees, the line may make under a label within a
+    /// window of about one and a half ems before the label is dropped as
+    /// unreadable. The window slides along the label, so a long gentle curve
+    /// is accepted however far it turns in total. Defaults to `45.0`.
+    #[wasm_bindgen(js_name = maxAngle)]
+    #[serde(rename = "maxAngle")]
+    pub max_angle: Option<f32>,
+    /// Flip a label that would otherwise read right-to-left, so names stay
+    /// legible whichever way the underlying line runs. Defaults to `true`.
+    #[wasm_bindgen(js_name = keepUpright)]
+    #[serde(rename = "keepUpright")]
+    pub keep_upright: Option<bool>,
+    /// Place each glyph of an along-line label on its own instead of each
+    /// word. With `rotateWithCamera: false` each glyph turns with the line
+    /// under it (MapLibre's `symbol-placement: "line"`); with `true` (the
+    /// default), each glyph turns to the camera like a point label and is
+    /// spaced on the screen (MapLibre's `viewport-glyph`). Can be overridden
+    /// per feature from a feature evaluator. Defaults to `false`.
+    #[wasm_bindgen(js_name = spreadGlyphs)]
+    #[serde(rename = "spreadGlyphs")]
+    pub spread_glyphs: Option<bool>,
+    /// Offset perpendicular to the line, in the same units as the font size:
+    /// pixels when `sizeInMeters` is false, metres when it is true. Positive is
+    /// to the left of the direction of travel, which puts the name above the
+    /// line. Defaults to `0.0`.
+    #[wasm_bindgen(js_name = lineOffset)]
+    #[serde(rename = "lineOffset")]
+    pub line_offset: Option<f32>,
     pub height: Option<f32>,
     /// Whether the size is specified in meters. If false, the size is in pixels. Default is true.
     #[wasm_bindgen(js_name = sizeInMeters)]
@@ -553,8 +680,9 @@ pub struct TextMaterial {
     #[serde(rename = "declutterPriority")]
     pub declutter_priority: Option<f32>,
     /// Source geometry types this appearance consumes: `"point"`, `"line"`,
-    /// `"polygon"`. Defaults to `["point"]`; adding `"line"`/`"polygon"` also
-    /// emits a label per line-string / polygon-ring vertex.
+    /// `"polygon"`. Defaults to `["point"]`; adding `"line"` also emits a
+    /// label per line string, at its first vertex, and `"polygon"` one per
+    /// polygon.
     #[wasm_bindgen(getter_with_clone, js_name = geometryTypes)]
     #[serde(rename = "geometryTypes")]
     pub geometry_types: Option<Vec<String>>,
@@ -585,6 +713,12 @@ impl From<TextMaterial> for navara_material::TextMaterial {
                 .unwrap_or(default.text_facing),
             rotate_with_camera: val.rotate_with_camera.unwrap_or(default.rotate_with_camera),
             rotation: val.rotation.unwrap_or(default.rotation),
+            placement: parse_placement(&val.placement).unwrap_or(default.placement),
+            spacing: val.spacing.unwrap_or(default.spacing),
+            max_angle: val.max_angle.unwrap_or(default.max_angle),
+            keep_upright: val.keep_upright.unwrap_or(default.keep_upright),
+            spread_glyphs: val.spread_glyphs.unwrap_or(default.spread_glyphs),
+            line_offset: val.line_offset.unwrap_or(default.line_offset),
             height: val.height.unwrap_or(default.height),
             size_in_meters: val.size_in_meters.unwrap_or(default.size_in_meters),
             clamp_to_ground: val.clamp_to_ground.unwrap_or(default.clamp_to_ground),
@@ -636,6 +770,12 @@ impl<'a> From<&'a navara_material::TextMaterial> for TextMaterial {
             text_facing: Some(value.text_facing.as_str().to_string()),
             rotate_with_camera: Some(value.rotate_with_camera),
             rotation: Some(value.rotation),
+            placement: Some(value.placement.as_str().to_string()),
+            spacing: Some(value.spacing),
+            max_angle: Some(value.max_angle),
+            keep_upright: Some(value.keep_upright),
+            spread_glyphs: Some(value.spread_glyphs),
+            line_offset: Some(value.line_offset),
             height: Some(value.height),
             size_in_meters: Some(value.size_in_meters),
             clamp_to_ground: Some(value.clamp_to_ground),
@@ -684,6 +824,12 @@ impl TextMaterial {
             text_facing: parse_facing("textFacing", &self.text_facing).unwrap_or(other.text_facing),
             rotate_with_camera: self.rotate_with_camera.unwrap_or(other.rotate_with_camera),
             rotation: self.rotation.unwrap_or(other.rotation),
+            placement: parse_placement(&self.placement).unwrap_or(other.placement),
+            spacing: self.spacing.unwrap_or(other.spacing),
+            max_angle: self.max_angle.unwrap_or(other.max_angle),
+            keep_upright: self.keep_upright.unwrap_or(other.keep_upright),
+            spread_glyphs: self.spread_glyphs.unwrap_or(other.spread_glyphs),
+            line_offset: self.line_offset.unwrap_or(other.line_offset),
             height: self.height.unwrap_or(other.height),
             size_in_meters: self.size_in_meters.unwrap_or(other.size_in_meters),
             clamp_to_ground: self.clamp_to_ground.unwrap_or(other.clamp_to_ground),

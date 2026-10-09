@@ -302,7 +302,7 @@ view.addFontFamily({
 
 **Type:** `("point" | "line" | "polygon")[] | undefined`
 
-**Description:** このマテリアルが消費するソースジオメトリのカテゴリーです。`"line"` を含めるとラインの頂点ごとに、`"polygon"` を含めるとポリゴンリングの頂点ごとに 1 つのラベルを描画します（リングを閉じる重複頂点はスキップされます）。配列を指定するとデフォルトは置き換えられるため、ポイントジオメトリも描画し続けたい場合は `"point"` を含めてください。このオプションはジオメトリ構築時に適用されます。レイヤー作成時に指定してください。`layer.update()` で変更しても読み込み済みのタイルには反映されず、変更後に読み込まれたタイルにのみ適用されます（すべてに反映するにはレイヤーを作り直してください）。
+**Description:** このマテリアルが消費するソースジオメトリのカテゴリーです。`"line"` を含めると、デフォルトではラインごとに 1 つのラベルを、その最初の頂点に描画します。MapLibre がライン上の `symbol-placement: "point"` のシンボルを配置するのと同じです。ラインに沿ってラベルを配置するには [`placement`](#placement) を指定してください。`"polygon"` を含めるとポリゴンごとに 1 つのラベルを、ポリゴン内部で辺から最も遠い地点に描画します（MultiPolygon は各パーツに 1 つずつ）。[`placement`](#placement) でリングに沿って配置することもできます。配列を指定するとデフォルトは置き換えられるため、ポイントジオメトリも描画し続けたい場合は `"point"` を含めてください。このオプションはジオメトリ構築時に適用されます。レイヤー作成時に指定してください。`layer.update()` で変更しても読み込み済みのタイルには反映されず、変更後に読み込まれたタイルにのみ適用されます（すべてに反映するにはレイヤーを作り直してください）。
 
 **Default:** `["point"]`
 
@@ -330,6 +330,26 @@ view.addFontFamily({
 {
   text: {
     height: 100 // 100メートル
+  }
+}
+```
+
+### keepUpright
+
+**Type:** `boolean | undefined`
+
+**Description:** ライン沿いに配置したラベルが上下逆さまに読める向きになる場合に反転し、ラインがどちら向きに描かれていても名前が読めるようにします。[`placement`](#placement) が `"line"` または `"line-center"` のときのみ使用されます。ラベルの読み方向はカメラに依存するため、カメラの移動に合わせて判定し直されます。`layer.update()` で変更した値は、表示中のラベルにも反映されます。
+
+**Default:** `true`
+
+**Example:**
+
+```typescript
+{
+  text: {
+    geometryTypes: ["line"],
+    placement: "line",
+    keepUpright: false // 常にラインが描かれた向きに読む
   }
 }
 ```
@@ -366,6 +386,48 @@ view.addFontFamily({
 {
   text: {
     lineHeight: 1.2
+  }
+}
+```
+
+### lineOffset
+
+**Type:** `number | undefined`
+
+**Description:** ライン沿いに配置したラベルを、ラインから横方向にずらします。正の値はラインの進行方向の左側に移動し、ラベルが左から右に読める向きのときはラインの上側になります。単位は [`size`](#size) と同じで、[`sizeInMeters`](#sizeinmeters) が `true` のときはメートル、それ以外はピクセルです。道路の上ではなく道路の脇に名前を置きたい場合に使用します。[`placement`](#placement) が `"line"` または `"line-center"` のときのみ使用されます。`layer.update()` で変更した値は、表示中のラベルにも反映されます。
+
+**Default:** `0.0`
+
+**Example:**
+
+```typescript
+{
+  text: {
+    geometryTypes: ["line"],
+    placement: "line",
+    size: 14,
+    sizeInMeters: false,
+    lineOffset: 10 // ラインから 10 ピクセル横に配置
+  }
+}
+```
+
+### maxAngle
+
+**Type:** `number | undefined`
+
+**Description:** ライン沿いに配置したラベルの下でラインが曲がってよい角度の上限（度）です。これを超えるラベルは読みにくいため非表示になります。角度はフォントサイズの約 1.5 倍の短い区間ごとに合計し、その区間をラベルに沿ってずらしながら判定します。そのため、近接した小さな角が重なると非表示になることがある一方、長く緩やかなカーブは全体でどれだけ曲がっていても表示されます。[`placement`](#placement) が `"line"` または `"line-center"` のときのみ使用されます。ラベルが収まるかどうかはカメラの移動に合わせて判定し直され、`layer.update()` で変更した値は表示中のラベルにも反映されます。
+
+**Default:** `45.0`
+
+**Example:**
+
+```typescript
+{
+  text: {
+    geometryTypes: ["line"],
+    placement: "line",
+    maxAngle: 90 // よりきついカーブにもラベルを配置
   }
 }
 ```
@@ -480,6 +542,41 @@ import { Color } from "@navaramap/three";
 }
 ```
 
+### placement
+
+**Type:** `"point" | "line" | "line-center" | undefined`
+
+**Description:** ラインおよびポリゴンジオメトリ上でのラベルの配置方法を指定します。[`geometryTypes`](#geometrytypes) に `"line"` または `"polygon"` が含まれる場合のみ有効です。ポイントジオメトリは常にその地点にラベルが配置されます。
+
+- `"point"`：ラインごとにその最初の頂点に 1 つのラベルを配置し、ポリゴンにはポリゴン内部で辺から最も遠い地点に 1 つのラベルを配置します。ベクタータイルソースでは、最初の頂点がタイルの外にある（タイルで切られた）ラインには、そのタイルではラベルを配置しません。
+- `"line"`：[`spacing`](#spacing) ごとにラインに沿ってラベルを繰り返し配置します。地図上の道路名のように、単語ごとにラインのカーブに沿って曲がります。各単語はその下のラインの向きに合わせて回転し、単語内の文字はまっすぐ並んだままです。文字ごとに回転させるには [`spreadGlyphs`](#spreadglyphs) を指定します。ポリゴンの境界リング（穴を含む）にも同じように沿って配置します。
+- `"line-center"`：各ラインまたはポリゴンリングの長さの中間点に 1 つのラベルを配置し、同じように沿って曲げます。
+
+ライン沿いのラベルは、読みにくくなる場合は描画されずに非表示になります。
+
+- アンカーの左右に残っているラインよりもラベルが長い場合
+- ラベルが [`maxAngle`](#maxangle) を超えて曲がる場合
+
+これらの判定はカメラの移動に合わせて再実行されます。
+
+ライン沿いのラベルでは [`keepUpright`](#keepupright)、[`lineOffset`](#lineoffset)、[`spreadGlyphs`](#spreadglyphs) も使用できます。テキストをラインに沿って地表に寝かせるため、通常は `textFacing: "flat"` と組み合わせます。
+
+このオプションはジオメトリ構築時に適用されます。レイヤー作成時に指定してください。`layer.update()` では読み込み済みのラベルは再構築されないため、変更するにはレイヤーを削除して追加し直してください。
+
+**Default:** `"point"`
+
+**Example:**
+
+```typescript
+{
+  text: {
+    geometryTypes: ["line"],
+    placement: "line", // ラインに沿って繰り返し、曲がりに合わせて配置
+    textFacing: "flat"
+  }
+}
+```
+
 ### rotateWithCamera
 
 **Type:** `boolean | undefined`
@@ -489,6 +586,8 @@ import { Color } from "@navaramap/three";
 `true` の場合、ラベルは常に視点の方を向きます。[`textFacing`](#textfacing) が `"upright"` のときは画面に正対するビルボードになります。`"flat"` のときは地表の法線を軸に回転し、テキストが常に左から右に読める向きになります。
 
 `false` の場合、ラベルはアンカー位置のローカルな東・北・上の座標系に固定され、カメラを動かしても向きは変わりません。`"upright"` では地表に立って南を向く看板になります。北向きのカメラからは読めますが、真上から見ると縁しか見えずに消え、裏側からは鏡像になります。`"flat"` では北を上にして地表に描かれ、地図とともに回転します。
+
+[`placement`](#placement) が `"line"` または `"line-center"` のときは使われません。これらのラベルはラインの向きに沿います。ただし [`spreadGlyphs`](#spreadglyphs) を指定した場合は例外で、`true` のとき各文字はライン上の位置を保ったままこのように回転します。
 
 [`FeatureEvaluator`](../../api/feature-evaluator/) から地物ごとに指定することもできます。
 
@@ -509,7 +608,7 @@ import { Color } from "@navaramap/three";
 
 **Type:** `number | undefined`
 
-**Description:** ラベルを自身の平面内で、アンカー位置を中心に回転させる角度を度数で指定します。正面から見て時計回りです。回転は [`textFacing`](#textfacing) と [`rotateWithCamera`](#rotatewithcamera) で決まる向きに対して追加で適用されます。ビルボードでは画面上で回転し、地表のラベルでは方位角のように回転します。
+**Description:** ラベルを自身の平面内で、アンカー位置を中心に回転させる角度を度数で指定します。正面から見て時計回りです。回転は [`textFacing`](#textfacing) と [`rotateWithCamera`](#rotatewithcamera) で決まる向きに対して追加で適用されます。ビルボードでは画面上で回転し、地表のラベルでは方位角のように回転します。[`placement`](#placement) が `"line"` または `"line-center"` のときは使われません。
 
 回転の中心がテキストのどこになるかは [`center`](#center) で決まります。たとえば `{ x: 0.5, y: 0.5 }` ならテキストの中央、`{ x: 0.5, y: 0.0 }` ならテキストブロックの下端が中心になります。
 
@@ -598,6 +697,67 @@ import { Color } from "@navaramap/three";
 {
   text: {
     size: 16
+  }
+}
+```
+
+### spacing
+
+**Type:** `number | undefined`
+
+**Description:** [`placement`](#placement) が `"line"` のときに繰り返し配置するラベルの間隔を、画面上のピクセルで指定します。単位は `geojson` ソースでも `vector-tile` ソースでも同じです。
+
+ライン上に表示するラベルは、カメラの移動に合わせて決め直されます。カメラを引くとラベルは間引かれ、近づくと間にラベルが追加されます。ラベルがラインに沿って移動することはなく、表示されるか消えるかのどちらかです。画面上の間隔は `spacing` の 1〜2 倍に保たれます。これは傾けた視点でも同様で、画面の手前側と奥側でそれぞれの密度になります。
+
+ラインの中間点のラベルは常に残り、画面上で `spacing` より短いラインにはそのラベルだけが配置されます。GeoJSON ソースで地表にごく近づいた場合（ストリートレベル）や、ベクタータイルが自身のズームレベルよりかなり深く表示されている場合（オーバーズーム）は、ラベルがそれ以上追加されなくなり、`spacing` より広い間隔になります。
+
+さらに、MapLibre の `symbol-spacing` と同じ次の規則が適用されます。
+
+- `spacing` の 4 分の 3 より長いラベルは、繰り返しの間隔が「ラベルの長さ + `spacing` の 4 分の 1」に広がります。長い名前は非表示にならず、間隔を空けて配置されます。
+- 同じタイル内で、同じテキストの先行ラベルから `spacing` の半分未満の距離にあるラベルは非表示になります。複数のラインに分かれた道路や、同じ名前の上下線に同じ場所で 2 度ラベルが付くことはありません。
+- ベクタータイルソースでは、各タイルは自身の範囲内にだけラベルを配置します。ラベルの間隔はタイルごとに決まるため、`spacing` をどれだけ大きくしても、繰り返しの間隔はおよそ 1 タイル分（画面上で 512〜1024 ピクセル）までになります。
+
+このオプションはジオメトリ構築時に適用されます。`layer.update()` では読み込み済みのラベルは再構築されないため、変更するにはレイヤーを削除して追加し直してください。
+
+**Default:** `250.0`
+
+**Example:**
+
+```typescript
+{
+  text: {
+    geometryTypes: ["line"],
+    placement: "line",
+    spacing: 400
+  }
+}
+```
+
+### spreadGlyphs
+
+**Type:** `boolean | undefined`
+
+**Description:** ライン沿いに配置したラベルを、単語ごとではなく文字ごとに配置します。各文字の向きは [`rotateWithCamera`](#rotatewithcamera) によって決まります。
+
+- `false`：各文字がその下のラインの向きに合わせて回転します。MapLibre の `symbol-placement: "line"` と同じ配置です。単語はまっすぐのままではなくカーブに沿って曲がり、急なカーブでは単語内の文字の間隔が開きます。
+- `true`（デフォルト）：各文字は、同じ [`textFacing`](#textfacing) のポイントラベルと同じようにカメラに追従して回転します。ラインがどの向きでもテキストは読める向きに保たれます（MapLibre の `text-rotation-alignment: "viewport-glyph"`）。また、各文字は同じ大きさに保たれ、画面上に見えるラインに沿って間隔が決まります。そのため、カメラから遠ざかる向きのラインでも文字の間隔は均等に保たれます。
+
+[`placement`](#placement) が `"line"` または `"line-center"` のときのみ使用されます。`layer.update()` で変更した値は、表示中のラベルにも反映されます。
+
+[`FeatureEvaluator`](../../api/feature-evaluator/) から地物ごとに指定することもできます。たとえば、レイヤーのほかのラベルは文字ごとに配置しつつ、筆記体のように文字がつながる文字体系やフォントのラベルだけを単語ごとに保てます。
+
+**Default:** `false`
+
+**Example:**
+
+```typescript
+{
+  text: {
+    geometryTypes: ["line"],
+    placement: "line",
+    textFacing: "flat",
+    rotateWithCamera: false, // MapLibre の道路名のようにラインに沿わせる
+    spreadGlyphs: true
   }
 }
 ```
