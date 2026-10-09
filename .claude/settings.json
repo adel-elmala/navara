@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(sed -n 1,80p cross_tile_symbol_index.ts)",
-      "Bash(grep -n \"roundingFactor\\\\|tolerance\\\\|findMatches\\\\|getScaledCoordinates\\\\|zoomDiff\\\\|crossTileID\\\\|usedCrossTileIDs\" cross_tile_symbol_index.ts)"
-    ]
-  }
-}
