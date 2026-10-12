@@ -265,6 +265,18 @@ describe("BatchedSdfTextMesh letter spacing", () => {
     expect(fontManager.shapeText.mock.calls.length).toBe(shapes);
   });
 
+  it("lays out once when spacing changes alongside unchanged text", () => {
+    const { mesh, fontManager } = makeMesh();
+    mesh.setTextByBatchIndex(0, "AB");
+    const shapes = fontManager.shapeText.mock.calls.length;
+
+    // The evaluator's order: spacing first, then the (same) text.
+    mesh.setFeatureLetterSpacingByBatchIndex(0, 0.25);
+    mesh.setTextByBatchIndex(0, "AB");
+    expect(fontManager.shapeText.mock.calls.length).toBe(shapes + 1);
+    expect(widthOf(mesh, 0)).toBeCloseTo(1.25);
+  });
+
   it("starts labels at the material's spacing", () => {
     const { mesh } = makeMesh(material({ letterSpacing: 0.5 }));
     mesh.setTextByBatchIndex(0, "AB");

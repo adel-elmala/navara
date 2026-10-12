@@ -1879,6 +1879,11 @@ export class BatchedSdfTextMesh
     }
 
     this._clearDeferred(record);
+    // Prepared text that is already showing is already laid out: whatever else
+    // the layout bakes in (spacing, glyph pieces, font) re-lays out from its own
+    // setter. Zoom-dependent styles re-run the evaluator for every label on
+    // every zoom step, so this skips a shaping pass per label per step.
+    if (text === record.text) return;
     this._applyText(record, text);
     this._markDeclutterDirty();
     this._needRender?.();

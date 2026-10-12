@@ -75,10 +75,11 @@ export function isRtlText(text: string): boolean {
   return false;
 }
 
-/** Arabic, Arabic Supplement, Arabic Extended-A and the Arabic presentation
- *  forms — the blocks MapLibre exempts from letter spacing. */
+/** Every Arabic block: Arabic, Supplement, Extended-A/B/C and the
+ *  presentation forms. MapLibre exempts all but Extended-B/C (newer blocks it
+ *  predates), which hold joining letters too. */
 const CURSIVE_ARABIC_RE =
-  /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/u;
+  /[\u0600-\u06FF\u0750-\u077F\u0870-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u{10EC0}-\u{10EFF}]/u;
 
 /** Whether letter spacing may be applied to `text`. Tracking pulls apart the
  *  joined letterforms of cursive Arabic, so (like MapLibre) any Arabic

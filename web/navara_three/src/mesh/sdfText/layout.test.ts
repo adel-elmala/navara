@@ -439,6 +439,12 @@ describe("letter spacing", () => {
       expect(allowsLetterSpacing("شارع")).toBe(false);
       expect(allowsLetterSpacing("Cafe شارع")).toBe(false);
     });
+
+    it("disallows Arabic Extended-B and Extended-C letters", () => {
+      // Joining letters from the two blocks MapLibre's list predates.
+      expect(allowsLetterSpacing("ࡰ")).toBe(false);
+      expect(allowsLetterSpacing("\u{10EC2}")).toBe(false);
+    });
   });
 
   describe("buildLabelLayout", () => {
