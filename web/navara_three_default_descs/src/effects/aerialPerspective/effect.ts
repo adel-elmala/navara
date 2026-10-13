@@ -149,6 +149,9 @@ export class AerialPerspective extends Pass<
 
     // Moon
     this.rawEffect?.moonDirection.copy(this.atmosphere.moonDirection);
+
+    // The setter copies the radii into a uniform, and they change in place.
+    if (this.rawEffect) this.rawEffect.ellipsoid = this.atmosphere.ellipsoid;
   }
 
   get inscatter() {

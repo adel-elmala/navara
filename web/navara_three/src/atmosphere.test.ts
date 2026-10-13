@@ -2,6 +2,9 @@ import { type WebGLRenderer } from "three";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Atmosphere, type AtmosphereOptions } from "./atmosphere";
+import { initTestEngine } from "./test-utils/engine";
+
+initTestEngine();
 
 const { loadAsyncMock } = vi.hoisted(() => ({
   loadAsyncMock: vi.fn(),
@@ -20,11 +23,14 @@ vi.mock("@takram/three-atmosphere", () => ({
   SCATTERING_TEXTURE_DEPTH: 32,
 }));
 
-vi.mock("@takram/three-geospatial", () => {
+vi.mock("@takram/three-geospatial", async (importOriginal) => {
+  const { Ellipsoid } =
+    await importOriginal<typeof import("@takram/three-geospatial")>();
   class MockLoader {
     loadAsync = loadAsyncMock;
   }
   return {
+    Ellipsoid,
     EXRTextureLoader: MockLoader,
     EXR3DTextureLoader: MockLoader,
     isFloatLinearSupported: () => false,
@@ -271,5 +277,34 @@ describe("Atmosphere.onTexturesReady", () => {
       );
     });
     consoleError.mockRestore();
+  });
+});
+
+describe("Atmosphere.ellipsoid", () => {
+  const WGS84_A = 6378137;
+  const WGS84_B = 6356752.314245179;
+
+  it("is WGS84 without a terrain exaggeration", () => {
+    const atmosphere = createAtmosphere();
+    atmosphere._update([1, 0]);
+
+    expect(atmosphere.ellipsoid.radii.x).toBe(WGS84_A);
+    expect(atmosphere.ellipsoid.radii.z).toBeCloseTo(WGS84_B, 6);
+  });
+
+  it("moves to the sea level the exaggeration renders", () => {
+    const atmosphere = createAtmosphere();
+    const ellipsoid = atmosphere.ellipsoid;
+
+    // Scale 5 around 2000 m moves sea level to -8000 m.
+    atmosphere._update([5, 2000]);
+    expect(ellipsoid.radii.x).toBe(WGS84_A - 8000);
+    expect(ellipsoid.radii.y).toBe(WGS84_A - 8000);
+    expect(ellipsoid.radii.z).toBeCloseTo(WGS84_B - 8000, 6);
+
+    atmosphere._update([1, 0]);
+    expect(ellipsoid.radii.x).toBe(WGS84_A);
+    // The instance is kept, so consumers holding it follow the change.
+    expect(atmosphere.ellipsoid).toBe(ellipsoid);
   });
 });

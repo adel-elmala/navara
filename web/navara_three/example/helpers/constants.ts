@@ -132,6 +132,60 @@ export const TERRAIN_DATASETS = {
     attribution: "© Mapterhorn",
     attributionUrl: "https://mapterhorn.com/attribution",
   },
+  awsTerrarium: {
+    url: "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png",
+    attribution: "Tilezen",
+    attributionUrl:
+      "https://github.com/tilezen/joerd/blob/master/docs/attribution.md",
+    children: [
+      {
+        attribution: "Mapzen",
+      },
+      {
+        attribution:
+          "ArcticDEM terrain data DEM(s) were created from DigitalGlobe, Inc., imagery and funded under National Science Foundation awards 1043681, 1559691, and 1542736;",
+      },
+      {
+        attribution:
+          "Australia terrain data © Commonwealth of Australia (Geoscience Australia) 2017;",
+      },
+      {
+        attribution:
+          "Austria terrain data © offene Daten Österreichs – Digitales Geländemodell (DGM) Österreich;",
+      },
+      {
+        attribution:
+          "Canada terrain data contains information licensed under the Open Government Licence – Canada;",
+      },
+      {
+        attribution:
+          "Europe terrain data produced using Copernicus data and information funded by the European Union - EU-DEM layers;",
+      },
+      {
+        attribution:
+          "Global ETOPO1 terrain data U.S. National Oceanic and Atmospheric Administration",
+      },
+      {
+        attribution:
+          "Mexico terrain data source: INEGI, Continental relief, 2016;",
+      },
+      {
+        attribution:
+          "New Zealand terrain data Copyright 2011 Crown copyright (c) Land Information New Zealand and the New Zealand Government (All rights reserved);",
+      },
+      {
+        attribution: "Norway terrain data © Kartverket;",
+      },
+      {
+        attribution:
+          "United Kingdom terrain data © Environment Agency copyright and/or database right 2015. All rights reserved;",
+      },
+      {
+        attribution:
+          "United States 3DEP (formerly NED) and global GMTED2010 and SRTM terrain data courtesy of the U.S. Geological Survey.",
+      },
+    ],
+  },
   reearthQuantizedMesh: {
     url: "https://terrain.reearth.land/cesium-mesh/ellipsoid/{z}/{x}/{y}.terrain",
     attribution: "© Re:Earth Terrain",

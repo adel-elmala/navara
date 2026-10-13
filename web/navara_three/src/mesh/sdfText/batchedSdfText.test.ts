@@ -107,6 +107,7 @@ function textMeshEvent(mat: NavaraTextMaterial): NavaraTextMesh {
 
 /** viewContext mock: no real renderer, so the batch texture flushes freely. */
 const viewContext = { getRenderer: () => undefined };
+const uniforms = { horizonMinHeight: { value: 0 } };
 
 function makeMesh(mat = material()) {
   const fontManager = makeFontManager();
@@ -115,6 +116,7 @@ function makeMesh(mat = material()) {
     fontManager,
     renderFlag: { forceUpdate: false },
     viewContext,
+    uniforms,
   } as unknown as EventContext;
   const mesh = new BatchedSdfTextMesh(ctx, textMeshEvent(mat), "font", {
     layerId: "layer",
@@ -367,6 +369,7 @@ describe("BatchedSdfTextMesh multi-instance fan-out", () => {
       fontManager,
       renderFlag: { forceUpdate: false },
       viewContext,
+      uniforms,
     } as unknown as EventContext;
     const mesh = new BatchedSdfTextMesh(
       ctx,
@@ -510,6 +513,7 @@ describe("BatchedSdfTextMesh deferred font preparation", () => {
       declutter,
       renderFlag: { forceUpdate: false },
       viewContext,
+      uniforms,
     } as unknown as EventContext;
   }
 

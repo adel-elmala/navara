@@ -42,6 +42,7 @@ export class SunLightDesc extends LightDesc<
       ...options,
       ...(color ? { color } : {}),
     } as SunLightOptions);
+    sunLight.raw.ellipsoid = this.view.atmosphere.ellipsoid;
 
     // Set up atmosphere integration. The transmittance texture is only
     // needed to compute the sun color from the atmosphere, so skip the

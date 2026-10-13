@@ -55,19 +55,29 @@ struct ProjectionContext<'a> {
 
 /// CPU mirror of `nvr_horizon_culled`
 /// (shaders/glsl/chunks/horizon_culling_pars_vertex.glsl): true when the point
-/// lies beyond the ellipsoidal horizon as seen from the camera, i.e. the GPU
-/// will cull the label's vertices. Such labels must not claim collision space,
-/// or an invisible label could suppress a visible one. Like the shader, the
-/// test runs on the anchor *before* the height offset is applied.
-fn is_beyond_horizon(px: f64, py: f64, pz: f64, cx: f64, cy: f64, cz: f64) -> bool {
-    let csx = cx / WGS84_A;
-    let csy = cy / WGS84_A;
-    let csz = cz / WGS84_B;
-    let vtx = csx - px / WGS84_A;
-    let vty = csy - py / WGS84_A;
-    let vtz = csz - pz / WGS84_B;
-    let a = csx * csx + csy * csy + csz * csz - 1.0;
-    vtx * csx + vty * csy + vtz * csz > a
+/// lies beyond the horizon of the ellipsoid shrunk by `min_height` (the
+/// `nvrHorizonMinHeight` uniform, never positive) as seen from the camera, i.e.
+/// the GPU will cull the label's vertices. The ellipsoid is scaled down to pass
+/// through the point or the camera when either lies below it. Such labels must not claim collision
+/// space, or an invisible label could suppress a visible one. Like the shader,
+/// the test runs on the anchor *before* the height offset is applied.
+fn is_beyond_horizon(
+    px: f64,
+    py: f64,
+    pz: f64,
+    cx: f64,
+    cy: f64,
+    cz: f64,
+    min_height: f64,
+) -> bool {
+    let ra = WGS84_A + min_height;
+    let rb = WGS84_B + min_height;
+    let (psx, psy, psz) = (px / ra, py / ra, pz / rb);
+    let (csx, csy, csz) = (cx / ra, cy / ra, cz / rb);
+    let occluder_scale_squared = (psx * psx + psy * psy + psz * psz)
+        .min(csx * csx + csy * csy + csz * csz)
+        .min(1.0);
+    psx * csx + psy * csy + psz * csz < occluder_scale_squared
 }
 
 /// Project a candidate's local box to a screen-pixel AABB, mirroring the
@@ -269,8 +279,10 @@ const DEFAULT_PADDING_PX: f64 = 2.0;
 ///
 /// `candidates` is a packed `f64` slice of `n * CANDIDATE_STRIDE` values (see the
 /// module docs); `view` and `proj` are column-major 4×4 matrices (16 values each).
-/// `padding_px` pads every box; `hysteresis_px` is the collision-test shrink
-/// applied only to currently-shown labels.
+/// `horizon_min_height` is the renderer's `nvrHorizonMinHeight`, which the
+/// horizon test shrinks the ellipsoid by. `padding_px` pads every box;
+/// `hysteresis_px` is the collision-test shrink applied only to currently-shown
+/// labels.
 ///
 /// The result is *hidden-by-default*: only a label that claimed space inside the
 /// tracked area (viewport + grid margin) comes back shown. Off-screen and
@@ -289,6 +301,7 @@ pub fn declutter_place(
     width_px: f64,
     height_px: f64,
     fov_rad: f64,
+    horizon_min_height: f64,
     padding_px: f64,
     hysteresis_px: f64,
 ) -> Vec<u8> {
@@ -312,9 +325,15 @@ pub fn declutter_place(
     for i in 0..n {
         let c = &candidates[i * CANDIDATE_STRIDE..i * CANDIDATE_STRIDE + CANDIDATE_STRIDE];
         let mut b = [0.0f64; 4];
-        let visible =
-            !is_beyond_horizon(c[0], c[1], c[2], ctx.camera_x, ctx.camera_y, ctx.camera_z)
-                && project_candidate(c, &ctx, &mut b);
+        let visible = !is_beyond_horizon(
+            c[0],
+            c[1],
+            c[2],
+            ctx.camera_x,
+            ctx.camera_y,
+            ctx.camera_z,
+            horizon_min_height,
+        ) && project_candidate(c, &ctx, &mut b);
         placeable[i] = visible;
         if visible {
             boxes[i * 4..i * 4 + 4].copy_from_slice(&b);
@@ -499,6 +518,7 @@ mod tests {
             w,
             h,
             fov,
+            0.0,
             DEFAULT_PADDING_PX,
             6.0,
         )
@@ -710,6 +730,7 @@ mod tests {
             0.0,
             2.0 * WGS84_A,
             0.0,
+            0.0,
             0.0
         ));
         assert!(is_beyond_horizon(
@@ -717,6 +738,7 @@ mod tests {
             0.0,
             0.0,
             2.0 * WGS84_A,
+            0.0,
             0.0,
             0.0
         ));
@@ -726,8 +748,58 @@ mod tests {
             0.0,
             2.0 * WGS84_A,
             0.0,
+            0.0,
             0.0
         ));
+    }
+
+    /// A label between the ellipsoid's horizon and that of the ellipsoid shrunk
+    /// by the horizon minimum is drawn, so it is not culled.
+    #[test]
+    fn horizon_follows_the_shrunk_ellipsoid() {
+        // 1 km above the equator; the surface point ~150 km away lies beyond
+        // the ellipsoid's horizon (~113 km) but within the one shrunk by 500 m
+        // (~218 km).
+        let theta: f64 = 150_000.0 / WGS84_A;
+        let (px, py) = (WGS84_A * theta.cos(), WGS84_A * theta.sin());
+        let cx = WGS84_A + 1000.0;
+        assert!(is_beyond_horizon(px, py, 0.0, cx, 0.0, 0.0, 0.0));
+        assert!(!is_beyond_horizon(px, py, 0.0, cx, 0.0, 0.0, -500.0));
+    }
+
+    /// A label on the ocean floor deeper than the camera's height is tested
+    /// against the ellipsoid through it, so it stays drawn under the camera.
+    #[test]
+    fn horizon_keeps_a_point_below_the_ellipsoid_under_the_camera() {
+        let floor = WGS84_A - 3500.0;
+        let cx = WGS84_A + 1000.0;
+        assert!(!is_beyond_horizon(floor, 0.0, 0.0, cx, 0.0, 0.0, -500.0));
+        // 5 km away along the floor, well within the floor's own horizon.
+        let theta: f64 = 5_000.0 / floor;
+        let (px, py) = (floor * theta.cos(), floor * theta.sin());
+        assert!(!is_beyond_horizon(px, py, 0.0, cx, 0.0, 0.0, -500.0));
+        // On the far side of the globe it is still culled.
+        assert!(is_beyond_horizon(-floor, 0.0, 0.0, cx, 0.0, 0.0, -500.0));
+    }
+
+    /// A camera below the ellipsoid culls at its own tangent plane: points
+    /// around it stay, the far side of the globe is culled.
+    #[test]
+    fn horizon_from_a_camera_below_the_ellipsoid() {
+        let cx = WGS84_A - 300.0;
+        let theta: f64 = 10_000.0 / WGS84_A;
+        let (px, py) = (WGS84_A * theta.cos(), WGS84_A * theta.sin());
+        assert!(!is_beyond_horizon(px, py, 0.0, cx, 0.0, 0.0, 0.0));
+        assert!(!is_beyond_horizon(
+            WGS84_A - 430.0,
+            0.0,
+            0.0,
+            cx,
+            0.0,
+            0.0,
+            0.0
+        ));
+        assert!(is_beyond_horizon(0.0, WGS84_A, 0.0, cx, 0.0, 0.0, 0.0));
     }
 
     // --- grid --------------------------------------------------------------

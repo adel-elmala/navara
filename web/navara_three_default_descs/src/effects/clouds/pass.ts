@@ -21,6 +21,7 @@ import {
 } from "@takram/three-clouds";
 import {
   DataTextureLoader,
+  Geodetic,
   parseUint8Array,
   STBNLoader,
 } from "@takram/three-geospatial";
@@ -39,6 +40,9 @@ import {
 } from "three";
 
 import { CloudLayer, type CloudOptions } from "./layer";
+
+const geodeticScratch = new Geodetic();
+const vectorScratch = new Vector3();
 
 export type * from "@takram/three-clouds";
 
@@ -172,6 +176,28 @@ export class Clouds extends Pass<
 
     this.atmosphere = atmosphere;
 
+    // three-geospatial clouds doesn't consider the ellipsoid, so this overrides `copyCameraSettings` to consider the custom ellipsoid.
+    // ref: https://github.com/takram-design-engineering/three-geospatial/blob/b012ad06d858fc035d88aacfd73f092f93c994e4/packages/clouds/src/CloudsMaterial.ts#L384-L385
+    const material = effect.cloudsPass.currentMaterial;
+    const copyCameraSettings = material.copyCameraSettings.bind(material);
+    material.copyCameraSettings = (camera) => {
+      copyCameraSettings(camera);
+      const { uniforms } = material;
+      const positionECEF = vectorScratch
+        .copy(uniforms.cameraPosition.value)
+        .applyMatrix4(uniforms.worldToECEFMatrix.value);
+      try {
+        uniforms.cameraHeight.value = geodeticScratch.setFromECEF(
+          positionECEF,
+          {
+            ellipsoid: atmosphere.ellipsoid,
+          },
+        ).height;
+      } catch {
+        // Abort when unable to project position to the ellipsoid surface.
+      }
+    };
+
     this.atmosphere.enableShadows.value = this.shadows;
 
     this.init();
@@ -280,6 +306,8 @@ export class Clouds extends Pass<
 
   _update() {
     this.inner.sunDirection.copy(this.atmosphere.sunDirection);
+    // Forwarded to the current material, which the pass may swap.
+    this.inner.ellipsoid = this.atmosphere.ellipsoid;
   }
 
   dispose() {

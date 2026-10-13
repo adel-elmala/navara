@@ -1,4 +1,5 @@
 import { EventHandler, Observed, type XYZ } from "@navaramap/core";
+import { exaggerateTerrainHeight } from "@navaramap/engine";
 import {
   getECIToECEFRotationMatrix,
   getMoonDirectionECEF,
@@ -16,6 +17,7 @@ import {
   type PrecomputedTextures,
 } from "@takram/three-atmosphere";
 import {
+  Ellipsoid,
   EXR3DTextureLoader,
   EXRTextureLoader,
   Float16Array,
@@ -42,6 +44,10 @@ import {
   shiftDateToElevation,
   shiftDateToHourAngle,
 } from "./solar";
+import {
+  IDENTITY_TERRAIN_EXAGGERATION,
+  type TerrainExaggeration,
+} from "./terrain/exaggeration";
 
 /**
  * Events emitted by the {@link Atmosphere} class.
@@ -157,6 +163,24 @@ export class Atmosphere extends EventHandler<AtmosphereEvents> {
    * @private
    */
   private rotationMatrix = new Matrix4();
+
+  /**
+   * Ellipsoid the atmosphere takes as its ground: WGS84 with every radius
+   * moved by the height the terrain exaggeration renders sea level at, so
+   * terrain sunk below WGS84 stays above the ground. Its radii change in
+   * place; consumers that copy them (into uniforms) must reassign it.
+   */
+  readonly ellipsoid = new Ellipsoid(
+    Ellipsoid.WGS84.radii.x,
+    Ellipsoid.WGS84.radii.y,
+    Ellipsoid.WGS84.radii.z,
+  );
+
+  /**
+   * @private
+   */
+  private terrainExaggeration: TerrainExaggeration =
+    IDENTITY_TERRAIN_EXAGGERATION;
 
   /**
    * Precomputed atmosphere textures used for rendering. Each texture is
@@ -400,10 +424,23 @@ export class Atmosphere extends EventHandler<AtmosphereEvents> {
   }
 
   /**
-   * Updates sun/moon directions and rotation matrix if needed.
+   * Updates sun/moon directions and rotation matrix if needed, and moves
+   * {@link ellipsoid} to the sea level `terrainExaggeration` renders.
    * @private
    */
-  _update() {
+  _update(terrainExaggeration: TerrainExaggeration) {
+    if (terrainExaggeration !== this.terrainExaggeration) {
+      this.terrainExaggeration = terrainExaggeration;
+      const [scale, relativeHeight] = terrainExaggeration;
+      const seaLevel = exaggerateTerrainHeight(0, scale, relativeHeight);
+      const wgs84 = Ellipsoid.WGS84.radii;
+      this.ellipsoid.radii.set(
+        wgs84.x + seaLevel,
+        wgs84.y + seaLevel,
+        wgs84.z + seaLevel,
+      );
+    }
+
     if (this.needsUpdate) {
       getSunDirectionECEF(this.date, this.sunDirection);
       getMoonDirectionECEF(this.date, this.moonDirection);
