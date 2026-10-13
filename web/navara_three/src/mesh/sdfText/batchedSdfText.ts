@@ -1065,9 +1065,8 @@ export class BatchedSdfTextMesh
 
   // --- Glyph runs ---
 
-  private _layoutOptions(record: LabelRecord, text: string): LayoutOptions {
+  private _layoutOptions(record: LabelRecord): LayoutOptions {
     return {
-      text,
       maxWidth: this._maxWidth,
       lineHeight: this._lineHeight,
       textAlign: this._textAlign,
@@ -1111,10 +1110,7 @@ export class BatchedSdfTextMesh
       return;
     }
 
-    const layout = buildLabelLayout(
-      shapeResult,
-      this._layoutOptions(record, text),
-    );
+    const layout = buildLabelLayout(shapeResult, this._layoutOptions(record));
 
     record.widthEm = layout.widthEm;
     record.heightEm = layout.heightEm;

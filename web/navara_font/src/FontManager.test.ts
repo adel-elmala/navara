@@ -141,6 +141,7 @@ function createShapeResult(text: string, unitsPerEm = 1000): ShapeTextResult {
     ascender: 800,
     descender: -200,
     lineGap: 0,
+    allowsLetterSpacing: true,
   };
 }
 
@@ -1033,6 +1034,7 @@ describe("FontManager", () => {
               ascender: 800,
               descender: -200,
               lineGap: 0,
+              allowsLetterSpacing: true,
             },
           })),
           atlas: {
@@ -1130,6 +1132,7 @@ describe("FontManager", () => {
                 ascender: 800,
                 descender: -200,
                 lineGap: 0,
+                allowsLetterSpacing: true,
               },
             })),
             atlas: {
@@ -1510,6 +1513,7 @@ describe("FontManager", () => {
                   ascender: 800,
                   descender: -200,
                   lineGap: 0,
+                  allowsLetterSpacing: true,
                 },
               })),
               atlas: {
@@ -1674,6 +1678,7 @@ describe("FontManager", () => {
                       ascender: 800,
                       descender: -200,
                       lineGap: 0,
+                      allowsLetterSpacing: true,
                     }
                   : null,
               })),

@@ -371,7 +371,8 @@ requires reading the instance count at the GL level, e.g. patching
 | `web/navara_three/src/mesh/sdfText/glyphBuffers.ts` | Instance attributes, partial uploads, capacity growth, `GlyphKind` |
 | `web/navara_three/src/mesh/sdfText/glyphSlots.ts` | `GlyphSlotAllocator` — size classes, free lists, `realloc` |
 | `web/navara_three/src/mesh/sdfText/labelData.ts` | `LabelDataTexture` — addressing, writes, growth; also backs the path texture |
-| `web/navara_three/src/mesh/sdfText/layout.ts` | Pure layout: line breaking, RTL direction, shaping result → glyph quads, word centres |
+| `crates/navara_wasm_font_worker/src/shaping.rs` | Shaping, plus every fact layout derives from the source text: line-break classes, cluster continuation, per-line direction (`DIRECTION_*`; neutral runs defer to the line's first strong glyph, since family fallback shapes digits/punctuation apart), `allows_letter_spacing`. Layout never inspects the string itself |
+| `web/navara_three/src/mesh/sdfText/layout.ts` | Pure layout: line breaking, letter spacing, shaping result → glyph quads, word centres |
 | `.../enhancer/sdfText/sdfTextBaseEnhancer/types.ts` | Batch-wide props/state/refs, plus `LabelRow` / `LABEL_ROWS` (the shader contract) |
 | `web/navara_three/src/event/features/text.ts` | Creates one batch per Rust `TextMesh` event |
 | `web/navara_three/src/mesh/sprite/instancedSprite.ts` | The sibling batched mesh; text follows its conventions |

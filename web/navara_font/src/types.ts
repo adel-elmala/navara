@@ -55,6 +55,21 @@ export const GlyphCharClass = {
   Ideographic: 3,
 } as const;
 
+/**
+ * Direction of the `\n`-separated segment a glyph was shaped in. Must match
+ * the `DIRECTION_*` constants in
+ * `crates/navara_wasm_font_worker/src/shaping.rs`.
+ */
+export const GlyphDirection = {
+  /** No character with a script of its own (digits, punctuation, spaces).
+   *  Font-family fallback shapes such runs apart from the letters around
+   *  them, so a line's direction is its first non-neutral glyph's. */
+  Neutral: 0,
+  Ltr: 1,
+  /** The segment's glyphs arrive in visual order (reversed logical order). */
+  Rtl: 2,
+} as const;
+
 /** A single shaped glyph with positioning info. */
 export type ShapedGlyph = {
   glyphId: number;
@@ -71,6 +86,8 @@ export type ShapedGlyph = {
   /** Same shaping cluster as the previous glyph (combining marks, pre-base
    *  vowels). Letter spacing is inserted only before cluster starts. */
   continuesCluster?: boolean;
+  /** One of `GlyphDirection`; absent means neutral. */
+  direction?: number;
 };
 
 /** Result from shaping text: glyph positions + atlas metrics. */
@@ -85,6 +102,10 @@ export type ShapeTextResult = {
   descender: number;
   /** Extra line gap in font units (hhea). */
   lineGap: number;
+  /** False when letter spacing must not be applied: tracking pulls apart the
+   *  joined letterforms of cursive Arabic, so (like MapLibre) any Arabic
+   *  character disables it for the whole label. */
+  allowsLetterSpacing: boolean;
   /** FontManager-internal: the atlas generation these metrics were built
    *  under. When the atlas evicts glyphs its generation bumps, marking older
    *  cached results stale so they are re-shaped on next use. Unset on results

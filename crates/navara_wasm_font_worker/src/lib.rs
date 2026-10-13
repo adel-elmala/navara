@@ -66,6 +66,8 @@ pub struct WasmShapedGlyph {
     pub char_class: u8,
     /// Same cluster as the previous glyph; letter spacing skips these.
     pub continues_cluster: bool,
+    /// One of the `shaping::DIRECTION_*` constants (segment direction).
+    pub direction: u8,
 }
 
 #[wasm_bindgen(getter_with_clone)]
@@ -85,6 +87,9 @@ pub struct ShapeTextResult {
     /// reused rects mean cached TS metrics for this atlas may be stale, so TS
     /// bumps the atlas generation to force a re-shape on next use.
     pub evicted: bool,
+    /// False when letter spacing must not be applied to this text (it contains
+    /// cursive Arabic).
+    pub allows_letter_spacing: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -220,6 +225,7 @@ impl FontCache {
                 y_offset: g.y_offset,
                 char_class: g.char_class,
                 continues_cluster: g.continues_cluster,
+                direction: g.direction,
             })
             .collect();
 
@@ -261,6 +267,7 @@ impl FontCache {
             atlas_changed,
             is_color,
             evicted,
+            allows_letter_spacing: shaping::allows_letter_spacing(text),
         })
     }
 

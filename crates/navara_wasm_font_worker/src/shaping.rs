@@ -12,6 +12,20 @@ pub const CHAR_CLASS_NEWLINE: u8 = 2;
 /// hangul, fullwidth forms): a line may break after this glyph.
 pub const CHAR_CLASS_IDEOGRAPHIC: u8 = 3;
 
+/// Direction of the `\n`-separated segment a glyph was shaped in. Values cross
+/// the WASM boundary as raw `u8` — keep in sync with `GlyphDirection` in
+/// `web/navara_font/src/types.ts`.
+///
+/// No character with a script of its own (digits, punctuation, spaces only):
+/// shaped left-to-right, but says nothing about the paragraph's direction.
+/// Font-family fallback shapes such runs apart from the letters around them,
+/// so layout takes a line's direction from its first non-neutral glyph.
+pub const DIRECTION_NEUTRAL: u8 = 0;
+pub const DIRECTION_LTR: u8 = 1;
+/// Shaped right-to-left: the segment's glyphs arrive in visual order
+/// (reversed logical order).
+pub const DIRECTION_RTL: u8 = 2;
+
 /// A single shaped glyph with positioning info from harfbuzz.
 #[derive(Debug, Clone)]
 pub struct ShapedGlyph {
@@ -33,6 +47,9 @@ pub struct ShapedGlyph {
     /// Layout inserts letter spacing only between clusters, so a mark never
     /// drifts off its base.
     pub continues_cluster: bool,
+    /// One of the `DIRECTION_*` constants, shared by every glyph of the
+    /// `\n`-separated segment.
+    pub direction: u8,
 }
 
 /// Vertical line metrics in font units (from the hhea table).
@@ -86,6 +103,27 @@ fn is_ideographic(c: char) -> bool {
     )
 }
 
+/// Whether letter spacing may be applied to `text`. Tracking pulls apart the
+/// joined letterforms of cursive Arabic, so (like MapLibre) any Arabic
+/// character disables it for the whole label.
+pub fn allows_letter_spacing(text: &str) -> bool {
+    !text.chars().any(is_cursive_arabic)
+}
+
+/// Every Arabic block: Arabic, Supplement, Extended-A/B/C and the presentation
+/// forms. MapLibre exempts all but Extended-B/C (newer blocks it predates),
+/// which hold joining letters too.
+fn is_cursive_arabic(c: char) -> bool {
+    matches!(c as u32,
+        0x0600..=0x06FF   // Arabic
+        | 0x0750..=0x077F // Arabic Supplement
+        | 0x0870..=0x08FF // Arabic Extended-B, Extended-A
+        | 0xFB50..=0xFDFF // Arabic Presentation Forms-A
+        | 0xFE70..=0xFEFF // Arabic Presentation Forms-B
+        | 0x10EC0..=0x10EFF // Arabic Extended-C
+    )
+}
+
 /// Shape a text string using rustybuzz (harfbuzz port).
 ///
 /// Each `\n`-separated segment is shaped in its own buffer so the newline
@@ -111,6 +149,7 @@ pub fn shape_text(font_data: &[u8], text: &str) -> Option<Vec<ShapedGlyph>> {
                 y_offset: 0,
                 char_class: CHAR_CLASS_NEWLINE,
                 continues_cluster: false,
+                direction: DIRECTION_NEUTRAL,
             });
         }
         if segment.is_empty() {
@@ -120,6 +159,13 @@ pub fn shape_text(font_data: &[u8], text: &str) -> Option<Vec<ShapedGlyph>> {
         let mut buffer = rustybuzz::UnicodeBuffer::new();
         buffer.push_str(segment);
         buffer.guess_segment_properties();
+        let direction = if buffer.script() == rustybuzz::script::UNKNOWN {
+            DIRECTION_NEUTRAL
+        } else if buffer.direction() == rustybuzz::Direction::RightToLeft {
+            DIRECTION_RTL
+        } else {
+            DIRECTION_LTR
+        };
 
         let output = rustybuzz::shape(&face, &[], buffer);
 
@@ -145,6 +191,7 @@ pub fn shape_text(font_data: &[u8], text: &str) -> Option<Vec<ShapedGlyph>> {
                 y_offset: pos.y_offset,
                 char_class,
                 continues_cluster,
+                direction,
             }
         }));
     }

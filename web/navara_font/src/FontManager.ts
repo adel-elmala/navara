@@ -604,6 +604,9 @@ export class FontManager {
     let ascender = 0;
     let descender = 0;
     let lineGap = 0;
+    // Each face run reports on its own substring, so the label allows spacing
+    // only when every run does.
+    let allowsLetterSpacing = true;
 
     for (const seg of segments) {
       const result = this._shapeCache
@@ -624,6 +627,7 @@ export class FontManager {
         lineGap = result.lineGap;
       }
       const scale = targetUnitsPerEm / result.unitsPerEm;
+      allowsLetterSpacing &&= result.allowsLetterSpacing;
 
       for (const g of result.glyphs) {
         allGlyphs.push(
@@ -659,6 +663,7 @@ export class FontManager {
         ascender: 800,
         descender: -200,
         lineGap: 0,
+        allowsLetterSpacing,
       };
     }
 
@@ -669,6 +674,7 @@ export class FontManager {
       ascender,
       descender,
       lineGap,
+      allowsLetterSpacing,
     };
   }
 

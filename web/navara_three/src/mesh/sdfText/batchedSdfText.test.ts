@@ -60,6 +60,7 @@ function shapeResult(text: string): ShapeTextResult {
     ascender: 800,
     descender: -200,
     lineGap: 0,
+    allowsLetterSpacing: true,
   };
 }
 

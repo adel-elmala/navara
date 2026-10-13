@@ -1,6 +1,7 @@
 import {
   COLOR_GLYPH_PX_SIZE,
   GlyphCharClass,
+  GlyphDirection,
   SDF_PX_SIZE,
   type GlyphMetrics,
   type ShapedGlyph,
@@ -8,7 +9,7 @@ import {
 } from "@navaramap/font";
 
 /**
- * Pure text-layout helpers: line breaking, paragraph direction, and turning a
+ * Pure text-layout helpers: line breaking and turning a
  * shaping result into positioned glyph quads in em space.
  *
  * Nothing here touches three.js or WASM, which is what makes the layout rules
@@ -57,37 +58,6 @@ export function lineWidthFu(line: ShapedGlyph[], spacingFu = 0): number {
   return width;
 }
 
-/** Strong RTL code points (Hebrew through Arabic Extended, presentation
- *  forms, and the supplementary-plane RTL blocks). Used for first-strong
- *  paragraph direction detection, mirroring the shaper's own direction guess.
- */
-const STRONG_RTL_RE =
-  /[\u0591-\u08FF\uFB1D-\uFDFD\uFE70-\uFEFC\u{10800}-\u{10FFF}\u{1E800}-\u{1EFFF}]/u;
-
-/** Paragraph direction from the first strong directional character (UAX #9
- *  P2/P3 approximation): the first letter decides, RTL ranges win over other
- *  letters. */
-export function isRtlText(text: string): boolean {
-  for (const ch of text) {
-    if (STRONG_RTL_RE.test(ch)) return true;
-    if (/\p{L}/u.test(ch)) return false;
-  }
-  return false;
-}
-
-/** Every Arabic block: Arabic, Supplement, Extended-A/B/C and the
- *  presentation forms. MapLibre exempts all but Extended-B/C (newer blocks it
- *  predates), which hold joining letters too. */
-const CURSIVE_ARABIC_RE =
-  /[\u0600-\u06FF\u0750-\u077F\u0870-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u{10EC0}-\u{10EFF}]/u;
-
-/** Whether letter spacing may be applied to `text`. Tracking pulls apart the
- *  joined letterforms of cursive Arabic, so (like MapLibre) any Arabic
- *  character disables it for the whole label. */
-export function allowsLetterSpacing(text: string): boolean {
-  return !CURSIVE_ARABIC_RE.test(text);
-}
-
 /**
  * Split a shaped glyph run into lines: hard breaks at newline markers, greedy
  * soft breaks at the last whitespace/ideographic glyph when a line would
@@ -95,23 +65,25 @@ export function allowsLetterSpacing(text: string): boolean {
  * the wrap width overflows rather than breaking mid-word. `spacingFu` is the
  * letter spacing between clusters, counted toward the wrap width.
  *
- * When `rtl` is set, glyphs are assumed to arrive in visual order (leftmost
- * first — how the shaper emits RTL runs), i.e. reversed logical order. Each
- * hard-break segment is wrapped in logical order so the greedy fill starts at
- * the sentence start and lines stack top-to-bottom in reading order, then
- * every line is flipped back to visual order for rendering. Mixed-direction
- * lines may still break sub-optimally — same trade other map renderers make.
+ * A hard-break segment whose first non-neutral glyph was shaped right-to-left
+ * (see `GlyphDirection`) arrives in visual order (leftmost first), i.e.
+ * reversed logical order. It is wrapped in logical order so the greedy fill starts at the sentence start and lines
+ * stack top-to-bottom in reading order, then every line is flipped back to
+ * visual order for rendering. Mixed-direction lines may still break
+ * sub-optimally — same trade other map renderers make.
  */
 export function breakLines(
   glyphs: ShapedGlyph[],
   maxWidthFu: number,
-  rtl = false,
   spacingFu = 0,
 ): ShapedGlyph[][] {
   const lines: ShapedGlyph[][] = [];
 
   const pushSegment = (segment: ShapedGlyph[]) => {
-    if (!rtl) {
+    const strong = segment.find(
+      (g) => (g.direction ?? GlyphDirection.Neutral) !== GlyphDirection.Neutral,
+    );
+    if (strong?.direction !== GlyphDirection.Rtl) {
       lines.push(...wrapSegment(segment, maxWidthFu, spacingFu, false));
       return;
     }
@@ -250,8 +222,6 @@ export type LabelLayout = {
 };
 
 export type LayoutOptions = {
-  /** The source string — only used to detect paragraph direction. */
-  text: string;
   /** Wrap width in ems (multiples of font size); 0 disables soft wrapping. */
   maxWidth: number;
   /** Multiplier on the font's natural line height. */
@@ -260,8 +230,8 @@ export type LayoutOptions = {
   textAlign: number;
   /** Make every glyph its own rigid piece along a line instead of its word. */
   spreadGlyphs: boolean;
-  /** Extra space between characters in ems; ignored for Arabic text (see
-   *  {@link allowsLetterSpacing}). Defaults to 0. */
+  /** Extra space between characters in ems; ignored when the shaping result
+   *  disallows it (`allowsLetterSpacing`). Defaults to 0. */
   letterSpacing?: number;
 };
 
@@ -332,15 +302,10 @@ export function buildLabelLayout(
 
   // `maxWidth` and `letterSpacing` are in ems so they track the font size in
   // both sizeInMeters modes; font units are ems × unitsPerEm.
-  const spacingFu = allowsLetterSpacing(options.text)
+  const spacingFu = shapeResult.allowsLetterSpacing
     ? (options.letterSpacing ?? 0) * unitsPerEm
     : 0;
-  const lines = breakLines(
-    glyphs,
-    options.maxWidth * unitsPerEm,
-    isRtlText(options.text),
-    spacingFu,
-  );
+  const lines = breakLines(glyphs, options.maxWidth * unitsPerEm, spacingFu);
   const widths = lines.map((line) => lineWidthFu(line, spacingFu));
   const blockWidthFu = Math.max(...widths);
 
