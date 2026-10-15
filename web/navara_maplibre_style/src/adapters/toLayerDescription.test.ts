@@ -331,14 +331,36 @@ describe("toLayerDescription", () => {
         maxWidth: 10,
         textAlign: "center",
       });
-      expect(text).not.toHaveProperty("geometryTypes");
+      expect(text?.geometryTypes).toEqual(["point", "line", "polygon"]);
       expect(billboard).toMatchObject({
         placement: "point",
         billboardFacing: "upright",
         rotateWithCamera: true,
         declutter: true,
       });
-      expect(billboard).not.toHaveProperty("geometryTypes");
+      expect(billboard?.geometryTypes).toEqual(["point", "line", "polygon"]);
+    });
+
+    it("keeps point geometry only when the filter tests the geometry type", () => {
+      for (const filter of [
+        ["==", "$type", "Point"],
+        ["==", ["geometry-type"], "Point"],
+      ]) {
+        const { text, billboard } = toLayerDescription(
+          mockSource,
+          {
+            ...symbolLayer({ "text-field": "{name}", "icon-image": "marker" }),
+            filter,
+          } as StyleLayer,
+          "Font",
+          engine,
+        ) as {
+          text?: Record<string, unknown>;
+          billboard?: Record<string, unknown>;
+        };
+        expect(text).not.toHaveProperty("geometryTypes");
+        expect(billboard).not.toHaveProperty("geometryTypes");
+      }
     });
 
     it("maps line placement to line geometry with map-aligned text", () => {

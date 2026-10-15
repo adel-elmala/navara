@@ -5,11 +5,13 @@
 import {
   type LayerDescription,
   type Source,
+  type SourceGeometryType,
   type VectorLayer,
 } from "@navaramap/three";
 
 import type { StyleEngine } from "../engine/StyleEngine";
 import { type StyleLayer, type ValueExpression } from "../engine/types";
+import { expressionUsesGeometryType } from "../utils/expressionHelpers";
 
 import { toNavaraColor } from "./toEvaluatedValue";
 
@@ -84,6 +86,25 @@ export function getSymbolPlacement(
     "symbol-placement",
   );
   return value === "line" || value === "line-center" ? value : "point";
+}
+
+/**
+ * Source geometry a symbol layer consumes. Along-line placement takes lines
+ * only. Point placement labels every geometry, as MapLibre does: a line once
+ * at its first vertex, a polygon at its pole of inaccessibility. The plugin
+ * evaluates a symbol layer's filter as a single geometry type, though, so a
+ * filter that tests it (`$type`, `["geometry-type"]`) would pass lines and
+ * polygons as points; such layers keep the native point geometry only.
+ */
+function getSymbolGeometryTypes(
+  styleLayer: StyleLayer,
+  placement: SymbolPlacement,
+): SourceGeometryType[] | undefined {
+  if (placement !== "point") return ["line"];
+  const filter = "filter" in styleLayer ? styleLayer.filter : undefined;
+  return expressionUsesGeometryType(filter)
+    ? undefined
+    : ["point", "line", "polygon"];
 }
 
 type RotationAlignment = "map" | "viewport" | "viewport-glyph";
@@ -356,6 +377,7 @@ function createSymbolLayer(
 
   const placement = getSymbolPlacement(styleLayer, engine);
   const alongLine = placement !== "point";
+  const geometryTypes = getSymbolGeometryTypes(styleLayer, placement);
 
   if (hasIconImage) {
     const iconAnchor =
@@ -402,10 +424,10 @@ function createSymbolLayer(
         billboardFacing: pitch === "map" ? "flat" : "upright",
         rotateWithCamera: rotation !== "map",
         declutter: !allowsOverlap(engine, styleLayer, "icon"),
+        ...(geometryTypes && { geometryTypes }),
       } satisfies Partial<BillboardDescription>);
       if (alongLine) {
         Object.assign(layerDesc.billboard, {
-          geometryTypes: ["line"],
           spacing: finiteOr(
             evaluateLayerProperty(
               engine,
@@ -489,10 +511,10 @@ function createSymbolLayer(
           !alongLine && (justify === "left" || justify === "right")
             ? justify
             : "center",
+        ...(geometryTypes && { geometryTypes }),
       } satisfies Partial<TextDescription>);
       if (alongLine) {
         Object.assign(layerDesc.text, {
-          geometryTypes: ["line"],
           spacing: finiteOr(
             evaluateLayerProperty(
               engine,
