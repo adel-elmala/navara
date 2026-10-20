@@ -383,6 +383,7 @@ describe("toLayerDescription", () => {
         keepUpright: false,
         textFacing: "flat",
         rotateWithCamera: false,
+        spreadGlyphs: true,
         maxWidth: 0,
         textAlign: "center",
       });
@@ -408,6 +409,26 @@ describe("toLayerDescription", () => {
         spreadGlyphs: true,
         rotateWithCamera: true,
         textFacing: "upright",
+      });
+    });
+
+    it("maps viewport rotation along a line to a straight label", () => {
+      const { text } = buildSymbol({
+        "text-field": "{name}",
+        "symbol-placement": "line",
+        "symbol-spacing": 300,
+        "text-rotation-alignment": "viewport",
+      });
+
+      // Turning with the camera without spreadGlyphs draws the label
+      // straight at each anchor, repeated every `spacing`.
+      expect(text).toMatchObject({
+        placement: "line",
+        spacing: 300,
+        rotateWithCamera: true,
+        spreadGlyphs: false,
+        textFacing: "upright",
+        maxWidth: 0,
       });
     });
 

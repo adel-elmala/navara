@@ -13,6 +13,7 @@ import type { StyleEngine } from "../engine/StyleEngine";
 import { type StyleLayer, type ValueExpression } from "../engine/types";
 import { expressionUsesGeometryType } from "../utils/expressionHelpers";
 
+import { resolveSymbolOrientation } from "./symbolAlignment";
 import { toNavaraColor } from "./toEvaluatedValue";
 
 type TextDescription = NonNullable<VectorLayer["text"]>;
@@ -105,28 +106,6 @@ function getSymbolGeometryTypes(
   return expressionUsesGeometryType(filter)
     ? undefined
     : ["point", "line", "polygon"];
-}
-
-type RotationAlignment = "map" | "viewport" | "viewport-glyph";
-
-/** `auto` resolves to `map` along lines and `viewport` at points. */
-function resolveRotationAlignment(
-  value: unknown,
-  alongLine: boolean,
-): RotationAlignment {
-  if (value === "map" || value === "viewport" || value === "viewport-glyph") {
-    return value;
-  }
-  return alongLine ? "map" : "viewport";
-}
-
-/** `auto` follows the rotation alignment. */
-function resolvePitchAlignment(
-  value: unknown,
-  rotation: RotationAlignment,
-): "map" | "viewport" {
-  if (value === "map" || value === "viewport") return value;
-  return rotation === "map" ? "map" : "viewport";
 }
 
 /**
@@ -378,6 +357,9 @@ function createSymbolLayer(
   const placement = getSymbolPlacement(styleLayer, engine);
   const alongLine = placement !== "point";
   const geometryTypes = getSymbolGeometryTypes(styleLayer, placement);
+  const orientation = engine
+    ? resolveSymbolOrientation(styleLayer, engine)
+    : undefined;
 
   if (hasIconImage) {
     const iconAnchor =
@@ -399,47 +381,14 @@ function createSymbolLayer(
         (hasTextField ? { x: 1.0, y: -0.5 } : { x: 0.5, y: -0.5 }),
     };
 
-    if (engine) {
-      const rotation = resolveRotationAlignment(
-        evaluateLayerProperty(
-          engine,
-          styleLayer,
-          "layout",
-          "icon-rotation-alignment",
-        ),
-        alongLine,
-      );
-      const pitch = resolvePitchAlignment(
-        evaluateLayerProperty(
-          engine,
-          styleLayer,
-          "layout",
-          "icon-pitch-alignment",
-        ),
-        rotation,
-      );
-
+    if (engine && orientation) {
       Object.assign(layerDesc.billboard, {
         placement,
-        billboardFacing: pitch === "map" ? "flat" : "upright",
-        rotateWithCamera: rotation !== "map",
+        ...orientation.icon,
         declutter: !allowsOverlap(engine, styleLayer, "icon"),
         ...(geometryTypes && { geometryTypes }),
+        ...(alongLine && { spacing: orientation.spacing }),
       } satisfies Partial<BillboardDescription>);
-      if (alongLine) {
-        Object.assign(layerDesc.billboard, {
-          spacing: finiteOr(
-            evaluateLayerProperty(
-              engine,
-              styleLayer,
-              "layout",
-              "symbol-spacing",
-            ),
-            250,
-          ),
-          rotateToLine: rotation === "map",
-        } satisfies Partial<BillboardDescription>);
-      }
     }
   }
 
@@ -461,25 +410,7 @@ function createSymbolLayer(
     // with properties=undefined and zoom=LAYER_EVAL_ZOOM. This means text-halo expressions cannot
     // use feature properties or respond to zoom changes. To fix this, Navara's EvaluatedValue
     // should support outlineColor/outlineWidth fields so they can be evaluated per-feature.
-    if (engine && styleLayer.type === "symbol") {
-      const rotation = resolveRotationAlignment(
-        evaluateLayerProperty(
-          engine,
-          styleLayer,
-          "layout",
-          "text-rotation-alignment",
-        ),
-        alongLine,
-      );
-      const pitch = resolvePitchAlignment(
-        evaluateLayerProperty(
-          engine,
-          styleLayer,
-          "layout",
-          "text-pitch-alignment",
-        ),
-        rotation,
-      );
+    if (engine && orientation && styleLayer.type === "symbol") {
       const justify = evaluateLayerProperty(
         engine,
         styleLayer,
@@ -489,9 +420,7 @@ function createSymbolLayer(
 
       Object.assign(layerDesc.text, {
         placement,
-        textFacing: pitch === "map" ? "flat" : "upright",
-        rotateWithCamera: rotation !== "map",
-        spreadGlyphs: rotation === "viewport-glyph",
+        ...orientation.text,
         declutter: !allowsOverlap(engine, styleLayer, "text"),
         // MapLibre never wraps or justifies labels placed along a line.
         maxWidth: alongLine
@@ -512,36 +441,8 @@ function createSymbolLayer(
             ? justify
             : "center",
         ...(geometryTypes && { geometryTypes }),
+        ...(alongLine && { spacing: orientation.spacing }),
       } satisfies Partial<TextDescription>);
-      if (alongLine) {
-        Object.assign(layerDesc.text, {
-          spacing: finiteOr(
-            evaluateLayerProperty(
-              engine,
-              styleLayer,
-              "layout",
-              "symbol-spacing",
-            ),
-            250,
-          ),
-          maxAngle: finiteOr(
-            evaluateLayerProperty(
-              engine,
-              styleLayer,
-              "layout",
-              "text-max-angle",
-            ),
-            45,
-          ),
-          keepUpright:
-            evaluateLayerProperty(
-              engine,
-              styleLayer,
-              "layout",
-              "text-keep-upright",
-            ) !== false,
-        } satisfies Partial<TextDescription>);
-      }
 
       // Track color alpha separately to combine with explicit opacity at the end
       let haloColorAlpha = 1.0;

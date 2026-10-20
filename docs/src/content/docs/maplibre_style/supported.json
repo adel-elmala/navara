@@ -241,16 +241,16 @@
           "status": "⚠️ Evaluated once at layer construction"
         },
         "text-rotation-alignment": {
-          "status": "⚠️ viewport on line placement still follows the line"
+          "status": "⚠️ Evaluated once at layer construction"
         },
         "text-pitch-alignment": {
-          "status": "⚠️ viewport with map rotation stands as a fixed signboard"
+          "status": "⚠️ Evaluated once at layer construction"
         },
         "icon-rotation-alignment": {
-          "status": "✅"
+          "status": "⚠️ Evaluated once at layer construction"
         },
         "icon-pitch-alignment": {
-          "status": "⚠️ viewport with map rotation stands as a fixed signboard"
+          "status": "⚠️ Evaluated once; on-screen icons turn by ground bearing on lines"
         },
         "text-allow-overlap": {
           "status": "⚠️ Also lets other symbols overlap the text"
@@ -294,7 +294,7 @@
           "status": "❌"
         },
         "raster-fade-duration": {
-          "status": "❌"
+          "status": "⚠️ Ignored; tiles appear without fading"
         },
         "raster-hue-rotate": {
           "status": "❌"
@@ -358,7 +358,15 @@
       "status": "✅"
     },
     "vector": {
-      "status": "✅"
+      "status": "⚠️ MapLibre Tiles (mlt encoding) are not supported",
+      "encoding": {
+        "mvt": {
+          "status": "✅"
+        },
+        "mlt": {
+          "status": "❌"
+        }
+      }
     },
     "raster": {
       "status": "✅"
@@ -697,25 +705,25 @@
       "status": "❌"
     },
     "sky": {
-      "status": "❌"
+      "status": "⚠️ Only atmosphere-blend, which is ignored"
     },
     "projection": {
-      "status": "❌"
+      "status": "⚠️ Ignored; always renders a globe"
     },
     "terrain": {
       "status": "✅"
     },
     "sprite": {
-      "status": "✅"
+      "status": "❌"
     },
     "glyphs": {
-      "status": "✅"
+      "status": "❌"
     },
     "font-faces": {
       "status": "✅"
     },
     "transition": {
-      "status": "❌"
+      "status": "⚠️ Ignored; style changes apply immediately"
     }
   },
   "light": {
@@ -752,7 +760,7 @@
       "status": "❌"
     },
     "atmosphere-blend": {
-      "status": "❌"
+      "status": "⚠️ Ignored; MapLibre's globe atmosphere is not drawn"
     }
   },
   "terrain": {
@@ -765,15 +773,15 @@
   },
   "projection": {
     "type": {
-      "status": "❌"
+      "status": "⚠️ Ignored; always renders a globe"
     }
   },
   "transition": {
     "duration": {
-      "status": "❌"
+      "status": "⚠️ Ignored; style changes apply immediately"
     },
     "delay": {
-      "status": "❌"
+      "status": "⚠️ Ignored; style changes apply immediately"
     }
   },
   "sprite": {

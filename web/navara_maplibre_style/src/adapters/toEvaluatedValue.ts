@@ -25,6 +25,7 @@ type EvaluatedResult = {
   show?: boolean;
   text?: string;
   image?: string;
+  /** Degrees clockwise, like MapLibre's `text-rotate` / `icon-rotate`. */
   rotation?: number;
   declutterPriority?: number;
 };
