@@ -227,6 +227,10 @@ export type {
 export * from "./constants";
 export * from "./light";
 export * from "./batchTexture";
+export {
+  SOLID_DASH_ROW,
+  createLineSegmentTextureReleasedOnUpload,
+} from "./lineDash";
 export * from "./mesh";
 export * from "./layer";
 export * from "./source";
@@ -1849,6 +1853,7 @@ export default class ThreeView<
     // Release per-tile composite atlases, cached shader materials, placeholder
     // textures, and the fullscreen quad geometry owned by the compositor.
     this._tileTextureCompositor.dispose();
+    this.viewContext._dispose();
 
     // Clean up WASM core
     this._core?.free();
