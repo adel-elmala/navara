@@ -155,10 +155,10 @@
           "status": "✅"
         },
         "text-halo-color": {
-          "status": "⚠️ Evaluated once at layer construction"
+          "status": "⚠️ Follows zoom, but is the same for every feature in the layer"
         },
         "text-halo-width": {
-          "status": "⚠️ Evaluated once at layer construction"
+          "status": "⚠️ Follows zoom, but is the same for every feature in the layer"
         },
         "text-halo-blur": {
           "status": "❌"
@@ -202,7 +202,7 @@
           "status": "❌"
         },
         "icon-anchor": {
-          "status": "⚠️ Evaluated once at layer construction"
+          "status": "⚠️ Follows zoom, but is the same for every feature in the layer"
         },
         "text-offset": {
           "status": "❌"
@@ -229,28 +229,28 @@
           "status": "✅"
         },
         "text-max-width": {
-          "status": "⚠️ Evaluated once at layer construction"
+          "status": "⚠️ Follows zoom, but is the same for every feature in the layer"
         },
         "text-justify": {
-          "status": "⚠️ Evaluated once at layer construction; auto is centered"
+          "status": "⚠️ Follows zoom, but is the same for every feature in the layer; auto is centered"
         },
         "text-max-angle": {
-          "status": "⚠️ Evaluated once at layer construction"
+          "status": "✅"
         },
         "text-keep-upright": {
-          "status": "⚠️ Evaluated once at layer construction"
+          "status": "✅"
         },
         "text-rotation-alignment": {
-          "status": "⚠️ Evaluated once at layer construction"
+          "status": "✅"
         },
         "text-pitch-alignment": {
-          "status": "⚠️ Evaluated once at layer construction"
+          "status": "✅"
         },
         "icon-rotation-alignment": {
-          "status": "⚠️ Evaluated once at layer construction"
+          "status": "⚠️ Evaluated once at layer construction on line placement"
         },
         "icon-pitch-alignment": {
-          "status": "⚠️ Evaluated once; on-screen icons turn by ground bearing on lines"
+          "status": "⚠️ On-screen icons turn by ground bearing on lines"
         },
         "text-allow-overlap": {
           "status": "⚠️ Also lets other symbols overlap the text"

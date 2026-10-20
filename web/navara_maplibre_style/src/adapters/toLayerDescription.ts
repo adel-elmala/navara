@@ -11,31 +11,67 @@ import {
 
 import type { StyleEngine } from "../engine/StyleEngine";
 import { type StyleLayer, type ValueExpression } from "../engine/types";
-import { expressionUsesGeometryType } from "../utils/expressionHelpers";
+import {
+  expressionUsesGeometryType,
+  expressionUsesZoom,
+} from "../utils/expressionHelpers";
 
-import { resolveSymbolOrientation } from "./symbolAlignment";
+import { CONSTRUCTION_ZOOM, resolveSymbolOrientation } from "./symbolAlignment";
 import { toNavaraColor } from "./toEvaluatedValue";
 
 type TextDescription = NonNullable<VectorLayer["text"]>;
 type BillboardDescription = NonNullable<VectorLayer["billboard"]>;
 
 /**
- * Zoom at which layer-level properties are evaluated. Navara materials are
- * built once per layer, so these values cannot follow zoom or feature
- * properties.
+ * Symbol properties evaluated for the whole layer that `layer.update()`
+ * applies to labels already shown, so they can follow zoom. The rest of the
+ * layer-level properties (placement, spacing, geometry types) are baked into
+ * tile geometry and stay at {@link CONSTRUCTION_ZOOM}.
  */
-const LAYER_EVAL_ZOOM = 10;
+const ZOOM_FOLLOWING_SYMBOL_PROPERTIES = {
+  layout: [
+    "text-rotation-alignment",
+    "text-pitch-alignment",
+    "icon-rotation-alignment",
+    "icon-pitch-alignment",
+    "text-keep-upright",
+    "text-max-angle",
+    "text-max-width",
+    "text-justify",
+    "icon-anchor",
+    "text-allow-overlap",
+    "icon-allow-overlap",
+    "text-overlap",
+    "icon-overlap",
+  ],
+  paint: ["text-halo-color", "text-halo-width"],
+} as const;
 
 /**
- * Evaluate a layout/paint property once for the whole layer, falling back to
- * the spec default when the style omits it. Returns `undefined` only for
- * properties with no spec default that the style leaves unset.
+ * Whether a symbol layer sets a layer-level property with a zoom expression,
+ * so its description must be rebuilt as the zoom changes.
+ */
+export function symbolLayerFollowsZoom(styleLayer: StyleLayer): boolean {
+  if (styleLayer.type !== "symbol") return false;
+  return (["layout", "paint"] as const).some((kind) => {
+    const values = styleLayer[kind] as Record<string, unknown> | undefined;
+    return ZOOM_FOLLOWING_SYMBOL_PROPERTIES[kind].some((key) =>
+      expressionUsesZoom(values?.[key]),
+    );
+  });
+}
+
+/**
+ * Evaluate a layout/paint property for the whole layer at `zoom`, falling
+ * back to the spec default when the style omits it. Returns `undefined` only
+ * for properties with no spec default that the style leaves unset.
  */
 function evaluateLayerProperty(
   engine: StyleEngine,
   styleLayer: StyleLayer,
   kind: "layout" | "paint",
   key: string,
+  zoom = CONSTRUCTION_ZOOM,
 ): unknown {
   const spec =
     kind === "layout"
@@ -54,7 +90,7 @@ function evaluateLayerProperty(
       spec,
     )({
       properties: undefined,
-      zoom: LAYER_EVAL_ZOOM,
+      zoom,
     });
   } catch (err) {
     console.warn(
@@ -117,12 +153,14 @@ function allowsOverlap(
   engine: StyleEngine,
   styleLayer: StyleLayer,
   prefix: "text" | "icon",
+  zoom: number,
 ): boolean {
   const overlap = evaluateLayerProperty(
     engine,
     styleLayer,
     "layout",
     `${prefix}-overlap`,
+    zoom,
   );
   if (overlap !== undefined) return overlap === "always";
   return (
@@ -131,6 +169,7 @@ function allowsOverlap(
       styleLayer,
       "layout",
       `${prefix}-allow-overlap`,
+      zoom,
     ) === true
   );
 }
@@ -319,6 +358,7 @@ function createSymbolLayer(
   styleLayer: StyleLayer,
   fontFamily?: string,
   engine?: StyleEngine,
+  zoom = CONSTRUCTION_ZOOM,
 ): LayerDescription | null {
   const layout = styleLayer.layout;
 
@@ -358,13 +398,19 @@ function createSymbolLayer(
   const alongLine = placement !== "point";
   const geometryTypes = getSymbolGeometryTypes(styleLayer, placement);
   const orientation = engine
-    ? resolveSymbolOrientation(styleLayer, engine)
+    ? resolveSymbolOrientation(styleLayer, engine, zoom)
     : undefined;
 
   if (hasIconImage) {
     const iconAnchor =
       engine && layout?.["icon-anchor"] !== undefined
-        ? evaluateLayerProperty(engine, styleLayer, "layout", "icon-anchor")
+        ? evaluateLayerProperty(
+            engine,
+            styleLayer,
+            "layout",
+            "icon-anchor",
+            zoom,
+          )
         : undefined;
 
     layerDesc.billboard = {
@@ -385,7 +431,7 @@ function createSymbolLayer(
       Object.assign(layerDesc.billboard, {
         placement,
         ...orientation.icon,
-        declutter: !allowsOverlap(engine, styleLayer, "icon"),
+        declutter: !allowsOverlap(engine, styleLayer, "icon", zoom),
         ...(geometryTypes && { geometryTypes }),
         ...(alongLine && { spacing: orientation.spacing }),
       } satisfies Partial<BillboardDescription>);
@@ -406,22 +452,23 @@ function createSymbolLayer(
     };
 
     // Apply text-halo properties (outlineColor/outlineWidth/outlineOpacity)
-    // TODO: Text halo is currently a layer-level property, evaluated once at construction time
-    // with properties=undefined and zoom=LAYER_EVAL_ZOOM. This means text-halo expressions cannot
-    // use feature properties or respond to zoom changes. To fix this, Navara's EvaluatedValue
-    // should support outlineColor/outlineWidth fields so they can be evaluated per-feature.
+    // TODO: Text halo is currently a layer-level property, evaluated at the layer's zoom with
+    // properties=undefined. This means text-halo expressions cannot use feature properties.
+    // To fix this, Navara's EvaluatedValue should support outlineColor/outlineWidth fields so
+    // they can be evaluated per-feature.
     if (engine && orientation && styleLayer.type === "symbol") {
       const justify = evaluateLayerProperty(
         engine,
         styleLayer,
         "layout",
         "text-justify",
+        zoom,
       );
 
       Object.assign(layerDesc.text, {
         placement,
         ...orientation.text,
-        declutter: !allowsOverlap(engine, styleLayer, "text"),
+        declutter: !allowsOverlap(engine, styleLayer, "text", zoom),
         // MapLibre never wraps or justifies labels placed along a line.
         maxWidth: alongLine
           ? 0
@@ -431,6 +478,7 @@ function createSymbolLayer(
                 styleLayer,
                 "layout",
                 "text-max-width",
+                zoom,
               ),
               10,
             ),
@@ -450,7 +498,13 @@ function createSymbolLayer(
       if (styleLayer.paint?.["text-halo-color"] !== undefined) {
         // Convert to Navara Color and extract alpha (don't set opacity yet)
         const colorResult = toNavaraColor(
-          evaluateLayerProperty(engine, styleLayer, "paint", "text-halo-color"),
+          evaluateLayerProperty(
+            engine,
+            styleLayer,
+            "paint",
+            "text-halo-color",
+            zoom,
+          ),
         );
         if (colorResult) {
           layerDesc.text.outlineColor = colorResult.color;
@@ -464,6 +518,7 @@ function createSymbolLayer(
           styleLayer,
           "paint",
           "text-halo-width",
+          zoom,
         );
         if (typeof widthValue === "number" && Number.isFinite(widthValue)) {
           // MapLibre text-halo-width is in screen pixels
@@ -508,6 +563,9 @@ function createSymbolLayer(
  * @param styleLayer - MapLibre layer specification
  * @param fontFamily - Optional font family name for text rendering (ignores style's text-font)
  * @param engine - Optional style engine for evaluating expressions (e.g., text-halo properties)
+ * @param zoom - Zoom to evaluate the layer-level symbol properties that can
+ *   follow it at (see {@link symbolLayerFollowsZoom}); defaults to
+ *   {@link CONSTRUCTION_ZOOM}
  * @returns Navara layer description, or null if the layer cannot be processed
  *
  * Note: Returns null for unsupported/misconfigured layers instead of throwing,
@@ -521,6 +579,7 @@ export function toLayerDescription(
   styleLayer: StyleLayer,
   fontFamily?: string,
   engine?: StyleEngine,
+  zoom?: number,
 ): LayerDescription | null {
   switch (styleLayer.type) {
     case "fill":
@@ -536,7 +595,7 @@ export function toLayerDescription(
     case "hillshade":
       return createHillshadeLayer(source);
     case "symbol":
-      return createSymbolLayer(source, styleLayer, fontFamily, engine);
+      return createSymbolLayer(source, styleLayer, fontFamily, engine, zoom);
     default:
       // Warn but don't throw - allows loading third-party styles with unsupported layers
       // TypeScript exhaustively narrows styleLayer to never, but we handle unknown types at runtime

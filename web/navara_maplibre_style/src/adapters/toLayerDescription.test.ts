@@ -4,7 +4,11 @@ import { describe, it, expect, vi } from "vitest";
 import { JsStyleEngine } from "../engine/JsStyleEngine";
 import type { StyleLayer } from "../engine/types";
 
-import { getSymbolPlacement, toLayerDescription } from "./toLayerDescription";
+import {
+  getSymbolPlacement,
+  symbolLayerFollowsZoom,
+  toLayerDescription,
+} from "./toLayerDescription";
 
 // Mock @navaramap/three to avoid loading navara_worker
 vi.mock("@navaramap/three", () => ({
@@ -430,6 +434,65 @@ describe("toLayerDescription", () => {
         textFacing: "upright",
         maxWidth: 0,
       });
+    });
+
+    it("evaluates zoom-following layer properties at the given zoom", () => {
+      const layer = symbolLayer({
+        "text-field": "{name}",
+        "text-max-width": ["step", ["zoom"], 10, 14, 6],
+        "text-pitch-alignment": ["step", ["zoom"], "viewport", 14, "map"],
+      });
+      const build = (zoom?: number) =>
+        toLayerDescription(mockSource, layer, "Font", engine, zoom) as {
+          text?: Record<string, unknown>;
+        };
+
+      expect(build().text).toMatchObject({
+        maxWidth: 10,
+        textFacing: "upright",
+      });
+      expect(build(15).text).toMatchObject({
+        maxWidth: 6,
+        textFacing: "flat",
+      });
+    });
+
+    it("detects layer-level properties that follow zoom", () => {
+      const zoomStep = ["step", ["zoom"], "map", 14, "viewport"];
+      expect(
+        symbolLayerFollowsZoom(
+          symbolLayer({
+            "text-field": "a",
+            "text-rotation-alignment": zoomStep,
+          }),
+        ),
+      ).toBe(true);
+      expect(
+        symbolLayerFollowsZoom({
+          ...symbolLayer({ "text-field": "a" }),
+          paint: {
+            "text-halo-width": [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              0,
+              1,
+              10,
+              3,
+            ],
+          },
+        } as StyleLayer),
+      ).toBe(true);
+      // Per-feature properties and geometry ones do not need layer.update().
+      expect(
+        symbolLayerFollowsZoom(
+          symbolLayer({
+            "text-field": "a",
+            "text-size": ["interpolate", ["linear"], ["zoom"], 0, 10, 10, 20],
+            "symbol-spacing": ["step", ["zoom"], 100, 14, 300],
+          }),
+        ),
+      ).toBe(false);
     });
 
     it("maps explicit pitch alignment independently of rotation", () => {
