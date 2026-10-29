@@ -126,6 +126,17 @@ export type Anchor =
   | "bottom-right";
 
 /**
+ * One placement a label may take — an entry of MapLibre's
+ * `text-variable-anchor-offset`: the part of the block placed at the anchor
+ * point, and the shift after it in ems, x right and y down. An entry of
+ * `variableAnchors` on the text material.
+ */
+export type VariableAnchor = {
+  anchor: Anchor;
+  offset?: { x: number; y: number };
+};
+
+/**
  * Horizontal alignment of the lines of a multi-line label — MapLibre's
  * `text-justify`. `"auto"` aligns towards the horizontal side of the text's
  * `anchor`.
@@ -159,11 +170,14 @@ type ConvertStringUnionFields<T> = {
               ? TextAlign | Extract<T[K], undefined>
               : K extends "translateAnchor"
                 ? TranslateAnchor | Extract<T[K], undefined>
-                : K extends "dashArray" | "declutterPadding"
-                  ? number[] | Extract<T[K], undefined>
-                  : T[K] extends object | undefined
-                    ? ConvertStringUnionFields<T[K]> | Extract<T[K], undefined>
-                    : T[K];
+                : K extends "variableAnchors"
+                  ? VariableAnchor[] | Extract<T[K], undefined>
+                  : K extends "dashArray" | "declutterPadding"
+                    ? number[] | Extract<T[K], undefined>
+                    : T[K] extends object | undefined
+                      ? | ConvertStringUnionFields<T[K]>
+                        | Extract<T[K], undefined>
+                      : T[K];
 };
 
 /**

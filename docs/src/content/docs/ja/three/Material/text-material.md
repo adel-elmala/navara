@@ -1028,3 +1028,27 @@ import { Color } from "@navaramap/three";
 }
 ```
 
+### variableAnchors
+
+**Type:** `{ anchor: Anchor, offset?: Vec2 }[] | undefined`
+
+**Description:** ラベルが取りうる配置を指定します。[`declutter`](#declutter) が先頭から順に試し、空いている配置を使います。MapLibre の `text-variable-anchor-offset` と同じ動作です。各要素は [`anchor`](#anchor) と em 単位の [`offset`](#offset) の組です。使用中の配置を最初に試すため、ラベルは現在の位置がふさがったときだけ移動します。どの配置にも空きがなければラベルは非表示になりますが、[`overlap`](#overlap) が `"never"` 以外なら使用中の配置で描画されます。空でない場合は `anchor` と `offset` の代わりに使われます（ライン沿いに配置したラベルを除く）。`declutter` を使わない場合は先頭の要素が使われます。[`textAlign`](#textalign) が `"auto"` の場合、行は選ばれたアンカーの側に揃えられます。
+
+[`FeatureEvaluator`](../../api/feature-evaluator/) から地物ごとに指定することもできます。
+
+**Default:** `[]`
+
+**Example:**
+
+```typescript
+{
+  text: {
+    textAlign: "auto",
+    variableAnchors: [
+      { anchor: "left", offset: { x: 0.5, y: 0 } }, // 位置の右
+      { anchor: "right", offset: { x: -0.5, y: 0 } }, // 位置の左
+      { anchor: "top", offset: { x: 0, y: 0.5 } } // 位置の下
+    ]
+  }
+}
+```

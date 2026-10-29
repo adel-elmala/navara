@@ -126,6 +126,25 @@ fn parse_anchor(value: &Option<String>) -> Option<navara_material::Anchor> {
     }
 }
 
+/// Convert JS-facing variable anchors, dropping (with a warning from
+/// [`parse_anchor`]) any entry whose anchor is unknown.
+fn parse_variable_anchors(
+    value: &Option<Vec<VariableAnchor>>,
+) -> Option<Vec<navara_material::VariableAnchor>> {
+    let entries = value.as_ref()?;
+    Some(
+        entries
+            .iter()
+            .filter_map(|entry| {
+                Some(navara_material::VariableAnchor {
+                    anchor: parse_anchor(&Some(entry.anchor.clone()))?,
+                    offset: entry.offset.map_or(navara_math::Vec2::ZERO, Into::into),
+                })
+            })
+            .collect(),
+    )
+}
+
 /// Parse a JS-facing translate frame name, warning on an unknown value so the
 /// caller keeps the material's current value.
 fn parse_translate_anchor(value: &Option<String>) -> Option<navara_material::TranslateAnchor> {
@@ -714,6 +733,28 @@ impl BillboardMaterial {
     }
 }
 
+/// One placement a label may take, as an entry of MapLibre's
+/// `text-variable-anchor-offset`.
+#[wasm_bindgen]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VariableAnchor {
+    /// Part of the text block placed at the anchor point, as `anchor`.
+    #[wasm_bindgen(getter_with_clone)]
+    pub anchor: String,
+    /// Shift from the anchor point, x right and y down, in ems. Defaults to
+    /// `(0, 0)`.
+    pub offset: Option<Vec2>,
+}
+
+impl From<&navara_material::VariableAnchor> for VariableAnchor {
+    fn from(value: &navara_material::VariableAnchor) -> Self {
+        VariableAnchor {
+            anchor: value.anchor.as_str().to_string(),
+            offset: Some(value.offset.into()),
+        }
+    }
+}
+
 #[wasm_bindgen]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextMaterial {
@@ -732,6 +773,14 @@ pub struct TextMaterial {
     /// `size`), as MapLibre's `text-offset`. Lies in the label's own plane, so
     /// it turns with `rotation`. Defaults to `(0, 0)`.
     pub offset: Option<Vec2>,
+    /// Placements the declutter pass tries in order, keeping the first whose
+    /// box is free, as MapLibre's `text-variable-anchor-offset`. The one in
+    /// use is tried first, so a label only moves when it must. Overrides
+    /// `anchor` and `offset` when not empty, except along a line. Without
+    /// declutter the first is used.
+    #[wasm_bindgen(getter_with_clone, js_name = variableAnchors)]
+    #[serde(rename = "variableAnchors")]
+    pub variable_anchors: Option<Vec<VariableAnchor>>,
     /// Screen-pixel shift of the drawn label, x right and y down, applied after
     /// projection so it stays the same number of pixels at any distance, as
     /// MapLibre's `text-translate`. Defaults to `(0, 0)`.
@@ -1006,6 +1055,8 @@ impl From<TextMaterial> for navara_material::TextMaterial {
             color: val.color.unwrap_or(default.color),
             anchor: parse_anchor(&val.anchor).unwrap_or(default.anchor),
             offset: val.offset.unwrap_or(default.offset.into()).into(),
+            variable_anchors: parse_variable_anchors(&val.variable_anchors)
+                .unwrap_or(default.variable_anchors),
             translate: val.translate.unwrap_or(default.translate.into()).into(),
             translate_anchor: parse_translate_anchor(&val.translate_anchor)
                 .unwrap_or(default.translate_anchor),
@@ -1074,6 +1125,7 @@ impl<'a> From<&'a navara_material::TextMaterial> for TextMaterial {
             color: Some(value.color),
             anchor: Some(value.anchor.as_str().to_string()),
             offset: Some(value.offset.into()),
+            variable_anchors: Some(value.variable_anchors.iter().map(Into::into).collect()),
             translate: Some(value.translate.into()),
             translate_anchor: Some(value.translate_anchor.as_str().to_string()),
             text_facing: value.text_facing.map(|f| f.as_str().to_string()),
@@ -1137,6 +1189,8 @@ impl TextMaterial {
             color: self.color.unwrap_or(other.color),
             anchor: parse_anchor(&self.anchor).unwrap_or(other.anchor),
             offset: self.offset.unwrap_or(other.offset.into()).into(),
+            variable_anchors: parse_variable_anchors(&self.variable_anchors)
+                .unwrap_or_else(|| other.variable_anchors.clone()),
             translate: self.translate.unwrap_or(other.translate.into()).into(),
             translate_anchor: parse_translate_anchor(&self.translate_anchor)
                 .unwrap_or(other.translate_anchor),
@@ -2656,10 +2710,10 @@ pub struct HillshadeMaterial {
 #[cfg(test)]
 mod test {
     use super::{
-        TextMaterial, parse_anchor, parse_facing, parse_geometry_types, parse_padding,
-        parse_translate_anchor,
+        TextMaterial, VariableAnchor, parse_anchor, parse_facing, parse_geometry_types,
+        parse_padding, parse_translate_anchor, parse_variable_anchors,
     };
-    use navara_material::{Facing, SourceGeometryType};
+    use navara_material::{Anchor, Facing, SourceGeometryType};
 
     #[test]
     fn parse_padding_expands_like_css() {
@@ -2740,6 +2794,22 @@ mod test {
             assert_eq!(anchor.as_str(), name);
         }
         assert_eq!(parse_translate_anchor(&Some("screen".to_string())), None);
+    }
+
+    #[test]
+    fn parse_variable_anchors_drops_unknown_anchors() {
+        let entry = |anchor: &str, offset| VariableAnchor {
+            anchor: anchor.to_string(),
+            offset,
+        };
+        let parsed = parse_variable_anchors(&Some(vec![
+            entry("top", Some(crate::Vec2 { x: 0.0, y: 1.5 })),
+            entry("middle", None),
+            entry("left", None),
+        ]))
+        .unwrap();
+        let anchors: Vec<_> = parsed.iter().map(|v| (v.anchor, v.offset.y)).collect();
+        assert_eq!(anchors, vec![(Anchor::Top, 1.5), (Anchor::Left, 0.0)]);
     }
 
     #[test]

@@ -287,6 +287,16 @@ impl Anchor {
     }
 }
 
+/// One placement a label may take: the part of the block placed at the anchor
+/// point and the shift after it (MapLibre's `text-variable-anchor-offset`
+/// entry).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct VariableAnchor {
+    pub anchor: Anchor,
+    /// Shift from the anchor point, x right and y down, in ems.
+    pub offset: Vec2,
+}
+
 /// Frame a label's or sprite's `translate` is measured in (MapLibre's
 /// `*-translate-anchor`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -648,6 +658,11 @@ pub struct TextMaterial {
     /// `size`). Lies in the label's own plane, so it turns with `rotation`.
     /// Default `(0, 0)`.
     pub offset: Vec2,
+    /// Placements the declutter pass tries in order, keeping the first whose
+    /// box is free; the one in use is tried first, so a label only moves when
+    /// it must. Overrides `anchor` and `offset` when not empty, except along a
+    /// line. Without declutter the first is used. Default empty.
+    pub variable_anchors: Vec<VariableAnchor>,
     /// Screen-pixel shift of the drawn label, x right and y down, applied after
     /// projection so it stays the same number of pixels at any distance
     /// (MapLibre's `text-translate`). Default `(0, 0)`.
@@ -814,6 +829,7 @@ impl Default for TextMaterial {
             color: 0xffffff,
             anchor: Anchor::Center,
             offset: Vec2::ZERO,
+            variable_anchors: Vec::new(),
             translate: Vec2::ZERO,
             translate_anchor: TranslateAnchor::Map,
             text_facing: None,

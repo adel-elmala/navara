@@ -157,6 +157,7 @@ The callback function can return an object containing the following properties:
 | `rotation` | `number` | In-plane rotation, in degrees, clockwise as seen from the front (for points/billboards/text). It turns the feature around its anchor, except that a label following a line spins each glyph about its own center. Lets every feature in one layer point a different way. Overrides the material's `rotation` |
 | `anchor` | `"center" \| "left" \| "right" \| "top" \| "bottom" \| "top-left" \| "top-right" \| "bottom-left" \| "bottom-right"` | Which part of the point, billboard, or label sits on its position (for points/billboards/text). Overrides the material's `anchor` (see [`anchor`](../../../three/material/text-material/#anchor)) |
 | `offset` | `{ x: number, y: number }` | Shift from the anchor point, `x` right and `y` down: in ems for text, in the unit of `size` for points and billboards. Overrides the material's `offset` (see [`offset`](../../../three/material/text-material/#offset)) |
+| `variableAnchors` | `{ anchor: Anchor, offset?: { x: number, y: number } }[]` | Placements the declutter pass tries in order for this label (for text features), offsets in ems. Overrides the material's [`variableAnchors`](../../../three/material/text-material/#variableanchors) |
 | `textAlign` | `"left" \| "center" \| "right" \| "auto"` | Line justification (for text features). `"auto"` follows the label's `anchor`. Overrides the material's [`textAlign`](../../../three/material/text-material/#textalign) |
 | `emissive` | `Color` | Emissive color (for batched polygons/3D Tiles models/points/billboards/text, ignored on models without batch/feature ids). Pairs with `emissiveIntensity` and drives selective bloom. On text only the glyph fill glows, while the outline and background stay dark |
 | `emissiveIntensity` | `number` | Emissive intensity multiplier (for batched polygons/3D Tiles models/points/billboards/text) |
@@ -367,6 +368,12 @@ type EvaluatedValue = {
    * the unit of `size` for points and billboards. Overrides the material's
    * `offset` */
   offset?: { x: number; y: number };
+  /** Placements the declutter pass tries in order (for text features),
+   * offsets in ems. Overrides the material's `variableAnchors` */
+  variableAnchors?: {
+    anchor: NonNullable<EvaluatedValue["anchor"]>;
+    offset?: { x: number; y: number };
+  }[];
   /** Line justification (for text features); `"auto"` follows `anchor`.
    * Overrides the material's `textAlign` */
   textAlign?: "left" | "center" | "right" | "auto";

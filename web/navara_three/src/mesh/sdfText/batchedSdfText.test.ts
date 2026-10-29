@@ -12,7 +12,9 @@ import {
   readBatchVec3,
   unpackOrientation,
 } from "../../batchTexture";
+import type { DeclutterCandidate } from "../../declutter/types";
 import type { EventContext } from "../../event/context";
+import type { VariableAnchor } from "../../type";
 
 import { BatchedSdfTextMesh } from "./batchedSdfText";
 import { LabelRow, type LabelDataTexture } from "./labelData";
@@ -395,6 +397,95 @@ describe("BatchedSdfTextMesh anchor and offset", () => {
   });
 });
 
+// Same font as above: "AB" is 1 em wide in a line box spanning [-0.2, 0.8]
+// em, so a left anchor shifts it by (0, -0.3) and a right one by (-1, -0.3).
+describe("BatchedSdfTextMesh variable anchors", () => {
+  type Candidate = DeclutterCandidate & { variants: number; variant: number };
+  const shiftOf = (mesh: BatchedSdfTextMesh) => [
+    store(mesh).getComponent(0, LabelRow.POSITION_HIGH, 3),
+    store(mesh).getComponent(0, LabelRow.POSITION_LOW, 3),
+  ];
+  const sides: VariableAnchor[] = [
+    { anchor: "left" },
+    { anchor: "right", offset: { x: 0, y: 1 } },
+    { anchor: "center" },
+  ];
+  function labelWithSides(mat = material()) {
+    const made = makeMesh(mat);
+    made.mesh.setTextByBatchIndex(0, "AB");
+    made.mesh.setFeatureVariableAnchorsByBatchIndex(0, sides);
+    return made;
+  }
+
+  it("places a label by its first anchor until declutter picks another", () => {
+    const { mesh } = labelWithSides();
+    expect(shiftOf(mesh)[0]).toBeCloseTo(0);
+
+    mesh.applyDeclutter(0, false, 1);
+    const [x, y] = shiftOf(mesh);
+    expect(x).toBeCloseTo(-1);
+    expect(y).toBeCloseTo(-1.3);
+  });
+
+  it("keeps a hidden label at the anchor it had", () => {
+    const { mesh } = labelWithSides();
+    mesh.applyDeclutter(0, true, 1);
+    expect(shiftOf(mesh)[0]).toBeCloseTo(0);
+  });
+
+  it("offers declutter one row per anchor, the one in use first", () => {
+    const { mesh } = labelWithSides();
+    mesh.applyDeclutter(0, false, 2);
+    const out: DeclutterCandidate[] = [];
+    mesh.collectDeclutterCandidates(out);
+
+    const rows = out as Candidate[];
+    expect(rows.map((c) => [c.variants, c.variant, c.isShown])).toEqual([
+      [3, 2, true],
+      [0, 0, false],
+      [0, 1, false],
+    ]);
+    // Each row is the block moved by its own anchor, at 16 px.
+    expect(rows.map((c) => c.minX)).toEqual([-8, 0, -16]);
+    // The right anchor's offset is 1 em down.
+    expect(rows[2].minY - rows[1].minY).toBeCloseTo(-16);
+  });
+
+  it("stays at the anchor in use when the list is evaluated again", () => {
+    const { mesh } = labelWithSides();
+    mesh.applyDeclutter(0, false, 1);
+    mesh.setFeatureVariableAnchorsByBatchIndex(0, [
+      { anchor: "right" },
+      { anchor: "left" },
+    ]);
+    const [x, y] = shiftOf(mesh);
+    expect(x).toBeCloseTo(-1);
+    expect(y).toBeCloseTo(-0.3);
+  });
+
+  it("re-lays out a move only when the justification follows the anchor", () => {
+    const auto = labelWithSides(material({ textAlign: "auto" }));
+    let shapes = auto.fontManager.shapeText.mock.calls.length;
+    auto.mesh.applyDeclutter(0, false, 1);
+    expect(auto.fontManager.shapeText.mock.calls.length).toBe(shapes + 1);
+
+    const centred = labelWithSides();
+    shapes = centred.fontManager.shapeText.mock.calls.length;
+    centred.mesh.applyDeclutter(0, false, 1);
+    expect(centred.fontManager.shapeText.mock.calls.length).toBe(shapes);
+  });
+
+  it("takes over the anchor a swapped-out tile showed its label at", () => {
+    const { mesh } = labelWithSides();
+    (mesh.ctx as { declutter?: unknown }).declutter = {
+      markDirty: vi.fn(),
+      recentlyShownVariant: vi.fn(() => 1),
+    };
+    mesh.setActive(true);
+    expect(shiftOf(mesh)[0]).toBeCloseTo(-1);
+  });
+});
+
 // The evaluator applies `show` before `text`. A show:false for a feature with
 // no label yet must survive until the text setter creates the label — labels
 // stay lazily allocated, so the intent is parked, not applied.
@@ -612,7 +703,7 @@ describe("BatchedSdfTextMesh deferred font preparation", () => {
       register: vi.fn(),
       unregister: vi.fn(),
       markDirty: vi.fn(),
-      wasRecentlyShown: vi.fn(() => false),
+      recentlyShownVariant: vi.fn(() => undefined),
     };
     const mesh = new BatchedSdfTextMesh(
       makeCtx(fontManager, declutter),

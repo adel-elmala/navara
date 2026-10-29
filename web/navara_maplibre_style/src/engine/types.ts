@@ -337,7 +337,8 @@ export type PropertySpec = {
     | "array"
     | "formatted"
     | "resolvedImage"
-    | "padding";
+    | "padding"
+    | "variableAnchorOffsetCollection";
   default?: unknown;
   minimum?: number;
   maximum?: number;

@@ -231,6 +231,15 @@
         "text-offset": {
           "status": "✅"
         },
+        "text-variable-anchor": {
+          "status": "⚠️ With overlap allowed and every anchor taken, the label overlaps at the anchor it is at rather than the first"
+        },
+        "text-variable-anchor-offset": {
+          "status": "⚠️ With overlap allowed and every anchor taken, the label overlaps at the anchor it is at rather than the first"
+        },
+        "text-radial-offset": {
+          "status": "✅"
+        },
         "icon-offset": {
           "status": "✅"
         },

@@ -48,7 +48,7 @@ import {
   resolveOrientation,
   type ResolvedOrientation,
 } from "../../material/orientation";
-import type { Anchor, Overlap, TextAlign } from "../../type";
+import type { Anchor, Overlap, TextAlign, VariableAnchor } from "../../type";
 import { buildBatchIndexMap } from "../batchIndexMap";
 import { GEOMETRY_TYPES } from "../constants";
 import { InstancedMesh, type InstancedMeshOptions } from "../instanced";
@@ -122,6 +122,9 @@ type PositionsInfo = PositionsInfoBase &
       }
   );
 
+/** One placement a label may take, its offset in ems, x right and y down. */
+type Placement = { anchor: Anchor; offsetEm: readonly [number, number] };
+
 /** A feature's packed orientation, as `unpackOrientation` returns it. */
 type Orientation = ReturnType<typeof unpackOrientation>;
 
@@ -191,7 +194,14 @@ type LabelRecord = {
    *  `text-offset` are data-driven. */
   placeAnchor: Anchor;
   offsetEm: [number, number];
-  /** `textAlign` name; `"auto"` follows {@link placeAnchor}. Baked into the
+  /** Placements the declutter pass picks from, overriding
+   *  {@link placeAnchor} and {@link offsetEm} when not empty, except along a
+   *  line; `variant` is the one in use. */
+  variableAnchors: readonly Placement[];
+  variant: number;
+  /** Shift of each of {@link variableAnchors}, `[x0, y0, x1, y1, …]` ems. */
+  variantShiftsEm: number[];
+  /** `textAlign` name; `"auto"` follows the anchor in use. Baked into the
    *  glyph quads, so a change of the resolved factor re-lays out the label. */
   textAlign: string | undefined;
   /** Where the shader moves the block from its layout origin, in ems; mirrors
@@ -333,8 +343,10 @@ export class BatchedSdfTextMesh
   /** Layout inputs baked into glyph quads; a change forces a re-layout. */
   private _maxWidth: number;
   private _lineHeight: number;
-  /** The material's `offset`, read once: wasm getters clone. */
+  /** The material's `offset` and `variableAnchors`, read once: wasm getters
+   *  clone. */
   private _materialOffset: [number, number];
+  private _materialVariableAnchors: readonly Placement[];
   private _spreadGlyphs: boolean;
 
   /** Labels currently parked in `prepareDeferred`, so the per-pass promotion
@@ -389,6 +401,7 @@ export class BatchedSdfTextMesh
     this._maxWidth = material.maxWidth ?? 0;
     this._lineHeight = material.lineHeight ?? 1.0;
     this._materialOffset = vec2Tuple(material.offset);
+    this._materialVariableAnchors = toPlacements(material.variableAnchors);
     this._spreadGlyphs = material.spreadGlyphs ?? false;
     const declutter = resolveDeclutterSettings(material);
     this._declutter = declutter.participates;
@@ -952,6 +965,9 @@ export class BatchedSdfTextMesh
       opacity: clamp01(material.opacity ?? 1.0),
       placeAnchor: materialAnchor(material),
       offsetEm: [...this._materialOffset],
+      variableAnchors: this._materialVariableAnchors,
+      variant: 0,
+      variantShiftsEm: [],
       textAlign: material.textAlign,
       shiftEm: [0, 0],
       widthEm: 0,
@@ -1103,17 +1119,35 @@ export class BatchedSdfTextMesh
     );
   }
 
+  /** Whether the label is placed by one of its variable anchors. */
+  private _usesVariants(record: LabelRecord): boolean {
+    return record.variableAnchors.length > 0 && !this._isAlongLine(record);
+  }
+
+  /** The placement the label is drawn with. */
+  private _placementOf(record: LabelRecord): Placement {
+    return this._usesVariants(record)
+      ? record.variableAnchors[record.variant]
+      : { anchor: record.placeAnchor, offsetEm: record.offsetEm };
+  }
+
   /** Recompute where the anchor and offset move the block, from its current
-   *  layout, and write it to the position rows' `w`. */
+   *  layout — for each variable anchor too — and write the one in use to the
+   *  position rows' `w`. */
   private _writeShift(record: LabelRecord): void {
-    record.shiftEm = anchorShiftEm(
-      record.placeAnchor,
-      record.offsetEm[0],
-      record.offsetEm[1],
-      record.widthEm,
-      record.topEm,
-      record.bottomEm,
-    );
+    const shift = (p: Placement) =>
+      anchorShiftEm(
+        p.anchor,
+        p.offsetEm[0],
+        p.offsetEm[1],
+        record.widthEm,
+        record.topEm,
+        record.bottomEm,
+      );
+    record.variantShiftsEm = this._usesVariants(record)
+      ? record.variableAnchors.flatMap(shift)
+      : [];
+    record.shiftEm = shift(this._placementOf(record));
     this._labelData.setComponent(
       record.slot,
       LabelRow.POSITION_HIGH,
@@ -1130,7 +1164,15 @@ export class BatchedSdfTextMesh
 
   /** The label's resolved justification factor (see `resolveTextAlign`). */
   private _alignOf(record: LabelRecord): number {
-    return resolveTextAlign(record.textAlign, record.placeAnchor);
+    return resolveTextAlign(record.textAlign, this._placementOf(record).anchor);
+  }
+
+  /** Switch a label to another of its variable anchors. */
+  private _setVariant(record: LabelRecord, variant: number): void {
+    if (variant === record.variant) return;
+    const prevAlign = this._alignOf(record);
+    record.variant = variant;
+    this._replace(record, prevAlign);
   }
 
   /**
@@ -1445,7 +1487,6 @@ export class BatchedSdfTextMesh
       if (this._lineRejected?.[record.slot]) continue;
 
       const w = record.widthEm;
-      const [shiftX, shiftY] = record.shiftEm;
       // Line labels are turned to follow their road, so the placement pass
       // hands back the box they actually cover; everything else is its block
       // around the anchor, which the kernel turns as the shader does.
@@ -1461,25 +1502,20 @@ export class BatchedSdfTextMesh
       const orientation = alongLine
         ? defaults
         : this._resolveOrientation(record.batchIndex, defaults);
-      out.push({
+      const candidate = {
         anchorX: record.anchor[0],
         anchorY: record.anchor[1],
         anchorZ: record.anchor[2],
         addHeight: record.addHeight,
-        minX: hasBox ? boxes[b] : shiftX * size,
-        maxX: hasBox ? boxes[b + 1] : (w + shiftX) * size,
-        minY: hasBox ? boxes[b + 2] : (record.minYEm + shiftY) * size,
-        maxY: hasBox ? boxes[b + 3] : (record.maxYEm + shiftY) * size,
         sizeInMeters: state.sizeInMeters,
         rank: this._declutterRank,
         priority: record.priorityOverride ?? this._declutterPriority,
-        isShown: record.declutterTarget === 0,
         overlap: this._overlap,
         ignorePlacement: this._ignorePlacement,
         padding: this._declutterPadding,
         pairGroup: this._pairGroup,
         featureIndex: record.batchIndex,
-        pairRole: "label",
+        pairRole: "label" as const,
         standalone: this._standalone,
         flatFacing: !alongLine && orientation.flatFacing,
         rotateWithCamera: alongLine || orientation.rotateWithCamera,
@@ -1491,13 +1527,36 @@ export class BatchedSdfTextMesh
         owner: this,
         handle: record.slot,
         contentKey: record.text,
-      });
+      };
+      // One row per variable anchor, the one in use first and the rest in
+      // their order, so the pass moves a label only when it must.
+      const shifts = record.variantShiftsEm;
+      const rows = Math.max(1, shifts.length / 2);
+      for (let n = 0; n < rows; n++) {
+        const variant =
+          n === 0 ? record.variant : n <= record.variant ? n - 1 : n;
+        const [shiftX, shiftY] =
+          shifts.length > 0
+            ? [shifts[variant * 2], shifts[variant * 2 + 1]]
+            : record.shiftEm;
+        out.push({
+          ...candidate,
+          minX: hasBox ? boxes[b] : shiftX * size,
+          maxX: hasBox ? boxes[b + 1] : (w + shiftX) * size,
+          minY: hasBox ? boxes[b + 2] : (record.minYEm + shiftY) * size,
+          maxY: hasBox ? boxes[b + 3] : (record.maxYEm + shiftY) * size,
+          isShown: n === 0 && record.declutterTarget === 0,
+          variants: n === 0 ? rows : 0,
+          variant,
+        });
+      }
     }
   }
 
-  applyDeclutter(handle: number, hidden: boolean): void {
+  applyDeclutter(handle: number, hidden: boolean, variant: number): void {
     const record = this._labels[handle];
     if (!record) return;
+    if (!hidden) this._setVariant(record, variant);
     const target = hidden ? 1 : 0;
     if (record.declutterTarget === target) return;
     record.declutterTarget = target;
@@ -1546,7 +1605,16 @@ export class BatchedSdfTextMesh
         for (const record of this._labels) {
           if (!record.show || record.declutterHide === 0) continue;
           const a = record.anchor;
-          if (declutter.wasRecentlyShown(record.text, a[0], a[1], a[2])) {
+          const variant = declutter.recentlyShownVariant(
+            record.text,
+            a[0],
+            a[1],
+            a[2],
+          );
+          if (variant !== undefined) {
+            if (variant < record.variableAnchors.length) {
+              this._setVariant(record, variant);
+            }
             record.declutterHide = 0;
             record.declutterTarget = 0;
             this._writeDeclutterHide(record);
@@ -1878,6 +1946,12 @@ export class BatchedSdfTextMesh
     this._materialOffset = offset;
     const offsetChanged =
       offset[0] !== prevOffset[0] || offset[1] !== prevOffset[1];
+    const variableAnchors = toPlacements(material.variableAnchors);
+    const variableAnchorsChanged = !samePlacements(
+      variableAnchors,
+      this._materialVariableAnchors,
+    );
+    this._materialVariableAnchors = variableAnchors;
     const textAlignChanged =
       (material.textAlign ?? "center") !== (prevMaterial.textAlign ?? "center");
     const mat = this.material as ShaderMaterial;
@@ -1956,6 +2030,7 @@ export class BatchedSdfTextMesh
       const prevAlign = this._alignOf(record);
       if (anchorChanged) record.placeAnchor = anchor;
       if (offsetChanged) record.offsetEm = [...offset];
+      if (variableAnchorsChanged) setPlacements(record, variableAnchors);
       if (textAlignChanged) record.textAlign = material.textAlign;
       if (materialText !== undefined && materialText !== "") {
         // The material text overrides whatever the evaluator asked for —
@@ -1966,7 +2041,12 @@ export class BatchedSdfTextMesh
       } else if (forceUpdate || layoutChanged || letterSpacingChanged) {
         // Font or layout changed — re-lay-out existing text.
         this._applyText(record, record.text);
-      } else if (anchorChanged || offsetChanged || textAlignChanged) {
+      } else if (
+        anchorChanged ||
+        offsetChanged ||
+        variableAnchorsChanged ||
+        textAlignChanged
+      ) {
         this._replace(record, prevAlign);
       }
       this._recomputeShow(record);
@@ -2281,6 +2361,33 @@ export class BatchedSdfTextMesh
     }
   }
 
+  /**
+   * Placements the declutter pass picks from for one feature, overriding the
+   * material's `variableAnchors`. A label keeps the anchor it is placed by if
+   * the new list has it, so a re-evaluated list doesn't make it jump.
+   */
+  setFeatureVariableAnchorsByBatchIndex(
+    batchIndex: number,
+    anchors: readonly VariableAnchor[],
+  ) {
+    const placements = toPlacements(anchors);
+    let changed = false;
+    for (const instanceIndex of this._instancesOfBatchIndex(batchIndex)) {
+      const record = this._ensureLabel(instanceIndex);
+      if (!record || samePlacements(record.variableAnchors, placements)) {
+        continue;
+      }
+      const prevAlign = this._alignOf(record);
+      setPlacements(record, placements);
+      this._replace(record, prevAlign);
+      changed = true;
+    }
+    if (changed) {
+      this._markDeclutterDirty();
+      this._needRender?.();
+    }
+  }
+
   /** Line justification for one feature, overriding the material's
    *  `textAlign`. */
   setFeatureTextAlignByBatchIndex(batchIndex: number, textAlign: TextAlign) {
@@ -2407,6 +2514,44 @@ function materialAnchor(material: NavaraTextMaterial): Anchor {
 
 function vec2Tuple(v: { x: number; y: number } | undefined): [number, number] {
   return [v?.x ?? 0, v?.y ?? 0];
+}
+
+/** Variable anchors as placements. The engine sends anchor names it parsed. */
+function toPlacements(
+  anchors:
+    | readonly { anchor: string; offset?: { x: number; y: number } }[]
+    | undefined,
+): Placement[] {
+  return (anchors ?? []).map((v) => ({
+    anchor: v.anchor as Anchor,
+    offsetEm: vec2Tuple(v.offset),
+  }));
+}
+
+function samePlacements(
+  a: readonly Placement[],
+  b: readonly Placement[],
+): boolean {
+  return (
+    a.length === b.length &&
+    a.every(
+      (p, i) =>
+        p.anchor === b[i].anchor &&
+        p.offsetEm[0] === b[i].offsetEm[0] &&
+        p.offsetEm[1] === b[i].offsetEm[1],
+    )
+  );
+}
+
+/** Give a label new variable anchors, staying at the anchor it is placed by
+ *  if the list has it. */
+function setPlacements(record: LabelRecord, placements: readonly Placement[]) {
+  const current = record.variableAnchors[record.variant]?.anchor;
+  record.variableAnchors = placements;
+  record.variant = Math.max(
+    0,
+    placements.findIndex((p) => p.anchor === current),
+  );
 }
 
 function clamp01(value: number): number {

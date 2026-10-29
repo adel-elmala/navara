@@ -23,6 +23,7 @@ import ThreeView, {
   type SourceGeometryType,
   type TextAlign,
   type TranslateAnchor,
+  type VariableAnchor,
   type VectorLayer,
 } from "@navaramap/three";
 import type {
@@ -147,6 +148,27 @@ const effectsState = () => ({
   emissiveIntensity: 0,
 });
 
+/** Variable-anchor presets: MapLibre's radial offset of 0.6 em around the
+ *  point, without its baseline correction. */
+const VARIABLE_ANCHORS: Record<string, VariableAnchor[]> = {
+  none: [],
+  sides: [
+    { anchor: "left", offset: { x: 0.6, y: 0 } },
+    { anchor: "right", offset: { x: -0.6, y: 0 } },
+    { anchor: "top", offset: { x: 0, y: 0.6 } },
+    { anchor: "bottom", offset: { x: 0, y: -0.6 } },
+  ],
+  corners: (
+    ["top-left", "top-right", "bottom-left", "bottom-right"] as const
+  ).map((anchor) => ({
+    anchor,
+    offset: {
+      x: anchor.endsWith("left") ? 0.45 : -0.45,
+      y: anchor.startsWith("top") ? 0.45 : -0.45,
+    },
+  })),
+};
+
 const text = {
   content: {
     fromFeature: true,
@@ -174,6 +196,7 @@ const text = {
     offset: { x: 0, y: 0 },
     translate: { x: 0, y: 0 },
     translateAnchor: "map" as TranslateAnchor,
+    variableAnchors: "none" as keyof typeof VARIABLE_ANCHORS,
   },
   orientation: {
     ...orientationState(),
@@ -270,6 +293,7 @@ const textMaterial = (): TextDescription => ({
   borderColor: color(text.style.borderColor),
   borderWidth: text.style.borderWidth,
   ...text.layout,
+  variableAnchors: VARIABLE_ANCHORS[text.layout.variableAnchors],
   ...unlessAuto("textFacing", text.orientation.textFacing),
   keepUpright: text.orientation.keepUpright,
   maxAngle: text.placement.maxAngle,
@@ -530,6 +554,9 @@ layout.addBinding(text.layout, "translate", {
 });
 layout.addBinding(text.layout, "translateAnchor", {
   options: TRANSLATE_ANCHOR,
+});
+layout.addBinding(text.layout, "variableAnchors", {
+  options: Object.fromEntries(Object.keys(VARIABLE_ANCHORS).map((k) => [k, k])),
 });
 
 const textOrientation = addOrientationFolder(textPage, text.orientation);

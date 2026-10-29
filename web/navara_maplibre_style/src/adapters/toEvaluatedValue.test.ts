@@ -845,6 +845,39 @@ describe("anchor, offset and justify", () => {
     expect(result.offset).toEqual({ x: 4, y: -6 });
   });
 
+  it("maps variable anchors only when the style sets them", () => {
+    const layout = {
+      "text-field": "Label",
+      "text-variable-anchor": ["left", "right"],
+      "text-radial-offset": ["get", "r"],
+    };
+    const evaluators = createLayoutEvaluators(symbol(layout), engine, "Point");
+    const ctx = { properties: { r: 2 }, zoom: 10 };
+    const values = Object.fromEntries(
+      Object.entries(evaluators).map(([key, fn]) => [key, fn(ctx)]),
+    );
+    const result = toEvaluatedValue(symbol(layout), {}, values, "text");
+    expect(result.variableAnchors).toEqual([
+      { anchor: "left", offset: { x: 2, y: 0 } },
+      { anchor: "right", offset: { x: -2, y: 0 } },
+    ]);
+
+    const plain = createLayoutEvaluators(symbol({}), engine, "Point");
+    expect(plain["text-variable-anchor"]).toBeUndefined();
+    expect(plain["text-radial-offset"]).toBeUndefined();
+  });
+
+  it("moves a fixed anchor by a radial offset", () => {
+    const result = toEvaluatedValue(
+      symbol({}),
+      {},
+      { "text-field": "Label", "text-anchor": "left", "text-radial-offset": 1 },
+      "text",
+    );
+    expect(result.offset).toEqual({ x: 1, y: 0 });
+    expect(result).not.toHaveProperty("variableAnchors");
+  });
+
   it("drops values outside the spec's enums", () => {
     const result = toEvaluatedValue(
       symbol({}),

@@ -30,7 +30,7 @@ import {
   type GeometryType,
   VALID_GEOMETRY_TYPES,
 } from "../mesh";
-import type { Anchor, TextAlign } from "../type";
+import type { Anchor, TextAlign, VariableAnchor } from "../type";
 
 type AvailableMaterialProperty = ExtractProperties<
   PointMaterial &
@@ -95,6 +95,9 @@ export type EvaluatableMaterialProperty = {
    *  in ems for text, in the unit of `size` for points and billboards.
    *  Overrides the material's `offset`. */
   offset: { x: number; y: number };
+  /** Placements the declutter pass picks from for this label (for text), in
+   *  order. Overrides the material's `variableAnchors`. */
+  variableAnchors: VariableAnchor[];
   /** Line justification of this label (for text). Overrides the material's
    *  `textAlign`. */
   textAlign: TextAlign;
@@ -126,6 +129,7 @@ type EvaluatedMaterialProperty = {
   rotation: number;
   anchor: Anchor;
   offset: { x: number; y: number };
+  variableAnchors: VariableAnchor[];
   textAlign: TextAlign;
   emissive: Color;
   emissiveIntensity: number;
@@ -604,6 +608,15 @@ export class FeatureEvaluator {
       }
       if (evaluated.anchor != null && obj instanceof BatchedSdfTextMesh) {
         obj.setFeatureAnchorByBatchIndex(batchIndex, evaluated.anchor);
+      }
+      if (
+        evaluated.variableAnchors != null &&
+        obj instanceof BatchedSdfTextMesh
+      ) {
+        obj.setFeatureVariableAnchorsByBatchIndex(
+          batchIndex,
+          evaluated.variableAnchors,
+        );
       }
       if (evaluated.textAlign != null && obj instanceof BatchedSdfTextMesh) {
         obj.setFeatureTextAlignByBatchIndex(batchIndex, evaluated.textAlign);

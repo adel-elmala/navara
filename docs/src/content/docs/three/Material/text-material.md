@@ -1027,3 +1027,28 @@ Can also be set per feature from a [feature evaluator](../../api/feature-evaluat
   }
 }
 ```
+
+### variableAnchors
+
+**Type:** `{ anchor: Anchor, offset?: Vec2 }[] | undefined`
+
+**Description:** Placements the label may take, tried in order by [`declutter`](#declutter) until one has room, as MapLibre's `text-variable-anchor-offset` does. Each entry is an [`anchor`](#anchor) and an [`offset`](#offset) in ems. The placement in use is tried first, so a label moves only when its current spot is taken. If no placement has room, the label is hidden; with an [`overlap`](#overlap) other than `"never"`, it is drawn at the placement in use instead. When the list is not empty it replaces `anchor` and `offset`, except for labels placed along a line. Without `declutter` the first entry is used. With [`textAlign`](#textalign) `"auto"` the lines align towards the side of the chosen anchor.
+
+Can also be set per feature from a [feature evaluator](../../api/feature-evaluator/).
+
+**Default:** `[]`
+
+**Example:**
+
+```typescript
+{
+  text: {
+    textAlign: "auto",
+    variableAnchors: [
+      { anchor: "left", offset: { x: 0.5, y: 0 } }, // Right of the point
+      { anchor: "right", offset: { x: -0.5, y: 0 } }, // Left of the point
+      { anchor: "top", offset: { x: 0, y: 0.5 } } // Below the point
+    ]
+  }
+}
+```

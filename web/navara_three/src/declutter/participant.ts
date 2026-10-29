@@ -34,6 +34,7 @@ export function resolveDeclutterSettings(material: {
   ignorePlacement?: boolean;
   declutterPadding?: ArrayLike<number>;
   standalone?: boolean;
+  variableAnchors?: ArrayLike<unknown>;
 }): DeclutterSettings {
   const overlap = (material.overlap ?? "never") as Overlap;
   const ignorePlacement = material.ignorePlacement ?? false;
@@ -41,7 +42,8 @@ export function resolveDeclutterSettings(material: {
   return {
     participates:
       (material.declutter ?? true) &&
-      !(overlap === "always" && ignorePlacement && standalone),
+      ((material.variableAnchors?.length ?? 0) > 1 ||
+        !(overlap === "always" && ignorePlacement && standalone)),
     rank: material.declutterRank ?? 0,
     priority: material.declutterPriority ?? 0,
     overlap,

@@ -83,7 +83,10 @@ where its `anchor` and `offset` (both per label, since MapLibre's
 origin, resolved on the CPU by `anchorShiftEm` against the layout's line box
 (`LabelLayout.topEm`/`bottomEm`). An anchor change only rewrites the shift,
 unless `textAlign: "auto"` makes the justification follow it, which re-lays out
-the glyphs. `STATE.w` is the feature index into the
+the glyphs. A point label with `variableAnchors` is shifted by the one the
+declutter pass placed it with (see [DECLUTTER.md](DECLUTTER.md#variable-anchors));
+the record keeps every variable anchor's shift for the pass's candidate rows.
+`STATE.w` is the feature index into the
 batch data texture. `PATH` is all zero unless the label sits on a line (see
 [LINE_PLACEMENT.md](LINE_PLACEMENT.md)).
 

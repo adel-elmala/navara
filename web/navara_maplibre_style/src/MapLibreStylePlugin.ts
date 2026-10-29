@@ -989,6 +989,10 @@ export class MapLibreStylePlugin extends Plugin<ThreeView, ViewContext> {
           "text-anchor",
           "text-offset",
           "text-justify",
+          // Not given spec-default evaluators: set only when the style does.
+          "text-variable-anchor",
+          "text-variable-anchor-offset",
+          "text-radial-offset",
           "symbol-sort-key",
         ];
         for (const key of textProps) {

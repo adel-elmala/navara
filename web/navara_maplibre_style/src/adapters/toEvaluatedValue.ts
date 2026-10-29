@@ -8,6 +8,7 @@ import {
   type Anchor,
   type GeometryType,
   type TextAlign,
+  type VariableAnchor,
 } from "@navaramap/three";
 
 import type { StyleEngine } from "../engine/StyleEngine";
@@ -19,6 +20,12 @@ import {
   type ValueExpression,
 } from "../engine/types";
 import { expressionUsesFeatureData } from "../utils/expressionHelpers";
+
+import {
+  fromRadialOffset,
+  isAnchor,
+  resolveVariableAnchors,
+} from "./textAnchor";
 
 type EvaluatedResult = {
   color?: Color;
@@ -37,6 +44,7 @@ type EvaluatedResult = {
   anchor?: Anchor;
   /** x right, y down: ems for text, pixels for icons. */
   offset?: { x: number; y: number };
+  variableAnchors?: VariableAnchor[];
   textAlign?: TextAlign;
 };
 
@@ -442,18 +450,6 @@ function applyTextTransform(text: string, transform: unknown): string {
   return text;
 }
 
-const ANCHORS: ReadonlySet<string> = new Set<Anchor>([
-  "center",
-  "left",
-  "right",
-  "top",
-  "bottom",
-  "top-left",
-  "top-right",
-  "bottom-left",
-  "bottom-right",
-]);
-
 /**
  * Apply the per-feature placement properties shared by icons and text:
  * `*-anchor`, `*-offset` (multiplied by `offsetScale`), `*-rotate` and
@@ -466,9 +462,7 @@ function applySymbolPlacement(
   offsetScale: number,
 ): void {
   const anchor = layoutValues?.[`${prefix}-anchor`];
-  if (typeof anchor === "string" && ANCHORS.has(anchor)) {
-    result.anchor = anchor as Anchor;
-  }
+  if (isAnchor(anchor)) result.anchor = anchor;
   const offset = layoutValues?.[`${prefix}-offset`];
   if (
     Array.isArray(offset) &&
@@ -595,6 +589,16 @@ function processSymbolLayer(
 
       // `text-offset` is in ems, like Navara's text `offset`.
       applySymbolPlacement(result, layoutValues, "text", 1);
+      // The variable-anchor properties only have values when the style sets
+      // them; MapLibre tells "unset" from the default the same way.
+      const variableAnchors = resolveVariableAnchors(layoutValues ?? {});
+      const radial = layoutValues?.["text-radial-offset"];
+      if (variableAnchors) {
+        result.variableAnchors = variableAnchors;
+      } else if (typeof radial === "number" && radial !== 0) {
+        const [x, y] = fromRadialOffset(result.anchor ?? "center", radial);
+        result.offset = { x, y };
+      }
 
       const justify = layoutValues?.["text-justify"];
       if (
