@@ -282,6 +282,9 @@ export class DeclutterManager {
       input[o + 22] = c.flatFacing ? 1 : 0;
       input[o + 23] = c.rotateWithCamera ? 1 : 0;
       input[o + 24] = c.rotation;
+      input[o + 25] = c.translate[0];
+      input[o + 26] = c.translate[1];
+      input[o + 27] = c.translateViewport ? 0 : 1;
     }
 
     // The pass may run before the renderer refreshed matrixWorldInverse, so

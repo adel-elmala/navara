@@ -23,6 +23,11 @@ export type InstancedSpriteBaseProps = {
   /** Shift from the anchor point, x right and y down, in the unit of the
    *  size. */
   offset?: [number, number];
+  /** Screen-pixel shift of the drawn quad, x right and y down. */
+  translate?: [number, number];
+  /** `true` keeps `translate` on the screen axes; `false` turns it with the
+   *  camera heading (MapLibre's `*-translate-anchor: map`). */
+  translateViewport?: boolean;
   /** `false` (the default) keeps the quad in the screen plane; `true` lays it
    *  on the globe surface around the anchor, wrapped to its curvature.
    *  Material-level default; per-feature overrides come from the batch data
@@ -82,6 +87,8 @@ export type InstancedSpriteBaseState = Readonly<{
   scale: number;
   anchor: [number, number];
   offset: [number, number];
+  translate: [number, number];
+  translateViewport: boolean;
   flatFacing: boolean;
   rotateWithCamera: boolean;
   rotation: number; // pre-converted: degrees -> radians
@@ -125,6 +132,8 @@ export type InstancedSpriteBaseRefs = {
   uAddHeight: UniformValue<number>;
   uAnchor: UniformValue<Vector2>;
   uOffset: UniformValue<Vector2>;
+  uTranslate: UniformValue<Vector2>;
+  uTranslateViewport: UniformValue<boolean>;
   uFlatFacing: UniformValue<boolean>;
   uRotateWithCamera: UniformValue<boolean>;
   uRotation: UniformValue<number>;

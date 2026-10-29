@@ -33,6 +33,8 @@
 //! | 22     | flatFacing | non-zero = the quad lies on the globe surface |
 //! | 23     | rotateWithCamera | non-zero = the quad reads left to right on screen |
 //! | 24     | rotation | radians, clockwise from the front |
+//! | 25,26  | translateX/Y | screen px the drawn quad is moved by, +Y down |
+//! | 27     | translateMap | non-zero = the translate turns with the camera heading (+X east, +Y south) |
 
 use std::collections::HashMap;
 
@@ -42,7 +44,7 @@ use wasm_bindgen::prelude::*;
 use crate::line_label::{basis_box, quad_screen_basis};
 
 /// Number of `f64` values per candidate in the packed input slice.
-pub const CANDIDATE_STRIDE: usize = 25;
+pub const CANDIDATE_STRIDE: usize = 28;
 
 /// Decode the packed `overlap` field.
 fn overlap_from_code(code: f64) -> Overlap {
@@ -154,8 +156,22 @@ fn project_candidate(c: &[f64], ctx: &ProjectionContext, out: &mut [f64; 4]) -> 
     let cy = p[1] * vx + p[5] * vy + p[9] * vz + p[13];
     let cw = p[3] * vx + p[7] * vy + p[11] * vz + p[15];
 
-    let sx = (cx / cw + 1.0) * 0.5 * ctx.width_px;
-    let sy = (1.0 - cy / cw) * 0.5 * ctx.height_px;
+    let mut sx = (cx / cw + 1.0) * 0.5 * ctx.width_px;
+    let mut sy = (1.0 - cy / cw) * 0.5 * ctx.height_px;
+
+    // Mirror of nvr_translateOffset (shaders/glsl/chunks/quad_orientation.glsl):
+    // a screen-pixel shift, turned with the camera heading when map-anchored.
+    let (tx, ty) = (c[25], c[26]);
+    if tx != 0.0 || ty != 0.0 {
+        if c[27] != 0.0 {
+            let (right, up) = quad_screen_basis(c, ctx.view, false, false, 0.0);
+            sx += tx * right.0 - ty * up.0;
+            sy -= tx * right.1 - ty * up.1;
+        } else {
+            sx += tx;
+            sy += ty;
+        }
+    }
 
     // Mirror of nvr_pxToWorld (shaders/glsl/chunks/pixelToWorld.glsl), inverted:
     // pixels per world meter at the anchor's view depth. `|viewZ|` (here `-vz`,
@@ -687,6 +703,9 @@ mod tests {
             0.0, // flatFacing
             1.0, // rotateWithCamera
             0.0, // rotation
+            0.0, // translateX
+            0.0, // translateY
+            0.0, // translateMap
         ]
     }
 
@@ -1331,5 +1350,80 @@ mod tests {
             Claim::Claimed
         );
         assert_eq!(claim(&mut g, 100.0, 10.0, 140.0, 30.0, 0.0), Claim::Claimed);
+    }
+    #[test]
+    fn viewport_translate_moves_the_box_in_screen_pixels() {
+        let ctx = context_90();
+        let mut c = proj_candidate(-100.0, 0.0, -10.0, 10.0, -5.0, 5.0, false);
+        let mut out = [0.0; 4];
+        c[25] = 12.0;
+        c[26] = -7.0;
+        assert!(project_candidate(&c, &ctx, &mut out));
+        assert!((out[0] - 402.0).abs() < 1e-3);
+        assert!((out[1] - 288.0).abs() < 1e-3);
+        assert!((out[2] - 422.0).abs() < 1e-3);
+        assert!((out[3] - 298.0).abs() < 1e-3);
+    }
+
+    /// The `place` camera turned a quarter about its view axis: screen right is
+    /// world -Z (south at the anchor) and screen up is world +Y (east).
+    fn turned_context<'a>(view: &'a [f64], proj: &'a [f64]) -> ProjectionContext<'a> {
+        let (_, _, cx, cy, cz, near, w, h, fov) = camera();
+        ProjectionContext {
+            view,
+            proj,
+            camera_x: cx,
+            camera_y: cy,
+            camera_z: cz,
+            near,
+            width_px: w,
+            height_px: h,
+            fov_rad: fov,
+        }
+    }
+
+    #[test]
+    fn map_translate_turns_with_the_camera_heading() {
+        let (_, proj, ..) = camera();
+        #[rustfmt::skip]
+        let world = [
+            0.0, 0.0, -1.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            1.0, 0.0, 0.0, 0.0,
+            2.0 * R, 0.0, 0.0, 1.0,
+        ];
+        let view = invert_rigid(&world);
+        let ctx = turned_context(&view, &proj);
+
+        let mut c = label(R, 0.0, 0.0, 0.0, false);
+        let mut base = [0.0; 4];
+        project_candidate(&c, &ctx, &mut base);
+
+        // 10 px east, which this camera shows as screen up.
+        c[25] = 10.0;
+        c[27] = 1.0;
+        let mut out = [0.0; 4];
+        project_candidate(&c, &ctx, &mut out);
+        assert!((out[0] - base[0]).abs() < 1e-6);
+        assert!((out[1] - (base[1] - 10.0)).abs() < 1e-6);
+
+        // Anchored to the viewport, the same translate stays screen right.
+        c[27] = 0.0;
+        project_candidate(&c, &ctx, &mut out);
+        assert!((out[0] - (base[0] + 10.0)).abs() < 1e-6);
+        assert!((out[1] - base[1]).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_translated_label_collides_where_it_is_drawn() {
+        // Two labels 40 px apart; moving the second 40 px back onto the first
+        // makes them collide.
+        let a = label(R, 0.0, 0.0, 1.0, false);
+        let mut b = label(R, 0.0, 0.0, 0.0, false);
+        b[4] = 30.0;
+        b[5] = 50.0;
+        assert_eq!(place(&[a, b]), vec![0, 0]);
+        b[25] = -40.0;
+        assert_eq!(place(&[a, b]), vec![0, 1]);
     }
 }

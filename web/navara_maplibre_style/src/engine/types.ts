@@ -241,6 +241,10 @@ export type SymbolPaint = {
   "text-opacity"?: ValueExpression;
   "text-halo-color"?: ValueExpression;
   "text-halo-width"?: ValueExpression;
+  "text-translate"?: ValueExpression;
+  "text-translate-anchor"?: ValueExpression;
+  "icon-translate"?: ValueExpression;
+  "icon-translate-anchor"?: ValueExpression;
 };
 
 /**

@@ -1028,6 +1028,52 @@ describe("toLayerDescription", () => {
       expect(billboard?.declutterRank).toBe(7);
     });
 
+    it("maps translate and its frame for text and icon", () => {
+      const { text, billboard } = toLayerDescription(
+        mockSource,
+        {
+          ...symbolLayer({ "text-field": "{name}", "icon-image": "pin" }),
+          paint: {
+            "text-translate": [4, -6],
+            "text-translate-anchor": "viewport",
+            "icon-translate": [0, 10],
+          },
+        } as StyleLayer,
+        "Font",
+        engine,
+      ) as {
+        text?: Record<string, unknown>;
+        billboard?: Record<string, unknown>;
+      };
+      expect(text).toMatchObject({
+        translate: { x: 4, y: -6 },
+        translateAnchor: "viewport",
+      });
+      expect(billboard).toMatchObject({
+        translate: { x: 0, y: 10 },
+        translateAnchor: "map",
+      });
+    });
+
+    it("follows zoom for an interpolated translate", () => {
+      expect(
+        symbolLayerFollowsZoom({
+          ...symbolLayer({ "text-field": "{name}" }),
+          paint: {
+            "text-translate": [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              5,
+              ["literal", [0, 0]],
+              10,
+              ["literal", [0, 8]],
+            ],
+          },
+        } as StyleLayer),
+      ).toBe(true);
+    });
+
     it("leaves anchor, offset and justification to the per-feature values", () => {
       // Data-driven in MapLibre, so the evaluator sets them per feature; the
       // layer keeps the engine's centred defaults.

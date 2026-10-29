@@ -22,6 +22,7 @@ import ThreeView, {
   type Overlap,
   type SourceGeometryType,
   type TextAlign,
+  type TranslateAnchor,
   type VectorLayer,
 } from "@navaramap/three";
 import type {
@@ -171,6 +172,8 @@ const text = {
     letterSpacing: 0,
     anchor: "center" as Anchor,
     offset: { x: 0, y: 0 },
+    translate: { x: 0, y: 0 },
+    translateAnchor: "map" as TranslateAnchor,
   },
   orientation: {
     ...orientationState(),
@@ -194,6 +197,8 @@ const billboard = {
     alphaTest: 0.1,
     anchor: "bottom" as Anchor,
     offset: { x: 0, y: 0 },
+    translate: { x: 0, y: 0 },
+    translateAnchor: "map" as TranslateAnchor,
   },
   style: styleState(28),
   orientation: {
@@ -278,6 +283,8 @@ const billboardMaterial = (): BillboardDescription => ({
   alphaTest: billboard.image.alphaTest,
   anchor: billboard.image.anchor,
   offset: billboard.image.offset,
+  translate: billboard.image.translate,
+  translateAnchor: billboard.image.translateAnchor,
   ...unlessAuto("billboardFacing", billboard.orientation.billboardFacing),
   rotateToLine: billboard.orientation.rotateToLine,
 });
@@ -377,6 +384,7 @@ const OFFSET_EM = {
   x: { min: -3, max: 3, step: 0.1 },
   y: { min: -3, max: 3, step: 0.1 },
 };
+const TRANSLATE_ANCHOR = { map: "map", viewport: "viewport" };
 const OFFSET_PX = {
   x: { min: -60, max: 60, step: 1 },
   y: { min: -60, max: 60, step: 1 },
@@ -516,6 +524,13 @@ layout.addBinding(text.layout, "offset", {
   label: "offset (em)",
   ...OFFSET_EM,
 });
+layout.addBinding(text.layout, "translate", {
+  label: "translate (px)",
+  ...OFFSET_PX,
+});
+layout.addBinding(text.layout, "translateAnchor", {
+  options: TRANSLATE_ANCHOR,
+});
 
 const textOrientation = addOrientationFolder(textPage, text.orientation);
 textOrientation.addBinding(text.orientation, "textFacing", {
@@ -548,6 +563,13 @@ image.addBinding(billboard.image, "anchor", { options: OPTIONS.anchor });
 image.addBinding(billboard.image, "offset", {
   label: "offset (px)",
   ...OFFSET_PX,
+});
+image.addBinding(billboard.image, "translate", {
+  label: "translate (px)",
+  ...OFFSET_PX,
+});
+image.addBinding(billboard.image, "translateAnchor", {
+  options: TRANSLATE_ANCHOR,
 });
 
 addStyleFolder(billboardPage, billboard.style);

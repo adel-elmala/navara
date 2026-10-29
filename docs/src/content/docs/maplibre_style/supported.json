@@ -191,10 +191,16 @@
           "status": "❌"
         },
         "icon-translate": {
-          "status": "❌"
+          "status": "⚠️ Follows zoom, but is the same for every feature in the layer. With the `map` anchor it turns with the camera heading but, unlike MapLibre, is not foreshortened by pitch"
+        },
+        "icon-translate-anchor": {
+          "status": "✅"
         },
         "text-translate": {
-          "status": "❌"
+          "status": "⚠️ Follows zoom, but is the same for every feature in the layer. With the `map` anchor it turns with the camera heading but, unlike MapLibre, is not foreshortened by pitch"
+        },
+        "text-translate-anchor": {
+          "status": "✅"
         }
       },
       "layout": {

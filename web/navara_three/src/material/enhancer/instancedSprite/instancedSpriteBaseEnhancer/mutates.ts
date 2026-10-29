@@ -46,6 +46,8 @@ export const createBaseMutates = (
     uAddHeight: { value: 0.0 },
     uAnchor: { value: new ThreeVector2(0, 0) },
     uOffset: { value: new ThreeVector2(0, 0) },
+    uTranslate: { value: new ThreeVector2(0, 0) },
+    uTranslateViewport: { value: false },
     uFlatFacing: { value: false },
     uRotateWithCamera: { value: true },
     uRotation: { value: 0 },
@@ -80,6 +82,8 @@ export const createBaseMutates = (
       refs.uAddHeight.value = state.addHeight;
       refs.uAnchor.value.set(state.anchor[0], state.anchor[1]);
       refs.uOffset.value.set(state.offset[0], state.offset[1]);
+      refs.uTranslate.value.set(state.translate[0], state.translate[1]);
+      refs.uTranslateViewport.value = state.translateViewport;
       refs.uFlatFacing.value = state.flatFacing;
       refs.uRotateWithCamera.value = state.rotateWithCamera;
       refs.uRotation.value = state.rotation;
@@ -105,6 +109,8 @@ export const createBaseMutates = (
       uniforms.uScale = refs.uScale;
       uniforms.uAnchor = refs.uAnchor;
       uniforms.uOffset = refs.uOffset;
+      uniforms.uTranslate = refs.uTranslate;
+      uniforms.uTranslateViewport = refs.uTranslateViewport;
       uniforms.uFlatFacing = refs.uFlatFacing;
       uniforms.uRotateWithCamera = refs.uRotateWithCamera;
       uniforms.uRotation = refs.uRotation;

@@ -575,6 +575,43 @@ This option applies when the layer's geometry is built. `layer.update()` does no
 }
 ```
 
+### translate
+
+**Type:** [`Vec2`](../../api/types/#vec2) | undefined
+
+**Description:** Moves the drawn point by a number of screen pixels. A positive `x` moves it right and a positive `y` moves it down, in the frame [`translateAnchor`](#translateanchor) sets. The shift is applied after the point is projected, so it stays the same number of pixels at any distance and does not turn with [`rotation`](#rotation). Decluttering reserves the space where the point is drawn.
+
+**Default:** `{ x: 0, y: 0 }`
+
+**Example:**
+
+```typescript
+{
+  point: {
+    translate: { x: 0, y: -10 } // 10 px up
+  }
+}
+```
+
+### translateAnchor
+
+**Type:** `"map" | "viewport" | undefined`
+
+**Description:** Sets the frame [`translate`](#translate) is measured in. With `"map"`, the shift turns with the camera heading, so a positive `x` points east and a positive `y` points south. With `"viewport"`, it follows the screen axes. Unlike MapLibre's `"map"`, the shift is not foreshortened when the camera is pitched.
+
+**Default:** `"map"`
+
+**Example:**
+
+```typescript
+{
+  point: {
+    translate: { x: 10, y: 0 },
+    translateAnchor: "viewport" // 10 px right on screen, whatever the heading
+  }
+}
+```
+
 ### transparent
 
 **Type:** `boolean | undefined`

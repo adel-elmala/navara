@@ -59,6 +59,12 @@ export type DeclutterCandidate = {
   flatFacing: boolean;
   rotateWithCamera: boolean;
   rotation: number;
+  /** Screen pixels the drawn quad is moved by after projection, x right and
+   *  y down, and whether that stays on the screen axes or turns with the
+   *  camera heading — the material's resolved `translate` (see
+   *  `resolveTranslate`). */
+  translate: readonly [number, number];
+  translateViewport: boolean;
   /** Whether the label is currently shown (its fade target is "visible").
    *  Feeds placement hysteresis: shown labels win equal-priority ties and
    *  tolerate marginal overlaps, so slow camera drift doesn't make near-tied

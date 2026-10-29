@@ -144,6 +144,10 @@ uniform float uRotation;
 uniform float uFovRad;
 uniform float uScreenHeightPx;
 uniform bool uShowBackground;
+// Screen-pixel translate of the whole label, x right and y down; see
+// nvr_translateOffset.
+uniform vec2 uTranslate;
+uniform bool uTranslateViewport;
 
 // Varyings
 varying vec2 vAtlasUv;
@@ -260,6 +264,14 @@ void main() {
     if (!uSizeInMeters) {
         scaleFactor = nvr_pxToWorld(fontSize, uFovRad, uScreenHeightPx, vec3(0.0, 0.0, mvPosition.z), vec3(0.0, 0.0, 0.0));
     }
+    // Added to the final position, after the along-line walk has measured the
+    // path from the true anchor.
+    vec3 translateOffset = nvr_translateOffset(
+        absTransformed,
+        uTranslate,
+        uTranslateViewport,
+        nvr_pxToWorld(1.0, uFovRad, uScreenHeightPx, vec3(0.0, 0.0, mvPosition.z), vec3(0.0, 0.0, 0.0))
+    );
 
     vec3 axisRight;
     vec3 axisUp;
@@ -408,6 +420,7 @@ void main() {
             addHeight
         ), 0.0);
 
+        newMvPosition.xyz += translateOffset;
         gl_Position = projectionMatrix * newMvPosition;
 
         // Glyph outlines draw over the background only because they sit at
@@ -466,6 +479,7 @@ void main() {
             absTransformed,
             addHeight
         ), 0.0);
+        newMvPosition.xyz += translateOffset;
 
         gl_Position = projectionMatrix * newMvPosition;
 

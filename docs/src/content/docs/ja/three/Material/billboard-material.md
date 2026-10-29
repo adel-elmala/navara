@@ -613,6 +613,43 @@ MapLibre の `symbol-spacing` と同様に、ラインに沿った長さが `spa
 }
 ```
 
+### translate
+
+**Type:** [`Vec2`](../../api/types/#vec2) | undefined
+
+**Description:** 描画されたビルボードを画面上のピクセル数だけ移動します。MapLibre の `icon-translate` と同じ動作です。`x` が正の値で右に、`y` が正の値で下に移動し、向きは [`translateAnchor`](#translateanchor) で決まります。移動はビルボードを投影した後に適用されるため、距離にかかわらず同じピクセル数だけ移動し、[`rotation`](#rotation) とともには回転しません。デクラッタリングではビルボードが描画される位置の領域が確保されます。
+
+**Default:** `{ x: 0, y: 0 }`
+
+**Example:**
+
+```typescript
+{
+  billboard: {
+    translate: { x: 0, y: -10 } // 10 px 上
+  }
+}
+```
+
+### translateAnchor
+
+**Type:** `"map" | "viewport" | undefined`
+
+**Description:** [`translate`](#translate) の向きの基準を指定します。`"map"` ではカメラの方位とともに回転し、`x` が正の値で東、`y` が正の値で南を向きます。`"viewport"` では画面の軸に従います。MapLibre の `"map"` とは異なり、カメラを傾けても移動量は短縮されません。
+
+**Default:** `"map"`
+
+**Example:**
+
+```typescript
+{
+  billboard: {
+    translate: { x: 10, y: 0 },
+    translateAnchor: "viewport" // 方位にかかわらず画面上で 10 px 右
+  }
+}
+```
+
 ### transparent
 
 **Type:** `boolean | undefined`

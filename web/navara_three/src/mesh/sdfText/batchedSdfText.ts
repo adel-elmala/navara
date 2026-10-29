@@ -36,6 +36,7 @@ import type {
   DeclutterParticipant,
 } from "../../declutter/types";
 import type { EventContext } from "../../event/context";
+import { resolveTranslate } from "../../material/anchor";
 import type { MaterialEnhancer } from "../../material/enhancer/MaterialEnhancer";
 import {
   createSdfTextMaterialEnhancer,
@@ -471,6 +472,7 @@ export class BatchedSdfTextMesh
         spreadGlyphs: this._spreadGlyphs,
         ...textOrientation(material),
         rotation: material.rotation ?? 0,
+        ...resolveTranslate(material),
         sizeInMeters: material.sizeInMeters ?? true,
         offsetDepth: material.offsetDepth ?? true,
         outlineWidth: material.outlineWidth ?? 0,
@@ -1481,6 +1483,8 @@ export class BatchedSdfTextMesh
         standalone: this._standalone,
         flatFacing: !alongLine && orientation.flatFacing,
         rotateWithCamera: alongLine || orientation.rotateWithCamera,
+        translate: state.translate,
+        translateViewport: state.translateViewport,
         rotation: alongLine
           ? 0
           : this._resolveRotation(record.batchIndex, defaults.rotation),
@@ -1825,6 +1829,7 @@ export class BatchedSdfTextMesh
         spreadGlyphs: this._spreadGlyphs,
         ...textOrientation(material),
         rotation: material.rotation ?? 0,
+        ...resolveTranslate(material),
         sizeInMeters: material.sizeInMeters ?? true,
         offsetDepth: material.offsetDepth ?? true,
         outlineWidth: material.outlineWidth ?? 0,

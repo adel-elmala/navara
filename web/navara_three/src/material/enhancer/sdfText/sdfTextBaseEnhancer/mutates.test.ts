@@ -22,6 +22,8 @@ describe("sdfTextBaseEnhancer/mutates", () => {
         flatFacing: true,
         rotateWithCamera: false,
         rotation: Math.PI / 2,
+        translate: [5, 6],
+        translateViewport: true,
         sizeInMeters: true,
         offsetDepth: false,
         outlineWidth: 0.1,
@@ -40,6 +42,9 @@ describe("sdfTextBaseEnhancer/mutates", () => {
       mutates.updateUniforms(uniforms, state);
 
       expect(uniforms.uFlatFacing?.value).toBe(true);
+      expect(uniforms.uTranslate?.value.x).toBe(5);
+      expect(uniforms.uTranslate?.value.y).toBe(6);
+      expect(uniforms.uTranslateViewport?.value).toBe(true);
       expect(uniforms.uRotateWithCamera?.value).toBe(false);
       expect(uniforms.uRotation?.value).toBeCloseTo(Math.PI / 2);
       expect(uniforms.uSizeInMeters?.value).toBe(true);

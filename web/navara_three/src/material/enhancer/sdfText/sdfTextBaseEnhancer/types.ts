@@ -92,6 +92,11 @@ export type SdfTextBaseProps = {
   /** Perpendicular shift away from the line, in the same units as the font
    *  size. Positive is left of the direction of travel. Line placement only. */
   lineOffset?: number;
+  /** Screen-pixel shift of the whole label, x right and y down. */
+  translate?: [number, number];
+  /** `true` keeps `translate` on the screen axes; `false` turns it with the
+   *  camera heading (MapLibre's `*-translate-anchor: map`). */
+  translateViewport?: boolean;
   /** Each glyph of an along-line label is its own piece; with
    *  `rotateWithCamera` it also turns to the camera, and without it the
    *  label is drawn straight at its anchor. Line placement only. */
@@ -139,6 +144,8 @@ export type SdfTextBaseState = Readonly<{
   rotation: number; // pre-converted: degrees -> radians
   sizeInMeters: boolean;
   lineOffset: number;
+  translate: [number, number];
+  translateViewport: boolean;
   spreadGlyphs: boolean;
   offsetDepth: boolean;
   outlineWidth: number; // pre-converted: raw / sdfRadiusFor(useMsdf)
@@ -211,6 +218,8 @@ export type SdfTextBaseRefs = {
   uPathTexSize: UniformValue<Vector2>;
   /** Perpendicular shift from the line, in the same units as the font size. */
   uLineOffset: UniformValue<number>;
+  uTranslate: UniformValue<Vector2>;
+  uTranslateViewport: UniformValue<boolean>;
   uSpreadGlyphs: UniformValue<boolean>;
   /** Shared batch data texture ref (per-feature style); growth swaps its
    *  `.value` in place. */

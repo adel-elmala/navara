@@ -159,6 +159,7 @@ export type DeclutterCandidate = {
   pairRole: "label" | "billboard";
   standalone: boolean; // may show while its pair partner is hidden
   flatFacing: boolean; rotateWithCamera: boolean; rotation: number; // quad orientation
+  translate: readonly [number, number]; translateViewport: boolean; // screen-px shift
   owner: DeclutterParticipant;
   handle: number;      // label slot (text) or instance index (sprites)
   contentKey?: string; // label text; feeds the tile-swap handoff
@@ -174,7 +175,10 @@ shaders' `nvr_quadBasis`, so a rotated, flat, or map-aligned quad claims the
 box it is drawn over. For an along-line candidate it is the screen-axis box of
 the turned label or quad, as step 0 resolved it, in the same units, with a
 screen-aligned orientation. The kernel projects and scales both the same
-way. A text label created since the last pass has no line box yet and falls
+way, then moves the projected anchor by the material's `translate`: by the
+screen pixels as given for `translateViewport`, otherwise turned with the
+camera heading (`quad_screen_basis` with the map-aligned upright basis), as
+the shaders' `nvr_translateOffset` moves the drawn quad. A text label created since the last pass has no line box yet and falls
 back to its unrotated block.
 
 Any mesh type that wants to participate — batched SDF text, instanced sprites
@@ -199,12 +203,12 @@ starts granted rather than fading in from hidden. Without that, every swap
 would blink the tile's labels out for a pass plus a fade.
 
 Once collected, each candidate is flattened into the kernel's packed input: a
-`Float64Array` with `CANDIDATE_STRIDE = 25` values per candidate
+`Float64Array` with `CANDIDATE_STRIDE = 28` values per candidate
 (`declutter/kernel.ts`), in the field order the Rust side reads — anchor (3),
 `addHeight`, the four box edges, `sizeInMeters`, `priority`, `isShown`,
 `overlap`, `ignorePlacement`, `rank`, `padding` (4), `pairGroup`,
 `featureIndex`, `pairRole`, `standalone`, `flatFacing`, `rotateWithCamera`,
-`rotation`. Booleans become `0.0`/`1.0`; `overlap` becomes
+`rotation`, `translate` (2), `translateMap` (`!translateViewport`). Booleans become `0.0`/`1.0`; `overlap` becomes
 `0`/`1`/`2` (never/always/cooperative, `OVERLAP_CODES`). The buffer is reused across passes and grown only when the
 label count rises. The kernel returns a `Uint8Array` of `hidden` flags, one per
 candidate in input order, which the manager feeds straight back to

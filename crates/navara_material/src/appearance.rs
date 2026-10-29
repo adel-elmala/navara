@@ -287,6 +287,36 @@ impl Anchor {
     }
 }
 
+/// Frame a label's or sprite's `translate` is measured in (MapLibre's
+/// `*-translate-anchor`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TranslateAnchor {
+    /// Turns with the map: +x points east and +y south on screen.
+    #[default]
+    Map,
+    /// Fixed to the screen: +x right and +y down.
+    Viewport,
+}
+
+impl TranslateAnchor {
+    /// Parse the JS-facing name (`"map" | "viewport"`).
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "map" => Some(Self::Map),
+            "viewport" => Some(Self::Viewport),
+            _ => None,
+        }
+    }
+
+    /// JS-facing name of this frame.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Map => "map",
+            Self::Viewport => "viewport",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Appearance {
     Point(PointMaterial),
@@ -369,6 +399,12 @@ pub struct PointMaterial {
     /// (meters when `size_in_meters`, pixels otherwise). Lies in the quad's
     /// own plane, so it turns with `rotation`. Default `(0, 0)`.
     pub offset: Vec2,
+    /// Screen-pixel shift of the drawn quad, x right and y down, applied after
+    /// projection so it stays the same number of pixels at any distance
+    /// (MapLibre's `icon-translate`). Default `(0, 0)`.
+    pub translate: Vec2,
+    /// Frame `translate` is measured in. Default [`TranslateAnchor::Map`].
+    pub translate_anchor: TranslateAnchor,
     pub height: f32,
     pub size_in_meters: bool,
     pub clamp_to_ground: bool,
@@ -427,6 +463,8 @@ impl Default for PointMaterial {
             rotate_to_line: true,
             anchor: Anchor::Center,
             offset: Vec2::ZERO,
+            translate: Vec2::ZERO,
+            translate_anchor: TranslateAnchor::Map,
             clamp_to_ground: true,
             height: 1.,
             size_in_meters: true,
@@ -489,6 +527,12 @@ pub struct BillboardMaterial {
     /// (meters when `size_in_meters`, pixels otherwise). Lies in the quad's
     /// own plane, so it turns with `rotation`. Default `(0, 0)`.
     pub offset: Vec2,
+    /// Screen-pixel shift of the drawn quad, x right and y down, applied after
+    /// projection so it stays the same number of pixels at any distance
+    /// (MapLibre's `icon-translate`). Default `(0, 0)`.
+    pub translate: Vec2,
+    /// Frame `translate` is measured in. Default [`TranslateAnchor::Map`].
+    pub translate_anchor: TranslateAnchor,
     pub height: f32,
     pub url: String,
     pub size_in_meters: bool,
@@ -555,6 +599,8 @@ impl Default for BillboardMaterial {
             rotate_to_line: true,
             anchor: Anchor::Center,
             offset: Vec2::ZERO,
+            translate: Vec2::ZERO,
+            translate_anchor: TranslateAnchor::Map,
             clamp_to_ground: true,
             height: 1.,
             url: "".to_string(),
@@ -602,6 +648,12 @@ pub struct TextMaterial {
     /// `size`). Lies in the label's own plane, so it turns with `rotation`.
     /// Default `(0, 0)`.
     pub offset: Vec2,
+    /// Screen-pixel shift of the drawn label, x right and y down, applied after
+    /// projection so it stays the same number of pixels at any distance
+    /// (MapLibre's `text-translate`). Default `(0, 0)`.
+    pub translate: Vec2,
+    /// Frame `translate` is measured in. Default [`TranslateAnchor::Map`].
+    pub translate_anchor: TranslateAnchor,
     /// Plane the label's quad lies in. See [`Facing`]; `None` resolves from
     /// `rotate_with_camera`.
     pub text_facing: Option<Facing>,
@@ -762,6 +814,8 @@ impl Default for TextMaterial {
             color: 0xffffff,
             anchor: Anchor::Center,
             offset: Vec2::ZERO,
+            translate: Vec2::ZERO,
+            translate_anchor: TranslateAnchor::Map,
             text_facing: None,
             rotate_with_camera: None,
             rotation: 0.0,

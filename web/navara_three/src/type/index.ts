@@ -133,6 +133,13 @@ export type Anchor =
 export type TextAlign = "left" | "center" | "right" | "auto";
 
 /**
+ * Frame of a label's or sprite's `translate` — MapLibre's
+ * `*-translate-anchor`. `"map"` turns it with the camera heading so +x points
+ * east and +y south; `"viewport"` keeps it on the screen axes.
+ */
+export type TranslateAnchor = "map" | "viewport";
+
+/**
  * Helper type to narrow the material fields that wasm-bindgen generates as
  * bare `string`s to their literal unions, and its typed arrays to the plain
  * arrays the layer description accepts. One recursive pass covers them all.
@@ -150,11 +157,13 @@ type ConvertStringUnionFields<T> = {
             ? Anchor | Extract<T[K], undefined>
             : K extends "textAlign"
               ? TextAlign | Extract<T[K], undefined>
-              : K extends "dashArray" | "declutterPadding"
-                ? number[] | Extract<T[K], undefined>
-                : T[K] extends object | undefined
-                  ? ConvertStringUnionFields<T[K]> | Extract<T[K], undefined>
-                  : T[K];
+              : K extends "translateAnchor"
+                ? TranslateAnchor | Extract<T[K], undefined>
+                : K extends "dashArray" | "declutterPadding"
+                  ? number[] | Extract<T[K], undefined>
+                  : T[K] extends object | undefined
+                    ? ConvertStringUnionFields<T[K]> | Extract<T[K], undefined>
+                    : T[K];
 };
 
 /**

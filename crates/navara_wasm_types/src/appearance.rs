@@ -126,6 +126,21 @@ fn parse_anchor(value: &Option<String>) -> Option<navara_material::Anchor> {
     }
 }
 
+/// Parse a JS-facing translate frame name, warning on an unknown value so the
+/// caller keeps the material's current value.
+fn parse_translate_anchor(value: &Option<String>) -> Option<navara_material::TranslateAnchor> {
+    let name = value.as_ref()?;
+    match navara_material::TranslateAnchor::parse(name) {
+        Some(a) => Some(a),
+        None => {
+            bevy_log::warn!(
+                "translateAnchor: unknown value {name:?} (expected \"map\" or \"viewport\")"
+            );
+            None
+        }
+    }
+}
+
 #[wasm_bindgen]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PointMaterial {
@@ -187,6 +202,16 @@ pub struct PointMaterial {
     /// (meters when `sizeInMeters`, pixels otherwise). Lies in the quad's own
     /// plane, so it turns with `rotation`. Defaults to `(0, 0)`.
     pub offset: Option<Vec2>,
+    /// Screen-pixel shift of the drawn quad, x right and y down, applied after
+    /// projection so it stays the same number of pixels at any distance, as
+    /// MapLibre's `icon-translate`. Defaults to `(0, 0)`.
+    pub translate: Option<Vec2>,
+    /// Frame `translate` is measured in: `"map"` (default) turns it with the
+    /// camera heading so +x points east and +y south; `"viewport"` keeps it on
+    /// the screen axes. MapLibre's `icon-translate-anchor`.
+    #[wasm_bindgen(getter_with_clone, js_name = translateAnchor)]
+    #[serde(rename = "translateAnchor")]
+    pub translate_anchor: Option<String>,
     pub height: Option<f32>,
     #[wasm_bindgen(js_name = sizeInMeters)]
     #[serde(rename = "sizeInMeters")]
@@ -281,6 +306,9 @@ impl From<PointMaterial> for navara_material::PointMaterial {
             color: val.color.unwrap_or(default.color),
             anchor: parse_anchor(&val.anchor).unwrap_or(default.anchor),
             offset: val.offset.unwrap_or(default.offset.into()).into(),
+            translate: val.translate.unwrap_or(default.translate.into()).into(),
+            translate_anchor: parse_translate_anchor(&val.translate_anchor)
+                .unwrap_or(default.translate_anchor),
             height: val.height.unwrap_or(default.height),
             size_in_meters: val.size_in_meters.unwrap_or(default.size_in_meters),
             clamp_to_ground: val.clamp_to_ground.unwrap_or(default.clamp_to_ground),
@@ -318,6 +346,8 @@ impl<'a> From<&'a navara_material::PointMaterial> for PointMaterial {
             color: Some(value.color),
             anchor: Some(value.anchor.as_str().to_string()),
             offset: Some(value.offset.into()),
+            translate: Some(value.translate.into()),
+            translate_anchor: Some(value.translate_anchor.as_str().to_string()),
             height: Some(value.height),
             size_in_meters: Some(value.size_in_meters),
             clamp_to_ground: Some(value.clamp_to_ground),
@@ -354,6 +384,9 @@ impl PointMaterial {
             rotate_to_line: self.rotate_to_line.unwrap_or(other.rotate_to_line),
             anchor: parse_anchor(&self.anchor).unwrap_or(other.anchor),
             offset: self.offset.unwrap_or(other.offset.into()).into(),
+            translate: self.translate.unwrap_or(other.translate.into()).into(),
+            translate_anchor: parse_translate_anchor(&self.translate_anchor)
+                .unwrap_or(other.translate_anchor),
             height: self.height.unwrap_or(other.height),
             size_in_meters: self.size_in_meters.unwrap_or(other.size_in_meters),
             clamp_to_ground: self.clamp_to_ground.unwrap_or(other.clamp_to_ground),
@@ -447,6 +480,16 @@ pub struct BillboardMaterial {
     /// (meters when `sizeInMeters`, pixels otherwise). Lies in the quad's own
     /// plane, so it turns with `rotation`. Defaults to `(0, 0)`.
     pub offset: Option<Vec2>,
+    /// Screen-pixel shift of the drawn quad, x right and y down, applied after
+    /// projection so it stays the same number of pixels at any distance, as
+    /// MapLibre's `icon-translate`. Defaults to `(0, 0)`.
+    pub translate: Option<Vec2>,
+    /// Frame `translate` is measured in: `"map"` (default) turns it with the
+    /// camera heading so +x points east and +y south; `"viewport"` keeps it on
+    /// the screen axes. MapLibre's `icon-translate-anchor`.
+    #[wasm_bindgen(getter_with_clone, js_name = translateAnchor)]
+    #[serde(rename = "translateAnchor")]
+    pub translate_anchor: Option<String>,
     pub height: Option<f32>,
     #[wasm_bindgen(getter_with_clone)]
     pub url: Option<String>,
@@ -553,6 +596,9 @@ impl From<BillboardMaterial> for navara_material::BillboardMaterial {
             rotate_to_line: val.rotate_to_line.unwrap_or(default.rotate_to_line),
             anchor: parse_anchor(&val.anchor).unwrap_or(default.anchor),
             offset: val.offset.unwrap_or(default.offset.into()).into(),
+            translate: val.translate.unwrap_or(default.translate.into()).into(),
+            translate_anchor: parse_translate_anchor(&val.translate_anchor)
+                .unwrap_or(default.translate_anchor),
             height: val.height.unwrap_or(default.height),
             url: val.url.unwrap_or(default.url),
             size_in_meters: val.size_in_meters.unwrap_or(default.size_in_meters),
@@ -587,6 +633,8 @@ impl<'a> From<&'a navara_material::BillboardMaterial> for BillboardMaterial {
             color: Some(value.color),
             anchor: Some(value.anchor.as_str().to_string()),
             offset: Some(value.offset.into()),
+            translate: Some(value.translate.into()),
+            translate_anchor: Some(value.translate_anchor.as_str().to_string()),
             billboard_facing: value.billboard_facing.map(|f| f.as_str().to_string()),
             rotate_with_camera: value.rotate_with_camera,
             rotation: Some(value.rotation),
@@ -636,6 +684,9 @@ impl BillboardMaterial {
             rotate_to_line: self.rotate_to_line.unwrap_or(other.rotate_to_line),
             anchor: parse_anchor(&self.anchor).unwrap_or(other.anchor),
             offset: self.offset.unwrap_or(other.offset.into()).into(),
+            translate: self.translate.unwrap_or(other.translate.into()).into(),
+            translate_anchor: parse_translate_anchor(&self.translate_anchor)
+                .unwrap_or(other.translate_anchor),
             height: self.height.unwrap_or(other.height),
             url: self.url.clone().unwrap_or(other.url.clone()),
             size_in_meters: self.size_in_meters.unwrap_or(other.size_in_meters),
@@ -681,6 +732,16 @@ pub struct TextMaterial {
     /// `size`), as MapLibre's `text-offset`. Lies in the label's own plane, so
     /// it turns with `rotation`. Defaults to `(0, 0)`.
     pub offset: Option<Vec2>,
+    /// Screen-pixel shift of the drawn label, x right and y down, applied after
+    /// projection so it stays the same number of pixels at any distance, as
+    /// MapLibre's `text-translate`. Defaults to `(0, 0)`.
+    pub translate: Option<Vec2>,
+    /// Frame `translate` is measured in: `"map"` (default) turns it with the
+    /// camera heading so +x points east and +y south; `"viewport"` keeps it on
+    /// the screen axes. MapLibre's `text-translate-anchor`.
+    #[wasm_bindgen(getter_with_clone, js_name = translateAnchor)]
+    #[serde(rename = "translateAnchor")]
+    pub translate_anchor: Option<String>,
     /// Plane the label lies in: the screen (`"upright"`, never foreshortened)
     /// or the globe surface around its anchor (`"flat"`), following its
     /// curvature so it reads as painted on the surface. MapLibre's
@@ -945,6 +1006,9 @@ impl From<TextMaterial> for navara_material::TextMaterial {
             color: val.color.unwrap_or(default.color),
             anchor: parse_anchor(&val.anchor).unwrap_or(default.anchor),
             offset: val.offset.unwrap_or(default.offset.into()).into(),
+            translate: val.translate.unwrap_or(default.translate.into()).into(),
+            translate_anchor: parse_translate_anchor(&val.translate_anchor)
+                .unwrap_or(default.translate_anchor),
             text_facing: parse_facing("textFacing", &val.text_facing),
             rotate_with_camera: val.rotate_with_camera,
             rotation: val.rotation.unwrap_or(default.rotation),
@@ -1010,6 +1074,8 @@ impl<'a> From<&'a navara_material::TextMaterial> for TextMaterial {
             color: Some(value.color),
             anchor: Some(value.anchor.as_str().to_string()),
             offset: Some(value.offset.into()),
+            translate: Some(value.translate.into()),
+            translate_anchor: Some(value.translate_anchor.as_str().to_string()),
             text_facing: value.text_facing.map(|f| f.as_str().to_string()),
             rotate_with_camera: value.rotate_with_camera,
             rotation: Some(value.rotation),
@@ -1071,6 +1137,9 @@ impl TextMaterial {
             color: self.color.unwrap_or(other.color),
             anchor: parse_anchor(&self.anchor).unwrap_or(other.anchor),
             offset: self.offset.unwrap_or(other.offset.into()).into(),
+            translate: self.translate.unwrap_or(other.translate.into()).into(),
+            translate_anchor: parse_translate_anchor(&self.translate_anchor)
+                .unwrap_or(other.translate_anchor),
             text_facing: parse_facing("textFacing", &self.text_facing).or(other.text_facing),
             rotate_with_camera: self.rotate_with_camera.or(other.rotate_with_camera),
             rotation: self.rotation.unwrap_or(other.rotation),
@@ -2586,7 +2655,10 @@ pub struct HillshadeMaterial {
 
 #[cfg(test)]
 mod test {
-    use super::{TextMaterial, parse_anchor, parse_facing, parse_geometry_types, parse_padding};
+    use super::{
+        TextMaterial, parse_anchor, parse_facing, parse_geometry_types, parse_padding,
+        parse_translate_anchor,
+    };
     use navara_material::{Facing, SourceGeometryType};
 
     #[test]
@@ -2659,6 +2731,15 @@ mod test {
         }
         assert_eq!(parse_anchor(&Some("middle".to_string())), None);
         assert_eq!(parse_anchor(&None), None);
+    }
+
+    #[test]
+    fn parse_translate_anchor_reads_the_js_names() {
+        for name in ["map", "viewport"] {
+            let anchor = parse_translate_anchor(&Some(name.to_string())).unwrap();
+            assert_eq!(anchor.as_str(), name);
+        }
+        assert_eq!(parse_translate_anchor(&Some("screen".to_string())), None);
     }
 
     #[test]

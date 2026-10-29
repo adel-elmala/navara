@@ -1,5 +1,23 @@
 import type { Anchor } from "../type";
 
+/** A material's `translate` with its defaults resolved: screen pixels, x right
+ *  and y down, and whether it stays on the screen axes. */
+export type ResolvedTranslate = {
+  translate: [number, number];
+  translateViewport: boolean;
+};
+
+export function resolveTranslate(material: {
+  translate?: { x: number; y: number };
+  translateAnchor?: string;
+}): ResolvedTranslate {
+  const t = material.translate;
+  return {
+    translate: [t?.x ?? 0, t?.y ?? 0],
+    translateViewport: material.translateAnchor === "viewport",
+  };
+}
+
 /**
  * Where each anchor sits on the box it names: horizontally 0 left, 0.5
  * center, 1 right; vertically 0 top, 0.5 center, 1 bottom — MapLibre's

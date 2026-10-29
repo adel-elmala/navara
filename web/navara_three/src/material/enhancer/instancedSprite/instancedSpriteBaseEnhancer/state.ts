@@ -14,6 +14,8 @@ export const DEFAULT_BASE_PROPS: Required<
   scale: 100.0,
   anchor: [0.0, 0.0],
   offset: [0.0, 0.0],
+  translate: [0.0, 0.0],
+  translateViewport: false,
   flatFacing: false,
   rotateWithCamera: true,
   rotation: 0,
@@ -43,6 +45,8 @@ export const DEFAULT_BASE_STATE: InstancedSpriteBaseState = {
   scale: DEFAULT_BASE_PROPS.scale,
   anchor: DEFAULT_BASE_PROPS.anchor,
   offset: DEFAULT_BASE_PROPS.offset,
+  translate: DEFAULT_BASE_PROPS.translate,
+  translateViewport: DEFAULT_BASE_PROPS.translateViewport,
   flatFacing: DEFAULT_BASE_PROPS.flatFacing,
   rotateWithCamera: DEFAULT_BASE_PROPS.rotateWithCamera,
   rotation: DEFAULT_BASE_PROPS.rotation * MathUtils.DEG2RAD,
@@ -85,6 +89,9 @@ export const updateState = (
     scale: props.scale ?? currentState.scale,
     anchor: props.anchor ?? currentState.anchor,
     offset: props.offset ?? currentState.offset,
+    translate: props.translate ?? currentState.translate,
+    translateViewport:
+      props.translateViewport ?? currentState.translateViewport,
     flatFacing: props.flatFacing ?? currentState.flatFacing,
     rotateWithCamera: props.rotateWithCamera ?? currentState.rotateWithCamera,
     rotation:

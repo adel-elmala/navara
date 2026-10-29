@@ -28,6 +28,8 @@ describe("instancedSpriteBaseEnhancer/mutates", () => {
         scale: 50,
         anchor: [0.5, 0.5],
         offset: [3, -4],
+        translate: [5, 6],
+        translateViewport: true,
         sizeInMeters: false,
         offsetDepth: false,
         alphaTest: 0.3,
@@ -45,6 +47,9 @@ describe("instancedSpriteBaseEnhancer/mutates", () => {
       expect(uniforms.uAnchor?.value.y).toBe(0.5);
       expect(uniforms.uOffset?.value.x).toBe(3);
       expect(uniforms.uOffset?.value.y).toBe(-4);
+      expect(uniforms.uTranslate?.value.x).toBe(5);
+      expect(uniforms.uTranslate?.value.y).toBe(6);
+      expect(uniforms.uTranslateViewport?.value).toBe(true);
       expect(uniforms.uSizeInMeters?.value).toBe(false);
       expect(uniforms.uOffsetDepth?.value).toBe(false);
       expect(uniforms.uAlphaTest?.value).toBe(0.3);

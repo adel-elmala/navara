@@ -972,6 +972,43 @@ Can also be set per feature from a [feature evaluator](../../api/feature-evaluat
 }
 ```
 
+### translate
+
+**Type:** [`Vec2`](../../api/types/#vec2) | undefined
+
+**Description:** Moves the drawn label by a number of screen pixels, as MapLibre's `text-translate` does. A positive `x` moves it right and a positive `y` moves it down, in the frame [`translateAnchor`](#translateanchor) sets. The shift is applied after the label is projected, so it stays the same number of pixels at any distance and does not turn with [`rotation`](#rotation). Decluttering reserves the space where the label is drawn.
+
+**Default:** `{ x: 0, y: 0 }`
+
+**Example:**
+
+```typescript
+{
+  text: {
+    translate: { x: 0, y: -10 } // 10 px up
+  }
+}
+```
+
+### translateAnchor
+
+**Type:** `"map" | "viewport" | undefined`
+
+**Description:** Sets the frame [`translate`](#translate) is measured in. With `"map"`, the shift turns with the camera heading, so a positive `x` points east and a positive `y` points south. With `"viewport"`, it follows the screen axes. Unlike MapLibre's `"map"`, the shift is not foreshortened when the camera is pitched.
+
+**Default:** `"map"`
+
+**Example:**
+
+```typescript
+{
+  text: {
+    translate: { x: 10, y: 0 },
+    translateAnchor: "viewport" // 10 px right on screen, whatever the heading
+  }
+}
+```
+
 ### transparent
 
 **Type:** `boolean | undefined`

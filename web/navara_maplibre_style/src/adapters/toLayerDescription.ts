@@ -7,6 +7,7 @@ import {
   type Overlap,
   type Source,
   type SourceGeometryType,
+  type TranslateAnchor,
   type VectorLayer,
 } from "@navaramap/three";
 
@@ -51,7 +52,14 @@ const ZOOM_FOLLOWING_SYMBOL_PROPERTIES = {
     "text-optional",
     "icon-optional",
   ],
-  paint: ["text-halo-color", "text-halo-width"],
+  paint: [
+    "text-halo-color",
+    "text-halo-width",
+    "text-translate",
+    "text-translate-anchor",
+    "icon-translate",
+    "icon-translate-anchor",
+  ],
 } as const;
 
 /**
@@ -217,6 +225,37 @@ function resolvePadding(
     Math.floor(zoom),
   );
   return typeof value === "number" ? [value] : (value as number[]);
+}
+
+/**
+ * Resolve `*-translate` and `*-translate-anchor` for the layer. Both are
+ * zoom-only in the spec, so one value covers every feature; MapLibre's pixels,
+ * +y down, match the material's `translate`.
+ */
+function resolveTranslate(
+  engine: StyleEngine,
+  styleLayer: StyleLayer,
+  prefix: "text" | "icon",
+  zoom: number,
+): { translate: { x: number; y: number }; translateAnchor: TranslateAnchor } {
+  const [x, y] = evaluateLayerProperty(
+    engine,
+    styleLayer,
+    "paint",
+    `${prefix}-translate`,
+    zoom,
+  ) as [number, number];
+  const anchor = evaluateLayerProperty(
+    engine,
+    styleLayer,
+    "paint",
+    `${prefix}-translate-anchor`,
+    zoom,
+  );
+  return {
+    translate: { x, y },
+    translateAnchor: anchor === "viewport" ? "viewport" : "map",
+  };
 }
 
 /**
@@ -588,6 +627,7 @@ function createSymbolLayer(
           zoom,
         ),
         ...resolveOverlap(engine, styleLayer, "icon", zoom),
+        ...resolveTranslate(engine, styleLayer, "icon", zoom),
         ...(geometryTypes && { geometryTypes }),
         ...(alongLine && { spacing: orientation.spacing }),
       } satisfies Partial<BillboardDescription>);
@@ -619,6 +659,7 @@ function createSymbolLayer(
         declutterPadding: resolvePadding(engine, styleLayer, "text", zoom),
         standalone: placesAlone(engine, styleLayer, "icon", hasIconImage, zoom),
         ...resolveOverlap(engine, styleLayer, "text", zoom),
+        ...resolveTranslate(engine, styleLayer, "text", zoom),
         // MapLibre never wraps or justifies labels placed along a line.
         maxWidth: alongLine
           ? 0

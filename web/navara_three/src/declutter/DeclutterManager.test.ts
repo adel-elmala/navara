@@ -98,6 +98,8 @@ function label(
     flatFacing: false,
     rotateWithCamera: true,
     rotation: 0,
+    translate: [0, 0],
+    translateViewport: false,
     handle: 0,
     ...partial,
   };
@@ -148,6 +150,8 @@ describe("DeclutterManager", () => {
         flatFacing: true,
         rotateWithCamera: false,
         rotation: 0.5,
+        translate: [6, -7],
+        translateViewport: true,
       }),
       label({ handle: 1, priority: 1, pairRole: "billboard" }),
     ]);
@@ -175,6 +179,8 @@ describe("DeclutterManager", () => {
     expect(Array.from(candidates.subarray(18, 22))).toEqual([9, 5, 2, 0]);
     // flatFacing, rotateWithCamera, rotation
     expect(Array.from(candidates.subarray(22, 25))).toEqual([1, 0, 0.5]);
+    // translateX, translateY, translateMap (viewport -> 0)
+    expect(Array.from(candidates.subarray(25, 28))).toEqual([6, -7, 0]);
     // An unpaired candidate packs role 0 whatever its pairRole.
     expect(candidates[CANDIDATE_STRIDE + 20]).toBe(0);
     expect(
@@ -182,6 +188,8 @@ describe("DeclutterManager", () => {
         candidates.subarray(CANDIDATE_STRIDE + 22, CANDIDATE_STRIDE + 25),
       ),
     ).toEqual([0, 1, 0]);
+    // A map-anchored translate packs 1.
+    expect(candidates[CANDIDATE_STRIDE + 27]).toBe(1);
     expect(candidates[CANDIDATE_STRIDE + 11]).toBe(0); // overlap: never -> 0
   });
 

@@ -31,7 +31,7 @@ knowing before touching either shader.
 ```mermaid
 flowchart LR
   subgraph U["Tier 1 · batch-wide<br/>uniforms"]
-    U1["outline width/color/opacity<br/>background color/border<br/>uSizeInMeters, uOffsetDepth<br/>atlas samplers + sizes<br/>label + path samplers + sizes<br/>(uPathData, uPathTexSize), uLineOffset<br/>camera fov / screen height / far plane<br/>RTE eye split, RTC center<br/>nvr_uPickable"]
+    U1["outline width/color/opacity<br/>background color/border<br/>uSizeInMeters, uOffsetDepth<br/>uTranslate, uTranslateViewport<br/>atlas samplers + sizes<br/>label + path samplers + sizes<br/>(uPathData, uPathTexSize), uLineOffset<br/>camera fov / screen height / far plane<br/>RTE eye split, RTC center<br/>nvr_uPickable"]
   end
   subgraph L["Tier 2 · per-label<br/>uLabelData texels"]
     L1["anchor (RTE high/low)<br/>text box metrics<br/>declutterHide, batchId, show, batchIndex<br/>PATH: path run, step, flip, rejected"]

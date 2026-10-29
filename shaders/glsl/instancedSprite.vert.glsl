@@ -68,6 +68,9 @@ uniform float uRotation;
 // from the anchor point (x right, y down) in the unit of the size.
 uniform vec2 uAnchor;
 uniform vec2 uOffset;
+// Screen-pixel translate, x right and y down; see nvr_translateOffset.
+uniform vec2 uTranslate;
+uniform bool uTranslateViewport;
 uniform float uFovRad;
 uniform float uScreenHeightPx;
 
@@ -155,9 +158,11 @@ void main() {
 #else
     float aspect = 1.0;
 #endif
+    float worldPerPx = nvr_pxToWorld(1.0, uFovRad, uScreenHeightPx, vec3(0.0, 0.0, mvPosition.z), vec3(0.0, 0.0, 0.0));
     if (!uSizeInMeters) {
-        sizeUnit = nvr_pxToWorld(1.0, uFovRad, uScreenHeightPx, vec3(0.0, 0.0, mvPosition.z), vec3(0.0, 0.0, 0.0));
+        sizeUnit = worldPerPx;
     }
+    vec3 translateOffset = nvr_translateOffset(absTransformed, uTranslate, uTranslateViewport, worldPerPx);
 
     // The quad's axes: view-space x/y for a plain billboard, otherwise a pair
     // derived from the anchor's east-north-up frame or the camera heading
@@ -186,6 +191,7 @@ void main() {
         absTransformed,
         addHeight
     );
+    mvPosition.xyz += translateOffset;
 
     gl_Position = projectionMatrix * mvPosition;
     vFragDepth = gl_Position.w + 1.0;

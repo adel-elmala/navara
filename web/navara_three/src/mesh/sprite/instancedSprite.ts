@@ -43,6 +43,7 @@ import type {
 import type { EventContext } from "../../event/context";
 import {
   anchorCode,
+  resolveTranslate,
   spriteCenter,
   spriteCenterFromCode,
 } from "../../material/anchor";
@@ -526,6 +527,8 @@ export class InstancedSpriteMesh
         standalone: this._standalone,
         flatFacing: !placed && orientation.flatFacing,
         rotateWithCamera: placed !== null || orientation.rotateWithCamera,
+        translate: state.translate,
+        translateViewport: state.translateViewport,
         rotation,
         owner: this,
         handle: i,
@@ -702,6 +705,7 @@ export class InstancedSpriteMesh
         scale: m.material.size ?? 100.0,
         anchor: spriteCenter(spritePlacement(m.material).anchor),
         offset: spritePlacement(m.material).offset,
+        ...resolveTranslate(m.material),
         flatFacing: spriteOrientation(m.material).facing === "flat",
         rotateWithCamera: spriteOrientation(m.material).follow,
         rotation: m.material.rotation ?? 0,
@@ -908,6 +912,7 @@ export class InstancedSpriteMesh
         scale: m.material.size ?? 100.0,
         anchor: spriteCenter(spritePlacement(m.material).anchor),
         offset: spritePlacement(m.material).offset,
+        ...resolveTranslate(m.material),
         flatFacing: spriteOrientation(m.material).facing === "flat",
         rotateWithCamera: spriteOrientation(m.material).follow,
         rotation: m.material.rotation ?? 0,
