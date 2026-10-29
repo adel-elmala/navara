@@ -36,6 +36,15 @@ export const ANCHOR_ALIGN: Readonly<Record<Anchor, readonly [number, number]>> =
     "bottom-right": [1, 1],
   };
 
+/** Whether `value` names an anchor. Material anchors arrive parsed by the
+ *  engine; a per-feature one from an evaluator needs this check. */
+export function isAnchor(value: unknown): value is Anchor {
+  return (
+    typeof value === "string" &&
+    Object.prototype.hasOwnProperty.call(ANCHOR_ALIGN, value)
+  );
+}
+
 /**
  * The anchor's position on a sprite quad whose corners are at ±0.5, x right
  * and y up — the `uAnchor` the sprite shader subtracts from each corner.

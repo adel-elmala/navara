@@ -36,7 +36,7 @@ import type {
   DeclutterParticipant,
 } from "../../declutter/types";
 import type { EventContext } from "../../event/context";
-import { resolveTranslate } from "../../material/anchor";
+import { isAnchor, resolveTranslate } from "../../material/anchor";
 import type { MaterialEnhancer } from "../../material/enhancer/MaterialEnhancer";
 import {
   createSdfTextMaterialEnhancer,
@@ -349,12 +349,20 @@ export class BatchedSdfTextMesh
   private _materialVariableAnchors: readonly Placement[];
   private _spreadGlyphs: boolean;
 
+  /** Inside {@link deferLayout}: labels waiting for their re-layout. */
+  private _layoutDeferred = false;
+  private readonly _layoutQueue = new Set<LabelRecord>();
+
   /** Labels currently parked in `prepareDeferred`, so the per-pass promotion
    *  scan can bail without touching `_labels` when nothing is parked. */
   private _deferredCount = 0;
 
   /** Layer-level declutter settings, mirrored from the material. */
   private _declutter: boolean;
+  /** Set once a feature gets more than one variable anchor of its own: it
+   *  keeps the batch in the declutter pass whatever the material says (see
+   *  `resolveDeclutterSettings`). */
+  private _featureVariants = false;
   private _declutterRank: number;
   private _declutterPriority: number;
   private _overlap: Overlap;
@@ -1182,9 +1190,19 @@ export class BatchedSdfTextMesh
    */
   private _replace(record: LabelRecord, prevAlign: number): void {
     if (record.text && this._alignOf(record) !== prevAlign) {
-      this._applyText(record, record.text);
+      this._relayout(record);
     } else {
       this._writeShift(record);
+    }
+  }
+
+  /** Lay the label's current text out again, or queue it inside
+   *  {@link deferLayout}. */
+  private _relayout(record: LabelRecord): void {
+    if (this._layoutDeferred) {
+      this._layoutQueue.add(record);
+    } else {
+      this._applyText(record, record.text);
     }
   }
 
@@ -1247,6 +1265,7 @@ export class BatchedSdfTextMesh
     // A re-layout of the *current* text (font/layout change) must not clobber
     // a newer intent that is still in flight or parked on visibility.
     record.text = text;
+    this._layoutQueue.delete(record);
 
     if (!text) {
       this._releaseRun(record);
@@ -1502,20 +1521,30 @@ export class BatchedSdfTextMesh
       const orientation = alongLine
         ? defaults
         : this._resolveOrientation(record.batchIndex, defaults);
-      const candidate = {
+      // The row for the placement in use, which alone carries the group's
+      // size and the shown bit.
+      const shifts = record.variantShiftsEm;
+      const rows = Math.max(1, shifts.length / 2);
+      const [shiftX, shiftY] = record.shiftEm;
+      const candidate: DeclutterCandidate = {
         anchorX: record.anchor[0],
         anchorY: record.anchor[1],
         anchorZ: record.anchor[2],
         addHeight: record.addHeight,
+        minX: hasBox ? boxes[b] : shiftX * size,
+        maxX: hasBox ? boxes[b + 1] : (w + shiftX) * size,
+        minY: hasBox ? boxes[b + 2] : (record.minYEm + shiftY) * size,
+        maxY: hasBox ? boxes[b + 3] : (record.maxYEm + shiftY) * size,
         sizeInMeters: state.sizeInMeters,
         rank: this._declutterRank,
         priority: record.priorityOverride ?? this._declutterPriority,
+        isShown: record.declutterTarget === 0,
         overlap: this._overlap,
         ignorePlacement: this._ignorePlacement,
         padding: this._declutterPadding,
         pairGroup: this._pairGroup,
         featureIndex: record.batchIndex,
-        pairRole: "label" as const,
+        pairRole: "label",
         standalone: this._standalone,
         flatFacing: !alongLine && orientation.flatFacing,
         rotateWithCamera: alongLine || orientation.rotateWithCamera,
@@ -1527,26 +1556,24 @@ export class BatchedSdfTextMesh
         owner: this,
         handle: record.slot,
         contentKey: record.text,
+        variants: rows,
+        variant: record.variant,
       };
-      // One row per variable anchor, the one in use first and the rest in
-      // their order, so the pass moves a label only when it must.
-      const shifts = record.variantShiftsEm;
-      const rows = Math.max(1, shifts.length / 2);
-      for (let n = 0; n < rows; n++) {
-        const variant =
-          n === 0 ? record.variant : n <= record.variant ? n - 1 : n;
-        const [shiftX, shiftY] =
-          shifts.length > 0
-            ? [shifts[variant * 2], shifts[variant * 2 + 1]]
-            : record.shiftEm;
+      out.push(candidate);
+      // Then one row for each other variable anchor, in their order, so the
+      // pass moves a label only when it must. A label along a line has none.
+      for (let n = 1; n < rows; n++) {
+        const variant = n <= record.variant ? n - 1 : n;
+        const x = shifts[variant * 2];
+        const y = shifts[variant * 2 + 1];
         out.push({
           ...candidate,
-          minX: hasBox ? boxes[b] : shiftX * size,
-          maxX: hasBox ? boxes[b + 1] : (w + shiftX) * size,
-          minY: hasBox ? boxes[b + 2] : (record.minYEm + shiftY) * size,
-          maxY: hasBox ? boxes[b + 3] : (record.maxYEm + shiftY) * size,
-          isShown: n === 0 && record.declutterTarget === 0,
-          variants: n === 0 ? rows : 0,
+          minX: x * size,
+          maxX: (w + x) * size,
+          minY: (record.minYEm + y) * size,
+          maxY: (record.maxYEm + y) * size,
+          isShown: false,
+          variants: 0,
           variant,
         });
       }
@@ -1868,7 +1895,7 @@ export class BatchedSdfTextMesh
 
     // Read before applying visibility: the declutter pass consults these even
     // while other style state is skipped for hidden labels.
-    const declutter = resolveDeclutterSettings(material);
+    const declutter = resolveDeclutterSettings(material, this._featureVariants);
     if (this._declutter && !declutter.participates) {
       // Leaving declutter mode: clear any hide the pass applied — the batch
       // stops producing candidates, so nothing else would ever re-show it.
@@ -2057,6 +2084,29 @@ export class BatchedSdfTextMesh
   }
 
   // --- Per-feature API (the FeatureEvaluator contract) ---
+
+  /**
+   * Run `apply` with the re-layouts its setters cause postponed to its end,
+   * so a label whose spacing, anchor or justification changes along with its
+   * text is laid out once, with the new text, rather than once per change.
+   */
+  deferLayout(apply: () => void): void {
+    if (this._layoutDeferred) {
+      apply();
+      return;
+    }
+    this._layoutDeferred = true;
+    try {
+      apply();
+    } finally {
+      this._layoutDeferred = false;
+      // A label the text setter laid out has already left the queue.
+      for (const record of this._layoutQueue) {
+        this._applyText(record, record.text);
+      }
+      this._layoutQueue.clear();
+    }
+  }
 
   setTextByBatchIndex(batchIndex: number, text: string) {
     for (const instanceIndex of this._instancesOfBatchIndex(batchIndex)) {
@@ -2267,7 +2317,7 @@ export class BatchedSdfTextMesh
     );
     for (const instanceIndex of this._instancesOfBatchIndex(batchIndex)) {
       const record = this._labelByInstance[instanceIndex];
-      if (record) this._applyText(record, record.text);
+      if (record) this._relayout(record);
     }
     this._markDeclutterDirty();
   }
@@ -2311,7 +2361,7 @@ export class BatchedSdfTextMesh
       // Text still being prepared or parked picks the value up when its
       // `_applyText` eventually runs.
       if (record.text) {
-        this._applyText(record, record.text);
+        this._relayout(record);
         changed = true;
       }
     }
@@ -2327,6 +2377,7 @@ export class BatchedSdfTextMesh
    * its justification follow and the lines need laying out again.
    */
   setFeatureAnchorByBatchIndex(batchIndex: number, anchor: Anchor) {
+    if (!isAnchor(anchor)) return;
     let changed = false;
     for (const instanceIndex of this._instancesOfBatchIndex(batchIndex)) {
       const record = this._ensureLabel(instanceIndex);
@@ -2381,6 +2432,14 @@ export class BatchedSdfTextMesh
       setPlacements(record, placements);
       this._replace(record, prevAlign);
       changed = true;
+    }
+    if (changed && placements.length > 1 && !this._featureVariants) {
+      // Labels shown so far stay shown: the pass takes them as incumbents.
+      this._featureVariants = true;
+      this._declutter = resolveDeclutterSettings(
+        this._material,
+        true,
+      ).participates;
     }
     if (changed) {
       this._markDeclutterDirty();
@@ -2516,16 +2575,20 @@ function vec2Tuple(v: { x: number; y: number } | undefined): [number, number] {
   return [v?.x ?? 0, v?.y ?? 0];
 }
 
-/** Variable anchors as placements. The engine sends anchor names it parsed. */
+/** Variable anchors as placements, dropping any whose anchor is no anchor
+ *  name — an evaluator's are unchecked. */
 function toPlacements(
   anchors:
     | readonly { anchor: string; offset?: { x: number; y: number } }[]
     | undefined,
 ): Placement[] {
-  return (anchors ?? []).map((v) => ({
-    anchor: v.anchor as Anchor,
-    offsetEm: vec2Tuple(v.offset),
-  }));
+  const placements: Placement[] = [];
+  for (const v of anchors ?? []) {
+    if (isAnchor(v.anchor)) {
+      placements.push({ anchor: v.anchor, offsetEm: vec2Tuple(v.offset) });
+    }
+  }
+  return placements;
 }
 
 function samePlacements(

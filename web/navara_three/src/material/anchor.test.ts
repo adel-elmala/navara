@@ -5,11 +5,21 @@ import type { Anchor } from "../type";
 import {
   ANCHOR_ALIGN,
   anchorCode,
+  isAnchor,
   spriteCenter,
   spriteCenterFromCode,
 } from "./anchor";
 
 const ANCHORS = Object.keys(ANCHOR_ALIGN) as Anchor[];
+
+describe("isAnchor", () => {
+  it("accepts exactly the anchor names", () => {
+    for (const anchor of ANCHORS) expect(isAnchor(anchor)).toBe(true);
+    for (const value of ["middle", "Top", "toString", "", undefined, 0]) {
+      expect(isAnchor(value)).toBe(false);
+    }
+  });
+});
 
 describe("spriteCenter", () => {
   it("places the anchor on the quad, y up", () => {

@@ -43,6 +43,7 @@ import type {
 import type { EventContext } from "../../event/context";
 import {
   anchorCode,
+  isAnchor,
   resolveTranslate,
   spriteCenter,
   spriteCenterFromCode,
@@ -103,6 +104,10 @@ type SpriteMaterial = (NavaraPointMesh | NavaraBillboardMesh)["material"];
 
 /** Scratch for `_quadBox`: read straight back into each candidate. */
 const _tmpQuadBox = new Float64Array(4);
+
+/** Which of the quad's placement inputs have a batch slot, so `_quadBox`
+ *  reads the texture only for them. Checked once per pass. */
+type PlacementSlots = { anchor: boolean; offset: boolean };
 
 /** The box `lineAnchorPlace` resolved for an along-line anchor, in the same
  *  scratch as `_quadBox`. */
@@ -380,6 +385,7 @@ export class InstancedSpriteMesh
     const input = this._bandInput;
     const batchIndices = this._instanceBatchIndex;
     const state = enhancer.states();
+    const slots = this._placementSlots();
     // The quad's box, as in `collectDeclutterCandidates`.
     const uvRect = state.billboard
       ? (this.geometry?.getAttribute("instanceUvRect") as
@@ -401,7 +407,14 @@ export class InstancedSpriteMesh
       input[o + 4] = bands[i * 2];
       input[o + 5] = bands[i * 2 + 1];
       input[o + 6] = state.sizeInMeters ? 1 : 0;
-      const box = this._quadBox(material, state, batchIndex, aspect, size);
+      const box = this._quadBox(
+        material,
+        state,
+        slots,
+        batchIndex,
+        aspect,
+        size,
+      );
       input[o + 7] = box[0];
       input[o + 8] = box[1];
       input[o + 9] = box[2];
@@ -462,6 +475,7 @@ export class InstancedSpriteMesh
     const outOfBand = this._outOfBand;
     const placed = this._linePlacement;
     const bearings = state.instanceBearing ? this._bearings : null;
+    const slots = this._placementSlots();
     const count = Math.min(this._instanceCount, anchors.length / 3);
 
     for (let i = 0; i < count; i++) {
@@ -503,7 +517,7 @@ export class InstancedSpriteMesh
             state.rotation) + (bearings ? bearings[i] : 0);
       const box = placed
         ? placedQuadBox(placed, p)
-        : this._quadBox(material, state, batchIndex, aspect, size);
+        : this._quadBox(material, state, slots, batchIndex, aspect, size);
       out.push({
         anchorX: anchors[i * 3],
         anchorY: anchors[i * 3 + 1],
@@ -540,6 +554,14 @@ export class InstancedSpriteMesh
     this.setDeclutterHiddenByInstance(handle, hidden);
   }
 
+  private _placementSlots(): PlacementSlots {
+    const material = this.material as Material;
+    return {
+      anchor: hasBatchScalarSlot(material, "anchor"),
+      offset: hasBatchScalarSlot(material, "offsetX"),
+    };
+  }
+
   /**
    * The unrotated quad around its anchor, `[minX, maxX, minY, maxY]` in the
    * unit of `size`, y up — mirror of instancedSprite.vert.glsl: the batch
@@ -548,17 +570,21 @@ export class InstancedSpriteMesh
   private _quadBox(
     material: ShaderMaterial,
     state: InstancedSpriteBaseState,
+    slots: PlacementSlots,
     batchIndex: number,
     aspect: number,
     size: number,
   ): Float64Array {
-    const code = readBatchScalar(material, batchIndex, "anchor");
+    const code = slots.anchor
+      ? readBatchScalar(material, batchIndex, "anchor")
+      : undefined;
     const [cx, cy] =
       code === undefined ? state.anchor : spriteCenterFromCode(code);
-    const ox =
-      readBatchScalar(material, batchIndex, "offsetX") ?? state.offset[0];
-    const oy =
-      readBatchScalar(material, batchIndex, "offsetY") ?? state.offset[1];
+    let [ox, oy] = state.offset;
+    if (slots.offset) {
+      ox = readBatchScalar(material, batchIndex, "offsetX") ?? ox;
+      oy = readBatchScalar(material, batchIndex, "offsetY") ?? oy;
+    }
     const box = _tmpQuadBox;
     box[0] = (-0.5 - cx) * aspect * size + ox;
     box[1] = (0.5 - cx) * aspect * size + ox;
@@ -685,6 +711,8 @@ export class InstancedSpriteMesh
     const material = this.material as ShaderMaterial;
 
     this._cacheDeclutterState(m);
+    const placement = spritePlacement(m.material);
+    const orientation = spriteOrientation(m.material);
 
     if (material.visible !== m.material.show) {
       material.visible = m.material.show ?? true;
@@ -703,11 +731,11 @@ export class InstancedSpriteMesh
     enhancer.update({
       base: {
         scale: m.material.size ?? 100.0,
-        anchor: spriteCenter(spritePlacement(m.material).anchor),
-        offset: spritePlacement(m.material).offset,
+        anchor: spriteCenter(placement.anchor),
+        offset: placement.offset,
         ...resolveTranslate(m.material),
-        flatFacing: spriteOrientation(m.material).facing === "flat",
-        rotateWithCamera: spriteOrientation(m.material).follow,
+        flatFacing: orientation.facing === "flat",
+        rotateWithCamera: orientation.follow,
         rotation: m.material.rotation ?? 0,
         sizeInMeters: m.material.sizeInMeters ?? true,
         offsetDepth: m.material.offsetDepth ?? true,
@@ -730,8 +758,8 @@ export class InstancedSpriteMesh
     // value. Once a slot exists every feature reads the texture, so a material
     // change has to be written through or evaluator overrides would outlive
     // it. Mirrors BatchedSdfTextMesh._applyUpdate.
-    this._writeThroughOrientation(m.material);
-    this._writeThroughPlacement(m.material);
+    this._writeThroughOrientation(orientation);
+    this._writeThroughPlacement(placement);
 
     // Position updates (per-instance attributes)
     {
@@ -892,6 +920,8 @@ export class InstancedSpriteMesh
     m: NavaraPointMesh | NavaraBillboardMesh,
   ) {
     const isBillboard = m instanceof NavaraBillboardMesh;
+    const placement = spritePlacement(m.material);
+    const orientation = spriteOrientation(m.material);
     // Face culling (`side`) is set by the enhancer from `backfaceCulling`.
     const material = new ShaderMaterial();
 
@@ -910,11 +940,11 @@ export class InstancedSpriteMesh
           positionsInfo.bearings && (m.material.rotateToLine ?? true),
         ),
         scale: m.material.size ?? 100.0,
-        anchor: spriteCenter(spritePlacement(m.material).anchor),
-        offset: spritePlacement(m.material).offset,
+        anchor: spriteCenter(placement.anchor),
+        offset: placement.offset,
         ...resolveTranslate(m.material),
-        flatFacing: spriteOrientation(m.material).facing === "flat",
-        rotateWithCamera: spriteOrientation(m.material).follow,
+        flatFacing: orientation.facing === "flat",
+        rotateWithCamera: orientation.follow,
         rotation: m.material.rotation ?? 0,
         sizeInMeters: m.material.sizeInMeters ?? true,
         offsetDepth: m.material.offsetDepth ?? true,
@@ -1369,6 +1399,7 @@ export class InstancedSpriteMesh
 
   /** Part of the quad placed at the anchor point, for one feature. */
   setFeatureAnchorByBatchIndex(batchIndex: number, anchor: Anchor) {
+    if (!isAnchor(anchor)) return;
     if (
       this._updateBatchAttribute(
         batchIndex,
@@ -1434,8 +1465,7 @@ export class InstancedSpriteMesh
    * value changed and a slot exists — the same guards, for the same reasons,
    * as {@link _writeThroughOrientation}.
    */
-  private _writeThroughPlacement(material: SpriteMaterial): void {
-    const next = spritePlacement(material);
+  private _writeThroughPlacement(next: SpritePlacement): void {
     const prev = this._placement;
     this._placement = next;
     if (!prev) return;
@@ -1468,8 +1498,7 @@ export class InstancedSpriteMesh
    * evaluator overrides on every terrain tick. Mirrors the style/size writes
    * in `BatchedSdfTextMesh._applyUpdate`.
    */
-  private _writeThroughOrientation(material: SpriteMaterial): void {
-    const next = spriteOrientation(material);
+  private _writeThroughOrientation(next: SpriteOrientation): void {
     const prev = this._orientation;
     this._orientation = next;
     // A material switched to (or away from) flat changes the quad it needs.

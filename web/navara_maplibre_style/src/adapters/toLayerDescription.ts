@@ -238,13 +238,14 @@ function resolveTranslate(
   prefix: "text" | "icon",
   zoom: number,
 ): { translate: { x: number; y: number }; translateAnchor: TranslateAnchor } {
-  const [x, y] = evaluateLayerProperty(
+  const translate = evaluateLayerProperty(
     engine,
     styleLayer,
     "paint",
     `${prefix}-translate`,
     zoom,
-  ) as [number, number];
+  );
+  const [x, y] = Array.isArray(translate) ? translate : [];
   const anchor = evaluateLayerProperty(
     engine,
     styleLayer,
@@ -253,7 +254,7 @@ function resolveTranslate(
     zoom,
   );
   return {
-    translate: { x, y },
+    translate: { x: finiteOr(x, 0), y: finiteOr(y, 0) },
     translateAnchor: anchor === "viewport" ? "viewport" : "map",
   };
 }

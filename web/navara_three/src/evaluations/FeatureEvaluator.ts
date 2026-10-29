@@ -500,11 +500,19 @@ export class FeatureEvaluator {
       const evaluated = f(info);
       this.applyEvaluatedValues(batchIndex, evaluated);
     };
+    const evaluateAll = () => {
+      if (options?.filters) {
+        this.readFilteredFeatureProperties(options.filters, evaluate);
+      } else {
+        this.readFeatureProperties(evaluate);
+      }
+    };
 
-    if (options?.filters) {
-      this.readFilteredFeatureProperties(options.filters, evaluate);
+    // Labels lay out once, after every value that shapes their layout is in.
+    if (this.obj instanceof BatchedSdfTextMesh) {
+      this.obj.deferLayout(evaluateAll);
     } else {
-      this.readFeatureProperties(evaluate);
+      evaluateAll();
     }
   }
 
@@ -589,8 +597,9 @@ export class FeatureEvaluator {
       if (evaluated.height != null) {
         obj.setFeatureHeightByBatchIndex(batchIndex, evaluated.height);
       }
-      // Before `text`: glyph pieces and spacing are baked into the layout, so
-      // setting them first lays a newly-texted label out once instead of twice.
+      // Before `text`: glyph pieces, spacing and placement are baked into the
+      // layout, so a newly-texted label is laid out with them already set.
+      // A label with text re-lays out once, at the end of `evaluate`.
       if (evaluated.spreadGlyphs != null && obj instanceof BatchedSdfTextMesh) {
         obj.setFeatureSpreadGlyphsByBatchIndex(
           batchIndex,
