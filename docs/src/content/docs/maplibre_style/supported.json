@@ -217,16 +217,16 @@
           "status": "✅"
         },
         "text-anchor": {
-          "status": "❌"
+          "status": "✅"
         },
         "icon-anchor": {
-          "status": "⚠️ Follows zoom, but is the same for every feature in the layer"
+          "status": "✅"
         },
         "text-offset": {
-          "status": "❌"
+          "status": "✅"
         },
         "icon-offset": {
-          "status": "❌"
+          "status": "✅"
         },
         "text-rotate": {
           "status": "✅"
@@ -250,7 +250,7 @@
           "status": "⚠️ Follows zoom, but is the same for every feature in the layer"
         },
         "text-justify": {
-          "status": "⚠️ Follows zoom, but is the same for every feature in the layer; auto is centered"
+          "status": "✅"
         },
         "text-max-angle": {
           "status": "✅"

@@ -44,7 +44,8 @@ export const createBaseMutates = (
     uColor: { value: new Color(1, 1, 1) },
     uOpacity: { value: 1.0 },
     uAddHeight: { value: 0.0 },
-    uCenter: { value: new ThreeVector2(0, 0) },
+    uAnchor: { value: new ThreeVector2(0, 0) },
+    uOffset: { value: new ThreeVector2(0, 0) },
     uFlatFacing: { value: false },
     uRotateWithCamera: { value: true },
     uRotation: { value: 0 },
@@ -77,7 +78,8 @@ export const createBaseMutates = (
         ? Math.min(Math.max(state.opacity, 0), 1)
         : 1.0;
       refs.uAddHeight.value = state.addHeight;
-      refs.uCenter.value.set(state.center[0], state.center[1]);
+      refs.uAnchor.value.set(state.anchor[0], state.anchor[1]);
+      refs.uOffset.value.set(state.offset[0], state.offset[1]);
       refs.uFlatFacing.value = state.flatFacing;
       refs.uRotateWithCamera.value = state.rotateWithCamera;
       refs.uRotation.value = state.rotation;
@@ -101,7 +103,8 @@ export const createBaseMutates = (
       uniforms.uEyeRTEHigh = refs.uEyeRTEHigh;
       uniforms.u_rteOne = RTE_ONE_UNIFORM;
       uniforms.uScale = refs.uScale;
-      uniforms.uCenter = refs.uCenter;
+      uniforms.uAnchor = refs.uAnchor;
+      uniforms.uOffset = refs.uOffset;
       uniforms.uFlatFacing = refs.uFlatFacing;
       uniforms.uRotateWithCamera = refs.uRotateWithCamera;
       uniforms.uRotation = refs.uRotation;

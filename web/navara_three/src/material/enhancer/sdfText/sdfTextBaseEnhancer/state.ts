@@ -17,7 +17,6 @@ export const DEFAULT_BASE_PROPS: Required<
   useMsdf: false,
   linePlacement: false,
   pathSamples: 0,
-  center: [0.5, 0.0],
   flatFacing: false,
   rotateWithCamera: true,
   rotation: 0,
@@ -47,7 +46,6 @@ export const DEFAULT_BASE_STATE: SdfTextBaseState = {
   useMsdf: DEFAULT_BASE_PROPS.useMsdf,
   linePlacement: DEFAULT_BASE_PROPS.linePlacement,
   pathSamples: DEFAULT_BASE_PROPS.pathSamples,
-  center: DEFAULT_BASE_PROPS.center,
   flatFacing: DEFAULT_BASE_PROPS.flatFacing,
   rotateWithCamera: DEFAULT_BASE_PROPS.rotateWithCamera,
   rotation: DEFAULT_BASE_PROPS.rotation * MathUtils.DEG2RAD,
@@ -88,7 +86,6 @@ export const updateState = (
     linePlacement: currentState.linePlacement,
     pathSamples: currentState.pathSamples,
     // Mutable
-    center: props.center ?? currentState.center,
     flatFacing: props.flatFacing ?? currentState.flatFacing,
     rotateWithCamera: props.rotateWithCamera ?? currentState.rotateWithCamera,
     rotation:

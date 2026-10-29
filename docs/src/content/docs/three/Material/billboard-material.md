@@ -27,6 +27,26 @@ sidebar:
 }
 ```
 
+### anchor
+
+**Type:** `"center" | "left" | "right" | "top" | "bottom" | "top-left" | "top-right" | "bottom-left" | "bottom-right" | undefined`
+
+**Description:** Sets which part of the billboard sits on its position, as MapLibre's `icon-anchor` does. For example, `"bottom"` stands the billboard on its position like a map pin. The anchor is also the point [`rotation`](#rotation) turns the billboard around.
+
+Can also be set per feature from a [feature evaluator](../../api/feature-evaluator/).
+
+**Default:** `"center"`
+
+**Example:**
+
+```typescript
+{
+  billboard: {
+    anchor: "bottom"
+  }
+}
+```
+
 ### backfaceCulling
 
 **Type:** `boolean | undefined`
@@ -44,24 +64,6 @@ Only a flat billboard (see [`billboardFacing`](#billboardfacing)) has a back the
   billboard: {
     billboardFacing: "flat",
     backfaceCulling: true
-  }
-}
-```
-
-### center
-
-**Type:** [`Vec2`](../../api/types/#vec2)
-
-**Description:** Specifies the shift amount from the center. The range is between 0 and 1.
-
-**Default:** Required
-
-**Example:**
-
-```typescript
-{
-  billboard: {
-    center: { x: 0.5, y: 0.5 }
   }
 }
 ```
@@ -305,6 +307,26 @@ import { Color } from "@navaramap/three";
 }
 ```
 
+### offset
+
+**Type:** [`Vec2`](../../api/types/#vec2) | undefined
+
+**Description:** Moves the billboard away from its anchor point, in the unit of [`size`](#size): pixels when [`sizeInMeters`](#sizeinmeters) is `false`, meters otherwise. A positive `x` moves it right and a positive `y` moves it down, as MapLibre's `icon-offset` does. The offset lies in the billboard's own plane, so it turns with [`rotation`](#rotation).
+
+Can also be set per feature from a [feature evaluator](../../api/feature-evaluator/).
+
+**Default:** `{ x: 0, y: 0 }`
+
+**Example:**
+
+```typescript
+{
+  billboard: {
+    offset: { x: 0, y: -8 } // 8 units up
+  }
+}
+```
+
 ### offsetDepth
 
 **Type:** `boolean | undefined`
@@ -493,7 +515,7 @@ Can also be set per feature from a [feature evaluator](../../api/feature-evaluat
 
 **Description:** Rotates the billboard within its own plane around its anchor point, in degrees, clockwise as seen from the front. The rotation is applied on top of the orientation that [`billboardFacing`](#billboardfacing) and [`rotateWithCamera`](#rotatewithcamera) resolve to.
 
-[`center`](#center) decides where inside the billboard the pivot sits.
+[`anchor`](#anchor) decides where inside the billboard the pivot sits.
 
 Can also be set per feature from a [feature evaluator](../../api/feature-evaluator/), so every billboard in a layer can point a different way.
 

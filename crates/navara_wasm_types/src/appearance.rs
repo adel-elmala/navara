@@ -111,6 +111,21 @@ fn parse_overlap(value: &Option<String>) -> Option<navara_material::Overlap> {
     }
 }
 
+/// Parse a JS-facing anchor name, warning on an unknown value so the caller
+/// keeps the material's current value.
+fn parse_anchor(value: &Option<String>) -> Option<navara_material::Anchor> {
+    let name = value.as_ref()?;
+    match navara_material::Anchor::parse(name) {
+        Some(a) => Some(a),
+        None => {
+            bevy_log::warn!(
+                "anchor: unknown value {name:?} (expected \"center\", \"left\", \"right\", \"top\", \"bottom\", \"top-left\", \"top-right\", \"bottom-left\" or \"bottom-right\")"
+            );
+            None
+        }
+    }
+}
+
 #[wasm_bindgen]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PointMaterial {
@@ -138,7 +153,7 @@ pub struct PointMaterial {
     #[serde(rename = "rotateWithCamera")]
     pub rotate_with_camera: Option<bool>,
     /// Rotation of the point within its own plane, about its anchor point, in
-    /// degrees, clockwise seen from the front. `center` decides where inside
+    /// degrees, clockwise seen from the front. `anchor` decides where inside
     /// the quad the pivot sits. Defaults to `0.0`.
     pub rotation: Option<f32>,
     /// How anchors are derived from line and polygon geometry: `"point"` (the
@@ -163,9 +178,15 @@ pub struct PointMaterial {
     #[wasm_bindgen(js_name = rotateToLine)]
     #[serde(rename = "rotateToLine")]
     pub rotate_to_line: Option<bool>,
-    /// anchor point of the sprite, range is (-0.5, -0.5) to (0.5, 0.5).
-    /// Default is (0.0, 0.0) which means the center of the sprite.
-    pub center: Option<Vec2>,
+    /// Part of the quad placed at the anchor point: `"center"` (default),
+    /// `"left"`, `"right"`, `"top"`, `"bottom"`, `"top-left"`, `"top-right"`,
+    /// `"bottom-left"` or `"bottom-right"`, as MapLibre's `icon-anchor`.
+    #[wasm_bindgen(getter_with_clone)]
+    pub anchor: Option<String>,
+    /// Shift from the anchor point, x right and y down, in the unit of `size`
+    /// (meters when `sizeInMeters`, pixels otherwise). Lies in the quad's own
+    /// plane, so it turns with `rotation`. Defaults to `(0, 0)`.
+    pub offset: Option<Vec2>,
     pub height: Option<f32>,
     #[wasm_bindgen(js_name = sizeInMeters)]
     #[serde(rename = "sizeInMeters")]
@@ -258,7 +279,8 @@ impl From<PointMaterial> for navara_material::PointMaterial {
             spacing: val.spacing.unwrap_or(default.spacing),
             rotate_to_line: val.rotate_to_line.unwrap_or(default.rotate_to_line),
             color: val.color.unwrap_or(default.color),
-            center: val.center.unwrap_or(default.center.into()).into(),
+            anchor: parse_anchor(&val.anchor).unwrap_or(default.anchor),
+            offset: val.offset.unwrap_or(default.offset.into()).into(),
             height: val.height.unwrap_or(default.height),
             size_in_meters: val.size_in_meters.unwrap_or(default.size_in_meters),
             clamp_to_ground: val.clamp_to_ground.unwrap_or(default.clamp_to_ground),
@@ -294,7 +316,8 @@ impl<'a> From<&'a navara_material::PointMaterial> for PointMaterial {
             spacing: Some(value.spacing),
             rotate_to_line: Some(value.rotate_to_line),
             color: Some(value.color),
-            center: Some(value.center.into()),
+            anchor: Some(value.anchor.as_str().to_string()),
+            offset: Some(value.offset.into()),
             height: Some(value.height),
             size_in_meters: Some(value.size_in_meters),
             clamp_to_ground: Some(value.clamp_to_ground),
@@ -329,7 +352,8 @@ impl PointMaterial {
             placement: parse_placement(&self.placement).unwrap_or(other.placement),
             spacing: self.spacing.unwrap_or(other.spacing),
             rotate_to_line: self.rotate_to_line.unwrap_or(other.rotate_to_line),
-            center: self.center.unwrap_or(other.center.into()).into(),
+            anchor: parse_anchor(&self.anchor).unwrap_or(other.anchor),
+            offset: self.offset.unwrap_or(other.offset.into()).into(),
             height: self.height.unwrap_or(other.height),
             size_in_meters: self.size_in_meters.unwrap_or(other.size_in_meters),
             clamp_to_ground: self.clamp_to_ground.unwrap_or(other.clamp_to_ground),
@@ -388,7 +412,7 @@ pub struct BillboardMaterial {
     #[serde(rename = "rotateWithCamera")]
     pub rotate_with_camera: Option<bool>,
     /// Rotation of the sprite within its own plane, about its anchor point,
-    /// in degrees, clockwise seen from the front. `center` decides where
+    /// in degrees, clockwise seen from the front. `anchor` decides where
     /// inside the sprite the pivot sits. Defaults to `0.0`.
     pub rotation: Option<f32>,
     /// How anchors are derived from line and polygon geometry: `"point"` (the
@@ -414,9 +438,15 @@ pub struct BillboardMaterial {
     #[wasm_bindgen(js_name = rotateToLine)]
     #[serde(rename = "rotateToLine")]
     pub rotate_to_line: Option<bool>,
-    /// anchor point of the sprite, range is (-0.5, -0.5) to (0.5, 0.5).
-    /// Default is (0.0, 0.0) which means the center of the sprite.
-    pub center: Option<Vec2>,
+    /// Part of the quad placed at the anchor point: `"center"` (default),
+    /// `"left"`, `"right"`, `"top"`, `"bottom"`, `"top-left"`, `"top-right"`,
+    /// `"bottom-left"` or `"bottom-right"`, as MapLibre's `icon-anchor`.
+    #[wasm_bindgen(getter_with_clone)]
+    pub anchor: Option<String>,
+    /// Shift from the anchor point, x right and y down, in the unit of `size`
+    /// (meters when `sizeInMeters`, pixels otherwise). Lies in the quad's own
+    /// plane, so it turns with `rotation`. Defaults to `(0, 0)`.
+    pub offset: Option<Vec2>,
     pub height: Option<f32>,
     #[wasm_bindgen(getter_with_clone)]
     pub url: Option<String>,
@@ -521,7 +551,8 @@ impl From<BillboardMaterial> for navara_material::BillboardMaterial {
             placement: parse_placement(&val.placement).unwrap_or(default.placement),
             spacing: val.spacing.unwrap_or(default.spacing),
             rotate_to_line: val.rotate_to_line.unwrap_or(default.rotate_to_line),
-            center: val.center.unwrap_or(default.center.into()).into(),
+            anchor: parse_anchor(&val.anchor).unwrap_or(default.anchor),
+            offset: val.offset.unwrap_or(default.offset.into()).into(),
             height: val.height.unwrap_or(default.height),
             url: val.url.unwrap_or(default.url),
             size_in_meters: val.size_in_meters.unwrap_or(default.size_in_meters),
@@ -554,7 +585,8 @@ impl<'a> From<&'a navara_material::BillboardMaterial> for BillboardMaterial {
             show: Some(value.show),
             size: Some(value.size),
             color: Some(value.color),
-            center: Some(value.center.into()),
+            anchor: Some(value.anchor.as_str().to_string()),
+            offset: Some(value.offset.into()),
             billboard_facing: value.billboard_facing.map(|f| f.as_str().to_string()),
             rotate_with_camera: value.rotate_with_camera,
             rotation: Some(value.rotation),
@@ -602,7 +634,8 @@ impl BillboardMaterial {
             placement: parse_placement(&self.placement).unwrap_or(other.placement),
             spacing: self.spacing.unwrap_or(other.spacing),
             rotate_to_line: self.rotate_to_line.unwrap_or(other.rotate_to_line),
-            center: self.center.unwrap_or(other.center.into()).into(),
+            anchor: parse_anchor(&self.anchor).unwrap_or(other.anchor),
+            offset: self.offset.unwrap_or(other.offset.into()).into(),
             height: self.height.unwrap_or(other.height),
             url: self.url.clone().unwrap_or(other.url.clone()),
             size_in_meters: self.size_in_meters.unwrap_or(other.size_in_meters),
@@ -637,7 +670,17 @@ pub struct TextMaterial {
     /// size in pixels/meters (units are determined by `sizeInMeters`).
     pub size: Option<f32>,
     pub color: Option<u32>,
-    pub center: Option<Vec2>,
+    /// Part of the text block placed at the anchor point: `"center"`
+    /// (default), `"left"`, `"right"`, `"top"`, `"bottom"`, `"top-left"`,
+    /// `"top-right"`, `"bottom-left"` or `"bottom-right"`, as MapLibre's
+    /// `text-anchor`. The block is as wide as its widest line and one line
+    /// height tall per line.
+    #[wasm_bindgen(getter_with_clone)]
+    pub anchor: Option<String>,
+    /// Shift from the anchor point, x right and y down, in ems (multiples of
+    /// `size`), as MapLibre's `text-offset`. Lies in the label's own plane, so
+    /// it turns with `rotation`. Defaults to `(0, 0)`.
+    pub offset: Option<Vec2>,
     /// Plane the label lies in: the screen (`"upright"`, never foreshortened)
     /// or the globe surface around its anchor (`"flat"`), following its
     /// curvature so it reads as painted on the surface. MapLibre's
@@ -652,7 +695,7 @@ pub struct TextMaterial {
     /// degrees, clockwise seen from the front. Applied on top of whatever
     /// orientation `textFacing` and `rotateWithCamera` resolve to: it spins a
     /// billboard on screen and turns a surface label like a compass bearing.
-    /// `center` decides where inside the text the pivot sits. Along a line
+    /// `anchor` decides where inside the text the pivot sits. Along a line
     /// each glyph spins about its own point on the line, as MapLibre's
     /// `text-rotate` does, except for a straight label (`rotateWithCamera`
     /// without `spreadGlyphs`), which turns as a whole. Defaults to `0.0`.
@@ -819,7 +862,8 @@ pub struct TextMaterial {
     #[serde(rename = "lineHeight")]
     pub line_height: Option<f32>,
     /// Horizontal alignment of lines within a multi-line block:
-    /// `"left"`, `"center"` (default), or `"right"`.
+    /// `"left"`, `"center"` (default), `"right"`, or `"auto"`, which aligns
+    /// towards the horizontal side of `anchor` (MapLibre's `text-justify`).
     #[wasm_bindgen(getter_with_clone, js_name = textAlign)]
     #[serde(rename = "textAlign")]
     pub text_align: Option<String>,
@@ -899,7 +943,8 @@ impl From<TextMaterial> for navara_material::TextMaterial {
             show: val.show.unwrap_or(default.show),
             size: val.size.unwrap_or(default.size),
             color: val.color.unwrap_or(default.color),
-            center: val.center.unwrap_or(default.center.into()).into(),
+            anchor: parse_anchor(&val.anchor).unwrap_or(default.anchor),
+            offset: val.offset.unwrap_or(default.offset.into()).into(),
             text_facing: parse_facing("textFacing", &val.text_facing),
             rotate_with_camera: val.rotate_with_camera,
             rotation: val.rotation.unwrap_or(default.rotation),
@@ -963,7 +1008,8 @@ impl<'a> From<&'a navara_material::TextMaterial> for TextMaterial {
             show: Some(value.show),
             size: Some(value.size),
             color: Some(value.color),
-            center: Some(value.center.into()),
+            anchor: Some(value.anchor.as_str().to_string()),
+            offset: Some(value.offset.into()),
             text_facing: value.text_facing.map(|f| f.as_str().to_string()),
             rotate_with_camera: value.rotate_with_camera,
             rotation: Some(value.rotation),
@@ -1023,7 +1069,8 @@ impl TextMaterial {
             show: self.show.unwrap_or(other.show),
             size: self.size.unwrap_or(other.size),
             color: self.color.unwrap_or(other.color),
-            center: self.center.unwrap_or(other.center.into()).into(),
+            anchor: parse_anchor(&self.anchor).unwrap_or(other.anchor),
+            offset: self.offset.unwrap_or(other.offset.into()).into(),
             text_facing: parse_facing("textFacing", &self.text_facing).or(other.text_facing),
             rotate_with_camera: self.rotate_with_camera.or(other.rotate_with_camera),
             rotation: self.rotation.unwrap_or(other.rotation),
@@ -2539,7 +2586,7 @@ pub struct HillshadeMaterial {
 
 #[cfg(test)]
 mod test {
-    use super::{TextMaterial, parse_facing, parse_geometry_types, parse_padding};
+    use super::{TextMaterial, parse_anchor, parse_facing, parse_geometry_types, parse_padding};
     use navara_material::{Facing, SourceGeometryType};
 
     #[test]
@@ -2592,6 +2639,26 @@ mod test {
             parse_geometry_types(&Some(vec!["Line".to_string(), "polyline".to_string()])),
             Some(vec![])
         );
+    }
+
+    #[test]
+    fn parse_anchor_round_trips_every_name() {
+        for name in [
+            "center",
+            "left",
+            "right",
+            "top",
+            "bottom",
+            "top-left",
+            "top-right",
+            "bottom-left",
+            "bottom-right",
+        ] {
+            let anchor = parse_anchor(&Some(name.to_string())).unwrap();
+            assert_eq!(anchor.as_str(), name);
+        }
+        assert_eq!(parse_anchor(&Some("middle".to_string())), None);
+        assert_eq!(parse_anchor(&None), None);
     }
 
     #[test]

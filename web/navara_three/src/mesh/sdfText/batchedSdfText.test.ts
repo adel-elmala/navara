@@ -307,6 +307,94 @@ describe("BatchedSdfTextMesh letter spacing", () => {
   });
 });
 
+// "AB" lays out 1 em wide in a font whose line box spans [-0.2, 0.8] em, so
+// a centred label shifts by (-0.5, -0.3).
+describe("BatchedSdfTextMesh anchor and offset", () => {
+  const shiftOf = (mesh: BatchedSdfTextMesh, slot: number) => [
+    store(mesh).getComponent(slot, LabelRow.POSITION_HIGH, 3),
+    store(mesh).getComponent(slot, LabelRow.POSITION_LOW, 3),
+  ];
+  const labels = (mesh: BatchedSdfTextMesh) =>
+    (mesh as unknown as { _labels: unknown[] })._labels;
+
+  it("writes the centred block's shift to the position rows", () => {
+    const { mesh } = makeMesh();
+    mesh.setTextByBatchIndex(0, "AB");
+    const [x, y] = shiftOf(mesh, 0);
+    expect(x).toBeCloseTo(-0.5);
+    expect(y).toBeCloseTo(-0.3);
+  });
+
+  it("moves a feature's label by its own anchor and offset without re-shaping", () => {
+    const { mesh, fontManager } = makeMesh();
+    mesh.setTextByBatchIndex(0, "AB");
+    mesh.setTextByBatchIndex(1, "AB");
+    const shapes = fontManager.shapeText.mock.calls.length;
+
+    mesh.setFeatureAnchorByBatchIndex(0, "top-left");
+    mesh.setFeatureOffsetByBatchIndex(0, 1, 2);
+    const [x, y] = shiftOf(mesh, 0);
+    expect(x).toBeCloseTo(1);
+    expect(y).toBeCloseTo(-2.8);
+    expect(fontManager.shapeText.mock.calls.length).toBe(shapes);
+    // The other feature keeps the material's placement.
+    expect(shiftOf(mesh, 1)[0]).toBeCloseTo(-0.5);
+  });
+
+  it("keeps the shift when the anchor position is rewritten", () => {
+    const { mesh } = makeMesh();
+    mesh.setTextByBatchIndex(0, "AB");
+    mesh.setFeatureAnchorByBatchIndex(0, "right");
+    (mesh as unknown as { _writeAnchor(r: unknown): void })._writeAnchor(
+      labels(mesh)[0],
+    );
+    expect(shiftOf(mesh, 0)[0]).toBeCloseTo(-1);
+  });
+
+  it("re-lays out on an anchor change only when the justification follows it", () => {
+    const { mesh, fontManager } = makeMesh(material({ textAlign: "auto" }));
+    mesh.setTextByBatchIndex(0, "AB");
+    let shapes = fontManager.shapeText.mock.calls.length;
+    mesh.setFeatureAnchorByBatchIndex(0, "left");
+    expect(fontManager.shapeText.mock.calls.length).toBe(shapes + 1);
+
+    mesh.setFeatureTextAlignByBatchIndex(0, "left");
+    shapes = fontManager.shapeText.mock.calls.length;
+    mesh.setFeatureAnchorByBatchIndex(0, "top-left");
+    expect(fontManager.shapeText.mock.calls.length).toBe(shapes);
+  });
+
+  it("keeps per-feature placement through an unchanged material", async () => {
+    const { mesh } = makeMesh();
+    mesh.setTextByBatchIndex(0, "AB");
+    mesh.setFeatureAnchorByBatchIndex(0, "left");
+
+    await mesh._update(textMeshEvent(material()));
+    expect(shiftOf(mesh, 0)[0]).toBeCloseTo(0);
+  });
+
+  it("applies a changed material anchor and offset to every label", async () => {
+    const { mesh } = makeMesh();
+    mesh.setTextByBatchIndex(0, "AB");
+    mesh.setTextByBatchIndex(1, "AB");
+    mesh.setFeatureAnchorByBatchIndex(0, "left");
+
+    await mesh._update(
+      textMeshEvent(
+        material({
+          anchor: "bottom",
+          offset: { x: 0, y: -1 },
+        } as unknown as Partial<NavaraTextMaterial>),
+      ),
+    );
+    for (const slot of [0, 1]) {
+      const [x, y] = shiftOf(mesh, slot);
+      expect(x).toBeCloseTo(-0.5);
+      expect(y).toBeCloseTo(0.2 + 1);
+    }
+  });
+});
+
 // The evaluator applies `show` before `text`. A show:false for a feature with
 // no label yet must survive until the text setter creates the label — labels
 // stay lazily allocated, so the intent is parked, not applied.

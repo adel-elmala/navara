@@ -41,10 +41,16 @@ import type {
   DeclutterParticipant,
 } from "../../declutter/types";
 import type { EventContext } from "../../event/context";
+import {
+  anchorCode,
+  spriteCenter,
+  spriteCenterFromCode,
+} from "../../material/anchor";
 import { createInstancedSpriteMaterialEnhancer } from "../../material/enhancer";
+import type { InstancedSpriteBaseState } from "../../material/enhancer/instancedSprite/instancedSpriteBaseEnhancer/types";
 import { resolveOrientation } from "../../material/orientation";
 import type { CustomObject3DEventMap } from "../../object3DEvent";
-import type { Overlap } from "../../type";
+import type { Anchor, Overlap } from "../../type";
 import { buildBatchIndexMap } from "../batchIndexMap";
 import { GEOMETRY_TYPES, type GeometryType } from "../constants";
 import { PickableMesh } from "../pickableMesh";
@@ -94,6 +100,19 @@ const LINE_ANCHOR_RESULT_STRIDE = 5;
 
 type SpriteMaterial = (NavaraPointMesh | NavaraBillboardMesh)["material"];
 
+/** Scratch for `_quadBox`: read straight back into each candidate. */
+const _tmpQuadBox = new Float64Array(4);
+
+/** The box `lineAnchorPlace` resolved for an along-line anchor, in the same
+ *  scratch as `_quadBox`. */
+function placedQuadBox(placed: Float64Array, offset: number): Float64Array {
+  _tmpQuadBox[0] = placed[offset + 1];
+  _tmpQuadBox[1] = placed[offset + 2];
+  _tmpQuadBox[2] = placed[offset + 3];
+  _tmpQuadBox[3] = placed[offset + 4];
+  return _tmpQuadBox;
+}
+
 /** A sprite material's orientation options, with their defaults resolved. */
 type SpriteOrientation = {
   /** Degrees, as the material gives it. */
@@ -101,6 +120,20 @@ type SpriteOrientation = {
   facing: "upright" | "flat";
   follow: boolean;
 };
+
+/** Where a sprite material puts the quad relative to its anchor point. */
+type SpritePlacement = {
+  anchor: Anchor;
+  /** x right, y down, in the unit of the size. */
+  offset: [number, number];
+};
+
+function spritePlacement(material: SpriteMaterial): SpritePlacement {
+  // The engine sends an anchor name it parsed, so it is always an `Anchor`.
+  const anchor = (material.anchor ?? "center") as Anchor;
+  const offset = material.offset;
+  return { anchor, offset: [offset?.x ?? 0, offset?.y ?? 0] };
+}
 
 function spriteOrientation(material: SpriteMaterial): SpriteOrientation {
   const { flatFacing, rotateWithCamera } = resolveOrientation(
@@ -199,6 +232,7 @@ export class InstancedSpriteMesh
    * write-through, and the backfill for a freshly allocated batch slot.
    */
   private _orientation?: SpriteOrientation;
+  private _placement?: SpritePlacement;
   /** Current grid resolution of the sprite quad (see {@link FLAT_QUAD_SEGMENTS}). */
   private _quadSegments = 1;
   /** Instance count of the current geometry; bounds the identity fallback. */
@@ -345,8 +379,6 @@ export class InstancedSpriteMesh
     const input = this._bandInput;
     const batchIndices = this._instanceBatchIndex;
     const state = enhancer.states();
-    const cx = Math.min(Math.max(state.center[0], -0.5), 0.5);
-    const cy = Math.min(Math.max(state.center[1], -0.5), 0.5);
     // The quad's box, as in `collectDeclutterCandidates`.
     const uvRect = state.billboard
       ? (this.geometry?.getAttribute("instanceUvRect") as
@@ -368,10 +400,11 @@ export class InstancedSpriteMesh
       input[o + 4] = bands[i * 2];
       input[o + 5] = bands[i * 2 + 1];
       input[o + 6] = state.sizeInMeters ? 1 : 0;
-      input[o + 7] = (-0.5 - cx) * aspect * size;
-      input[o + 8] = (0.5 - cx) * aspect * size;
-      input[o + 9] = (-0.5 - cy) * size;
-      input[o + 10] = (0.5 - cy) * size;
+      const box = this._quadBox(material, state, batchIndex, aspect, size);
+      input[o + 7] = box[0];
+      input[o + 8] = box[1];
+      input[o + 9] = box[2];
+      input[o + 10] = box[3];
       // Mirror of instancedSprite.vert.glsl: the batch texture's rotation and
       // orientation, falling back to the material's, plus the bearing when
       // the quad follows its line.
@@ -414,8 +447,6 @@ export class InstancedSpriteMesh
     const material = this.material as ShaderMaterial;
 
     const state = enhancer.states();
-    const cx = Math.min(Math.max(state.center[0], -0.5), 0.5);
-    const cy = Math.min(Math.max(state.center[1], -0.5), 0.5);
     // Mirror of instancedSprite.vert.glsl — aspect is per-instance
     // (from the atlas rect), not a material-level uniform; there is no
     // material-wide "aspect" state to read.
@@ -456,8 +487,7 @@ export class InstancedSpriteMesh
       const aspect = uvRect ? rectW / rectH : 1.0;
 
       // Mirror of instancedSprite.vert.glsl — the quad spans
-      // (position.xy - center) * vec2(aspect, 1) * size around the anchor,
-      // turned as `placeLineLabels` resolved for an along-line anchor, and by
+      // `_quadBox` around the anchor, turned as `placeLineLabels` resolved for an along-line anchor, and by
       // the kernel from the feature's own orientation (plus the line bearing
       // the shader adds) otherwise.
       const p = i * LINE_ANCHOR_RESULT_STRIDE;
@@ -470,15 +500,18 @@ export class InstancedSpriteMesh
         ? 0
         : (readBatchScalar(material, batchIndex, "rotation") ??
             state.rotation) + (bearings ? bearings[i] : 0);
+      const box = placed
+        ? placedQuadBox(placed, p)
+        : this._quadBox(material, state, batchIndex, aspect, size);
       out.push({
         anchorX: anchors[i * 3],
         anchorY: anchors[i * 3 + 1],
         anchorZ: anchors[i * 3 + 2],
         addHeight,
-        minX: placed ? placed[p + 1] : (-0.5 - cx) * aspect * size,
-        maxX: placed ? placed[p + 2] : (0.5 - cx) * aspect * size,
-        minY: placed ? placed[p + 3] : (-0.5 - cy) * size,
-        maxY: placed ? placed[p + 4] : (0.5 - cy) * size,
+        minX: box[0],
+        maxX: box[1],
+        minY: box[2],
+        maxY: box[3],
         sizeInMeters: state.sizeInMeters,
         rank: this._declutterRank,
         // NaN-safe: an unset override falls back to the layer priority.
@@ -502,6 +535,33 @@ export class InstancedSpriteMesh
 
   applyDeclutter(handle: number, hidden: boolean): void {
     this.setDeclutterHiddenByInstance(handle, hidden);
+  }
+
+  /**
+   * The unrotated quad around its anchor, `[minX, maxX, minY, maxY]` in the
+   * unit of `size`, y up — mirror of instancedSprite.vert.glsl: the batch
+   * texture's anchor and offset, falling back to the material's.
+   */
+  private _quadBox(
+    material: ShaderMaterial,
+    state: InstancedSpriteBaseState,
+    batchIndex: number,
+    aspect: number,
+    size: number,
+  ): Float64Array {
+    const code = readBatchScalar(material, batchIndex, "anchor");
+    const [cx, cy] =
+      code === undefined ? state.anchor : spriteCenterFromCode(code);
+    const ox =
+      readBatchScalar(material, batchIndex, "offsetX") ?? state.offset[0];
+    const oy =
+      readBatchScalar(material, batchIndex, "offsetY") ?? state.offset[1];
+    const box = _tmpQuadBox;
+    box[0] = (-0.5 - cx) * aspect * size + ox;
+    box[1] = (0.5 - cx) * aspect * size + ox;
+    box[2] = (-0.5 - cy) * size - oy;
+    box[3] = (0.5 - cy) * size - oy;
+    return box;
   }
 
   stepDeclutterFade(deltaMs: number): boolean {
@@ -605,6 +665,7 @@ export class InstancedSpriteMesh
     this._cacheDeclutterState(m);
     this._cacheAnchors(positionsInfo, m.transform);
     this._orientation = spriteOrientation(m.material);
+    this._placement = spritePlacement(m.material);
 
     // Create Geometry
     this.geometry = this._initGeometry(positionsInfo, m);
@@ -639,7 +700,8 @@ export class InstancedSpriteMesh
     enhancer.update({
       base: {
         scale: m.material.size ?? 100.0,
-        center: [m.material.center?.x ?? 0.0, m.material.center?.y ?? 0.0],
+        anchor: spriteCenter(spritePlacement(m.material).anchor),
+        offset: spritePlacement(m.material).offset,
         flatFacing: spriteOrientation(m.material).facing === "flat",
         rotateWithCamera: spriteOrientation(m.material).follow,
         rotation: m.material.rotation ?? 0,
@@ -665,6 +727,7 @@ export class InstancedSpriteMesh
     // change has to be written through or evaluator overrides would outlive
     // it. Mirrors BatchedSdfTextMesh._applyUpdate.
     this._writeThroughOrientation(m.material);
+    this._writeThroughPlacement(m.material);
 
     // Position updates (per-instance attributes)
     {
@@ -843,7 +906,8 @@ export class InstancedSpriteMesh
           positionsInfo.bearings && (m.material.rotateToLine ?? true),
         ),
         scale: m.material.size ?? 100.0,
-        center: [m.material.center?.x ?? 0.0, m.material.center?.y ?? 0.0],
+        anchor: spriteCenter(spritePlacement(m.material).anchor),
+        offset: spritePlacement(m.material).offset,
         flatFacing: spriteOrientation(m.material).facing === "flat",
         rotateWithCamera: spriteOrientation(m.material).follow,
         rotation: m.material.rotation ?? 0,
@@ -1262,7 +1326,7 @@ export class InstancedSpriteMesh
         batchIndex,
         "flatFacing",
         facing === "flat",
-        this._orientationDefaults(),
+        this._batchDefaults(),
       )
     ) {
       this.ctx.declutter?.markDirty();
@@ -1278,7 +1342,7 @@ export class InstancedSpriteMesh
         batchIndex,
         "rotateWithCamera",
         follow,
-        this._orientationDefaults(),
+        this._batchDefaults(),
       )
     ) {
       this.ctx.declutter?.markDirty();
@@ -1291,7 +1355,36 @@ export class InstancedSpriteMesh
         batchIndex,
         "rotation",
         degrees * MathUtils.DEG2RAD,
-        this._orientationDefaults(),
+        this._batchDefaults(),
+      )
+    ) {
+      this.ctx.declutter?.markDirty();
+    }
+  }
+
+  /** Part of the quad placed at the anchor point, for one feature. */
+  setFeatureAnchorByBatchIndex(batchIndex: number, anchor: Anchor) {
+    if (
+      this._updateBatchAttribute(
+        batchIndex,
+        "anchor",
+        anchorCode(anchor),
+        this._batchDefaults(),
+      )
+    ) {
+      this.ctx.declutter?.markDirty();
+    }
+  }
+
+  /** Shift from the anchor point for one feature, x right and y down, in the
+   *  unit of the size. */
+  setFeatureOffsetByBatchIndex(batchIndex: number, x: number, y: number) {
+    if (
+      this._updateBatchAttribute(
+        batchIndex,
+        "offset",
+        [x, y],
+        this._batchDefaults(),
       )
     ) {
       this.ctx.declutter?.markDirty();
@@ -1318,15 +1411,45 @@ export class InstancedSpriteMesh
     setQuadGrid(this.geometry, segments);
   }
 
-  /** The material's orientation/rotation, backfilled into a new batch slot. */
-  private _orientationDefaults(): BatchAttributeDefaults | undefined {
-    if (!this._orientation) return undefined;
+  /** The material's uniform-backed values, backfilled into a new batch slot. */
+  private _batchDefaults(): BatchAttributeDefaults | undefined {
+    if (!this._orientation || !this._placement) return undefined;
     const { rotation, facing, follow } = this._orientation;
     return {
       rotation: rotation * MathUtils.DEG2RAD,
       flatFacing: facing === "flat",
       rotateWithCamera: follow,
+      anchor: anchorCode(this._placement.anchor),
+      offset: this._placement.offset,
     };
+  }
+
+  /**
+   * Push the material's anchor/offset onto every feature when the material
+   * value changed and a slot exists — the same guards, for the same reasons,
+   * as {@link _writeThroughOrientation}.
+   */
+  private _writeThroughPlacement(material: SpriteMaterial): void {
+    const next = spritePlacement(material);
+    const prev = this._placement;
+    this._placement = next;
+    if (!prev) return;
+
+    const mat = this.material as Material;
+    const anchorChanged =
+      next.anchor !== prev.anchor && hasBatchScalarSlot(mat, "anchor");
+    const offsetChanged =
+      (next.offset[0] !== prev.offset[0] ||
+        next.offset[1] !== prev.offset[1]) &&
+      hasBatchScalarSlot(mat, "offsetX");
+    if (!anchorChanged && !offsetChanged) return;
+
+    for (let i = 0; i < this._batchLength; i++) {
+      if (anchorChanged) this.setFeatureAnchorByBatchIndex(i, next.anchor);
+      if (offsetChanged) {
+        this.setFeatureOffsetByBatchIndex(i, next.offset[0], next.offset[1]);
+      }
+    }
   }
 
   /**

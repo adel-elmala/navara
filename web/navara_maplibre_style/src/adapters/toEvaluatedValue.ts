@@ -3,7 +3,12 @@
  */
 
 import { Color as MapLibreColorParser } from "@maplibre/maplibre-gl-style-spec";
-import { Color, type GeometryType } from "@navaramap/three";
+import {
+  Color,
+  type Anchor,
+  type GeometryType,
+  type TextAlign,
+} from "@navaramap/three";
 
 import type { StyleEngine } from "../engine/StyleEngine";
 import {
@@ -29,6 +34,10 @@ type EvaluatedResult = {
   /** Degrees clockwise, like MapLibre's `text-rotate` / `icon-rotate`. */
   rotation?: number;
   declutterPriority?: number;
+  anchor?: Anchor;
+  /** x right, y down: ems for text, pixels for icons. */
+  offset?: { x: number; y: number };
+  textAlign?: TextAlign;
 };
 
 /**
@@ -219,9 +228,14 @@ export function createLayoutEvaluators(
     "text-letter-spacing",
     "text-rotate",
     "text-transform",
+    "text-anchor",
+    "text-offset",
+    "text-justify",
     "icon-image",
     "icon-size",
     "icon-rotate",
+    "icon-anchor",
+    "icon-offset",
     "symbol-sort-key",
   ];
 
@@ -428,18 +442,49 @@ function applyTextTransform(text: string, transform: unknown): string {
   return text;
 }
 
+const ANCHORS: ReadonlySet<string> = new Set<Anchor>([
+  "center",
+  "left",
+  "right",
+  "top",
+  "bottom",
+  "top-left",
+  "top-right",
+  "bottom-left",
+  "bottom-right",
+]);
+
 /**
  * Apply the per-feature placement properties shared by icons and text:
- * `*-rotate` and `symbol-sort-key`.
+ * `*-anchor`, `*-offset` (multiplied by `offsetScale`), `*-rotate` and
+ * `symbol-sort-key`.
  */
 function applySymbolPlacement(
   result: EvaluatedResult,
-  rotate: unknown,
-  sortKey: unknown,
+  layoutValues: Record<string, unknown> | undefined,
+  prefix: "text" | "icon",
+  offsetScale: number,
 ): void {
+  const anchor = layoutValues?.[`${prefix}-anchor`];
+  if (typeof anchor === "string" && ANCHORS.has(anchor)) {
+    result.anchor = anchor as Anchor;
+  }
+  const offset = layoutValues?.[`${prefix}-offset`];
+  if (
+    Array.isArray(offset) &&
+    Number.isFinite(offset[0]) &&
+    Number.isFinite(offset[1])
+  ) {
+    result.offset = {
+      x: offset[0] * offsetScale,
+      y: offset[1] * offsetScale,
+    };
+  }
+  const rotate = layoutValues?.[`${prefix}-rotate`];
   if (typeof rotate === "number" && Number.isFinite(rotate)) {
     result.rotation = rotate;
   }
+  const sortKey = layoutValues?.["symbol-sort-key"];
   // A lower sort key is placed first in MapLibre; higher priority wins in Navara.
   if (typeof sortKey === "number" && Number.isFinite(sortKey)) {
     result.declutterPriority = -sortKey;
@@ -504,14 +549,19 @@ function processSymbolLayer(
     // Note: createLayoutEvaluators ensures icon-size is always present (using spec.default = 1)
     // The ?? 1 fallback is defensive and should rarely trigger
     const iconSize = layoutValues?.["icon-size"] ?? 1;
-    if (typeof iconSize === "number" && Number.isFinite(iconSize)) {
+    const validIconSize =
+      typeof iconSize === "number" && Number.isFinite(iconSize);
+    if (validIconSize) {
       result.size = iconSize;
     }
 
+    // `icon-offset` is scaled by `icon-size` into pixels, the billboard's
+    // size unit.
     applySymbolPlacement(
       result,
-      layoutValues?.["icon-rotate"],
-      layoutValues?.["symbol-sort-key"],
+      layoutValues,
+      "icon",
+      validIconSize ? iconSize : 1,
     );
   }
 
@@ -543,11 +593,18 @@ function processSymbolLayer(
         result.letterSpacing = letterSpacing;
       }
 
-      applySymbolPlacement(
-        result,
-        layoutValues?.["text-rotate"],
-        layoutValues?.["symbol-sort-key"],
-      );
+      // `text-offset` is in ems, like Navara's text `offset`.
+      applySymbolPlacement(result, layoutValues, "text", 1);
+
+      const justify = layoutValues?.["text-justify"];
+      if (
+        justify === "auto" ||
+        justify === "left" ||
+        justify === "center" ||
+        justify === "right"
+      ) {
+        result.textAlign = justify;
+      }
     } else {
       // Hide text features with empty text-field (e.g., from zoom-based step expressions)
       result.show = false;

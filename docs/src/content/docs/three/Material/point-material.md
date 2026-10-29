@@ -9,6 +9,26 @@ sidebar:
 
 ## Properties
 
+### anchor
+
+**Type:** `"center" | "left" | "right" | "top" | "bottom" | "top-left" | "top-right" | "bottom-left" | "bottom-right" | undefined`
+
+**Description:** Sets which part of the point sits on its position, as MapLibre's `icon-anchor` does. For example, `"bottom"` stands the point on its position like a map pin. The anchor is also the point [`rotation`](#rotation) turns the point around.
+
+Can also be set per feature from a [feature evaluator](../../api/feature-evaluator/).
+
+**Default:** `"center"`
+
+**Example:**
+
+```typescript
+{
+  point: {
+    anchor: "bottom"
+  }
+}
+```
+
 ### backfaceCulling
 
 **Type:** `boolean | undefined`
@@ -26,24 +46,6 @@ Only a flat point (see [`pointFacing`](#pointfacing)) has a back the camera can 
   point: {
     pointFacing: "flat",
     backfaceCulling: true
-  }
-}
-```
-
-### center
-
-**Type:** `{ x: number, y: number }`
-
-**Description:** Specifies the shift amount from the center. The range is between 0 and 1. The unit is a relative position to the point circle.
-
-**Default:** Required
-
-**Example:**
-
-```typescript
-{
-  point: {
-    center: { x: 0.5, y: 0.5 }
   }
 }
 ```
@@ -287,6 +289,26 @@ import { Color } from "@navaramap/three";
 }
 ```
 
+### offset
+
+**Type:** [`Vec2`](../../api/types/#vec2) | undefined
+
+**Description:** Moves the point away from its anchor point, in the unit of [`size`](#size): pixels when [`sizeInMeters`](#sizeinmeters) is `false`, meters otherwise. A positive `x` moves it right and a positive `y` moves it down, as MapLibre's `icon-offset` does. The offset lies in the point's own plane, so it turns with [`rotation`](#rotation).
+
+Can also be set per feature from a [feature evaluator](../../api/feature-evaluator/).
+
+**Default:** `{ x: 0, y: 0 }`
+
+**Example:**
+
+```typescript
+{
+  point: {
+    offset: { x: 0, y: -8 } // 8 units up
+  }
+}
+```
+
 ### offsetDepth
 
 **Type:** `boolean | undefined`
@@ -473,7 +495,7 @@ Can also be set per feature from a [feature evaluator](../../api/feature-evaluat
 
 **Description:** Rotates the point within its own plane around its anchor point, in degrees, clockwise as seen from the front. The rotation is applied on top of the orientation that [`pointFacing`](#pointfacing) and [`rotateWithCamera`](#rotatewithcamera) resolve to.
 
-[`center`](#center) decides where inside the point the pivot sits.
+[`anchor`](#anchor) decides where inside the point the pivot sits.
 
 Can also be set per feature from a [feature evaluator](../../api/feature-evaluator/), so every point in a layer can point a different way.
 

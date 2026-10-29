@@ -20,11 +20,14 @@ export const sdfRadiusFor = (useMsdf: boolean): number => atlasRangePx(useMsdf);
  * here because the enhancer owns the shader.
  */
 export const LabelRow = {
-  /** xyz = anchor high (RTE) or RTC-relative anchor, w = reserved. */
+  /**
+   * xyz = anchor high (RTE) or RTC-relative anchor, w = x of the block's
+   * shift from its anchor, in ems (`anchorShiftEm` in layout.ts).
+   */
   POSITION_HIGH: 0,
-  /** xyz = anchor low (RTE only), w = reserved. */
+  /** xyz = anchor low (RTE only), w = y of the block's shift, in ems. */
   POSITION_LOW: 1,
-  /** x = textWidth, y = textHeight, z = bgMinY, w = bgMaxY (all in ems). */
+  /** x = textWidth, y = reserved, z = bgMinY, w = bgMaxY (all in ems). */
   BOX: 2,
   /**
    * x = declutterHide, y = batchId, z = show, w = batchIndex.
@@ -73,7 +76,6 @@ export type SdfTextBaseProps = {
   pathSamples?: number;
 
   // Mutable state
-  center?: [number, number];
   /** `false` (the default) keeps the quad in the screen plane; `true` lays it
    *  on the globe surface around the anchor, wrapped to its curvature, so
    *  labels read as painted on the globe. Resolved by the mesh. */
@@ -132,7 +134,6 @@ export type SdfTextBaseState = Readonly<{
   pathSamples: number;
 
   // Mutable
-  center: [number, number];
   flatFacing: boolean;
   rotateWithCamera: boolean;
   rotation: number; // pre-converted: degrees -> radians
@@ -164,7 +165,6 @@ export type SdfTextBaseState = Readonly<{
  * Internal type - not exposed externally.
  */
 export type SdfTextBaseRefs = {
-  uCenter: UniformValue<Vector2>;
   uFlatFacing: UniformValue<boolean>;
   uRotateWithCamera: UniformValue<boolean>;
   uRotation: UniformValue<number>;

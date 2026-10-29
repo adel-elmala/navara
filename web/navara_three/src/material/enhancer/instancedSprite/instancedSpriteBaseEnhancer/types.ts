@@ -17,7 +17,12 @@ export type InstancedSpriteBaseProps = {
 
   // Mutable state
   scale?: number;
-  center?: [number, number];
+  /** The anchor's position on the quad, corners at ±0.5, y up
+   *  (`spriteCenter` in `material/anchor.ts`). */
+  anchor?: [number, number];
+  /** Shift from the anchor point, x right and y down, in the unit of the
+   *  size. */
+  offset?: [number, number];
   /** `false` (the default) keeps the quad in the screen plane; `true` lays it
    *  on the globe surface around the anchor, wrapped to its curvature.
    *  Material-level default; per-feature overrides come from the batch data
@@ -75,7 +80,8 @@ export type InstancedSpriteBaseState = Readonly<{
 
   // Mutable
   scale: number;
-  center: [number, number];
+  anchor: [number, number];
+  offset: [number, number];
   flatFacing: boolean;
   rotateWithCamera: boolean;
   rotation: number; // pre-converted: degrees -> radians
@@ -117,7 +123,8 @@ export type InstancedSpriteBaseRefs = {
   uColor: UniformValue<Color>;
   uOpacity: UniformValue<number>;
   uAddHeight: UniformValue<number>;
-  uCenter: UniformValue<Vector2>;
+  uAnchor: UniformValue<Vector2>;
+  uOffset: UniformValue<Vector2>;
   uFlatFacing: UniformValue<boolean>;
   uRotateWithCamera: UniformValue<boolean>;
   uRotation: UniformValue<number>;

@@ -26,7 +26,8 @@ describe("instancedSpriteBaseEnhancer/mutates", () => {
       const state: InstancedSpriteBaseState = {
         ...DEFAULT_BASE_STATE,
         scale: 50,
-        center: [0.5, 0.5],
+        anchor: [0.5, 0.5],
+        offset: [3, -4],
         sizeInMeters: false,
         offsetDepth: false,
         alphaTest: 0.3,
@@ -40,8 +41,10 @@ describe("instancedSpriteBaseEnhancer/mutates", () => {
       mutates.updateUniforms(uniforms, state);
 
       expect(uniforms.uScale?.value).toBe(50);
-      expect(uniforms.uCenter?.value.x).toBe(0.5);
-      expect(uniforms.uCenter?.value.y).toBe(0.5);
+      expect(uniforms.uAnchor?.value.x).toBe(0.5);
+      expect(uniforms.uAnchor?.value.y).toBe(0.5);
+      expect(uniforms.uOffset?.value.x).toBe(3);
+      expect(uniforms.uOffset?.value.y).toBe(-4);
       expect(uniforms.uSizeInMeters?.value).toBe(false);
       expect(uniforms.uOffsetDepth?.value).toBe(false);
       expect(uniforms.uAlphaTest?.value).toBe(0.3);

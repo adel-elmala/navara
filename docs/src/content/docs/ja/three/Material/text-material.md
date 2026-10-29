@@ -9,6 +9,26 @@ sidebar:
 
 ## Properties
 
+### anchor
+
+**Type:** `"center" | "left" | "right" | "top" | "bottom" | "top-left" | "top-right" | "bottom-left" | "bottom-right" | undefined`
+
+**Description:** テキストブロックのどの部分をラベルの位置に置くかを指定します。MapLibre の `text-anchor` と同じ動作です。テキストブロックの幅は最も長い行の幅、高さは 1 行につき行の高さ 1 つ分です。そのため `"top"` ではテキストが位置の下に、`"bottom"` では位置の上に表示されます。アンカーは [`rotation`](#rotation) の回転の中心にもなります。
+
+[`FeatureEvaluator`](../../api/feature-evaluator/) から地物ごとに指定することもできます。
+
+**Default:** `"center"`
+
+**Example:**
+
+```typescript
+{
+  text: {
+    anchor: "top"
+  }
+}
+```
+
 ### backfaceCulling
 
 **Type:** `boolean | undefined`
@@ -84,24 +104,6 @@ import { Color } from "@navaramap/three";
 {
   text: {
     borderWidth: 2
-  }
-}
-```
-
-### center
-
-**Type:** [`Vec2`](../../api/types/#vec2) | undefined
-
-**Description:** 中心からのシフト量を指定します。範囲は 0 から 1 の間です。
-
-**Default:** `undefined`
-
-**Example:**
-
-```typescript
-{
-  text: {
-    center: { x: 0.5, y: 0.0 }
   }
 }
 ```
@@ -522,6 +524,27 @@ view.addFontFamily({
 }
 ```
 
+### offset
+
+**Type:** [`Vec2`](../../api/types/#vec2) | undefined
+
+**Description:** テキストをアンカー位置からずらす量を em 単位（[`size`](#size) の倍数）で指定します。MapLibre の `text-offset` と同じ動作です。`x` が正の値で右に、`y` が正の値で下に移動します。オフセットはラベル自身の平面内にあるため、[`rotation`](#rotation) とともに回転します。
+
+[`FeatureEvaluator`](../../api/feature-evaluator/) から地物ごとに指定することもできます。
+
+**Default:** `{ x: 0, y: 0 }`
+
+**Example:**
+
+```typescript
+{
+  text: {
+    anchor: "top",
+    offset: { x: 0, y: 0.5 } // 位置の 0.5 em 下
+  }
+}
+```
+
 ### offsetDepth
 
 **Type:** `boolean | undefined`
@@ -712,7 +735,7 @@ import { Color } from "@navaramap/three";
 
 [`placement`](#placement) が `"line"` または `"line-center"` のときは、各文字がライン上の位置を保ったまま自身の中心を軸に回転します。MapLibre のライン沿いラベルでの `text-rotate` と同じ動作です。まっすぐ描かれるラベル（[`spreadGlyphs`](#spreadglyphs) を指定せず `rotateWithCamera: true` の場合）は、ポイントラベルと同じくアンカー位置を中心に全体が回転します。
 
-回転の中心がテキストのどこになるかは [`center`](#center) で決まります。たとえば `{ x: 0.5, y: 0.5 }` ならテキストの中央、`{ x: 0.5, y: 0.0 }` ならテキストブロックの下端が中心になります。
+回転の中心がテキストのどこになるかは [`anchor`](#anchor) で決まります。たとえば `"center"` ならテキストの中央、`"bottom"` ならテキストブロックの下端が中心になります。
 
 [`FeatureEvaluator`](../../api/feature-evaluator/) から地物ごとに指定できるため、レイヤー内のラベルごとに異なる向きにできます。
 
@@ -726,7 +749,7 @@ import { Color } from "@navaramap/three";
     textFacing: "flat",
     rotateWithCamera: false,
     rotation: 45, // 地表上で時計回りに 45 度回転
-    center: { x: 0.5, y: 0.5 } // テキストの中央を軸に回転
+    anchor: "center" // テキストの中央を軸に回転
   }
 }
 ```
@@ -902,9 +925,9 @@ import { Color } from "@navaramap/three";
 
 ### textAlign
 
-**Type:** `string | undefined`
+**Type:** `"left" | "center" | "right" | "auto" | undefined`
 
-**Description:** 複数行テキストブロック内での行の水平方向の配置を指定します。`"left"`、`"center"`、`"right"` のいずれかを指定します。テキストが複数行になる場合（[`maxWidth`](#maxwidth) または明示的な `\n` 文字による）にのみ効果があります。
+**Description:** 複数行テキストブロック内での行の水平方向の配置を指定します。`"left"`、`"center"`、`"right"`、`"auto"` のいずれかを指定します。`"auto"` は [`anchor`](#anchor) の水平方向の側に行を揃えます。MapLibre の `text-justify: auto` と同じ動作です。[`FeatureEvaluator`](../../api/feature-evaluator/) から地物ごとに指定することもできます。テキストが複数行になる場合（[`maxWidth`](#maxwidth) または明示的な `\n` 文字による）にのみ効果があります。
 
 **Default:** `"center"`
 

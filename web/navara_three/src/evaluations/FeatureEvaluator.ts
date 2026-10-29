@@ -30,6 +30,7 @@ import {
   type GeometryType,
   VALID_GEOMETRY_TYPES,
 } from "../mesh";
+import type { Anchor, TextAlign } from "../type";
 
 type AvailableMaterialProperty = ExtractProperties<
   PointMaterial &
@@ -87,6 +88,16 @@ export type EvaluatableMaterialProperty = {
    *  clockwise seen from the front; along a line, of each glyph about its own
    *  centre. Overrides the material's `rotation`. */
   rotation: number;
+  /** Part of this label/sprite placed at its anchor point. Overrides the
+   *  material's `anchor`. */
+  anchor: Anchor;
+  /** Shift of this label/sprite from its anchor point, x right and y down:
+   *  in ems for text, in the unit of `size` for points and billboards.
+   *  Overrides the material's `offset`. */
+  offset: { x: number; y: number };
+  /** Line justification of this label (for text). Overrides the material's
+   *  `textAlign`. */
+  textAlign: TextAlign;
   /** Emissive color expression (for polygons/3D Tiles models/points/billboards/text). */
   emissive: AvailableMaterialProperty["emissiveColor"];
   /** Emissive intensity expression (for polygons/3D Tiles models/points/billboards/text). */
@@ -113,6 +124,9 @@ type EvaluatedMaterialProperty = {
   rotateWithCamera: boolean;
   spreadGlyphs: boolean;
   rotation: number;
+  anchor: Anchor;
+  offset: { x: number; y: number };
+  textAlign: TextAlign;
   emissive: Color;
   emissiveIntensity: number;
 };
@@ -533,6 +547,16 @@ export class FeatureEvaluator {
       if (evaluated.rotation != null) {
         obj.setFeatureRotationByBatchIndex(batchIndex, evaluated.rotation);
       }
+      if (evaluated.anchor != null) {
+        obj.setFeatureAnchorByBatchIndex(batchIndex, evaluated.anchor);
+      }
+      if (evaluated.offset != null) {
+        obj.setFeatureOffsetByBatchIndex(
+          batchIndex,
+          evaluated.offset.x,
+          evaluated.offset.y,
+        );
+      }
       if (evaluated.emissive != null) {
         obj.setFeatureEmissiveByBatchIndex(batchIndex, evaluated.emissive.raw);
       }
@@ -576,6 +600,19 @@ export class FeatureEvaluator {
         obj.setFeatureLetterSpacingByBatchIndex(
           batchIndex,
           evaluated.letterSpacing,
+        );
+      }
+      if (evaluated.anchor != null && obj instanceof BatchedSdfTextMesh) {
+        obj.setFeatureAnchorByBatchIndex(batchIndex, evaluated.anchor);
+      }
+      if (evaluated.textAlign != null && obj instanceof BatchedSdfTextMesh) {
+        obj.setFeatureTextAlignByBatchIndex(batchIndex, evaluated.textAlign);
+      }
+      if (evaluated.offset != null && obj instanceof BatchedSdfTextMesh) {
+        obj.setFeatureOffsetByBatchIndex(
+          batchIndex,
+          evaluated.offset.x,
+          evaluated.offset.y,
         );
       }
       if (evaluated.text != null && obj instanceof BatchedSdfTextMesh) {

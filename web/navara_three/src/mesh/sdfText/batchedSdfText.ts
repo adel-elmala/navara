@@ -47,7 +47,7 @@ import {
   resolveOrientation,
   type ResolvedOrientation,
 } from "../../material/orientation";
-import type { Overlap } from "../../type";
+import type { Anchor, Overlap, TextAlign } from "../../type";
 import { buildBatchIndexMap } from "../batchIndexMap";
 import { GEOMETRY_TYPES } from "../constants";
 import { InstancedMesh, type InstancedMeshOptions } from "../instanced";
@@ -61,7 +61,12 @@ import {
   isAnchorPotentiallyVisible,
   syncAnchorVisibilityState,
 } from "./labelVisibility";
-import { ALIGN_FACTORS, buildLabelLayout, type LayoutOptions } from "./layout";
+import {
+  anchorShiftEm,
+  buildLabelLayout,
+  resolveTextAlign,
+  type LayoutOptions,
+} from "./layout";
 import {
   LINE_LABEL_RESULT_STRIDE,
   type LabelOrientation,
@@ -180,9 +185,22 @@ type LabelRecord = {
   addHeight: number;
   colorHex: number;
   opacity: number;
+  /** Part of the block placed at the anchor point, and the shift after it
+   *  (x right, y down, ems). Per label: MapLibre's `text-anchor` and
+   *  `text-offset` are data-driven. */
+  placeAnchor: Anchor;
+  offsetEm: [number, number];
+  /** `textAlign` name; `"auto"` follows {@link placeAnchor}. Baked into the
+   *  glyph quads, so a change of the resolved factor re-lays out the label. */
+  textAlign: string | undefined;
+  /** Where the shader moves the block from its layout origin, in ems; mirrors
+   *  the `w` of both position rows. */
+  shiftEm: [number, number];
   /** Block metrics in ems; `widthEm === 0` means "no collision box". */
   widthEm: number;
-  heightEm: number;
+  /** See `LabelLayout.topEm`. */
+  topEm: number;
+  bottomEm: number;
   minYEm: number;
   maxYEm: number;
   /** See `LabelLayout.minXEm`. */
@@ -314,7 +332,8 @@ export class BatchedSdfTextMesh
   /** Layout inputs baked into glyph quads; a change forces a re-layout. */
   private _maxWidth: number;
   private _lineHeight: number;
-  private _textAlign: number;
+  /** The material's `offset`, read once: wasm getters clone. */
+  private _materialOffset: [number, number];
   private _spreadGlyphs: boolean;
 
   /** Labels currently parked in `prepareDeferred`, so the per-pass promotion
@@ -368,7 +387,7 @@ export class BatchedSdfTextMesh
 
     this._maxWidth = material.maxWidth ?? 0;
     this._lineHeight = material.lineHeight ?? 1.0;
-    this._textAlign = ALIGN_FACTORS[material.textAlign ?? "center"] ?? 0.5;
+    this._materialOffset = vec2Tuple(material.offset);
     this._spreadGlyphs = material.spreadGlyphs ?? false;
     const declutter = resolveDeclutterSettings(material);
     this._declutter = declutter.participates;
@@ -450,9 +469,6 @@ export class BatchedSdfTextMesh
         pathSamples: (this._path?.stride ?? 0) / 2,
         lineOffset: material.lineOffset ?? 0,
         spreadGlyphs: this._spreadGlyphs,
-        center: material.center
-          ? [material.center.x, material.center.y]
-          : undefined,
         ...textOrientation(material),
         rotation: material.rotation ?? 0,
         sizeInMeters: material.sizeInMeters ?? true,
@@ -593,10 +609,6 @@ export class BatchedSdfTextMesh
     view.set(camera.matrixWorldInverse.elements);
 
     const state = this._enhancer.states();
-    const center = [
-      Math.min(Math.max(state.center[0], -0.5), 0.5),
-      Math.min(Math.max(state.center[1], -0.5), 0.5),
-    ] as const;
 
     const materialOrientation = this._orientationDefaults();
     const readOrientation = (slot: number): LabelOrientation => {
@@ -618,7 +630,6 @@ export class BatchedSdfTextMesh
     const fits = lineLabelFit(
       packLineLabelFits(placeable, line, {
         sizeInMeters,
-        center,
         readOrientation,
       }),
       view,
@@ -647,7 +658,6 @@ export class BatchedSdfTextMesh
         fovRad,
         spacingPx,
         sizeInMeters,
-        center,
         lineOffset: state.lineOffset,
         readOrientation,
       });
@@ -669,7 +679,6 @@ export class BatchedSdfTextMesh
       fovRad: number;
       spacingPx: number;
       sizeInMeters: boolean;
-      center: readonly [number, number];
       lineOffset: number;
       readOrientation: (slot: number) => LabelOrientation;
     },
@@ -678,13 +687,12 @@ export class BatchedSdfTextMesh
     const boxes = this._lineBoxes;
     const rejected = this._lineRejected;
     invariant(line && boxes && rejected, "line placement buffers");
-    const { heightPx, fovRad, spacingPx, sizeInMeters, center } = pass;
+    const { heightPx, fovRad, spacingPx, sizeInMeters } = pass;
 
     const packed = packLineLabels(survivors, line, {
       sizeInMeters,
       maxAngleDeg: this._material.maxAngle ?? 45,
       keepUpright: this._material.keepUpright ?? true,
-      center,
       lineOffset: pass.lineOffset,
       readFlip: (slot) =>
         this._labelData.getComponent(slot, LabelRow.PATH, 2) !== 0,
@@ -940,8 +948,13 @@ export class BatchedSdfTextMesh
       addHeight: material.height ?? 0.0,
       colorHex: material.color ?? 0xffffff,
       opacity: clamp01(material.opacity ?? 1.0),
+      placeAnchor: materialAnchor(material),
+      offsetEm: [...this._materialOffset],
+      textAlign: material.textAlign,
+      shiftEm: [0, 0],
       widthEm: 0,
-      heightEm: 0,
+      topEm: 0,
+      bottomEm: 0,
       minYEm: 0,
       maxYEm: 1,
       minXEm: 0,
@@ -992,9 +1005,16 @@ export class BatchedSdfTextMesh
         hx,
         hy,
         hz,
-        0,
+        record.shiftEm[0],
       );
-      this._labelData.setRow(record.slot, LabelRow.POSITION_LOW, lx, ly, lz, 0);
+      this._labelData.setRow(
+        record.slot,
+        LabelRow.POSITION_LOW,
+        lx,
+        ly,
+        lz,
+        record.shiftEm[1],
+      );
       anchor[0] = hx + lx;
       anchor[1] = hy + ly;
       anchor[2] = hz + lz;
@@ -1010,9 +1030,16 @@ export class BatchedSdfTextMesh
         px,
         py,
         pz,
-        0,
+        record.shiftEm[0],
       );
-      this._labelData.setRow(record.slot, LabelRow.POSITION_LOW, 0, 0, 0, 0);
+      this._labelData.setRow(
+        record.slot,
+        LabelRow.POSITION_LOW,
+        0,
+        0,
+        0,
+        record.shiftEm[1],
+      );
       anchor[0] = px + tx;
       anchor[1] = py + ty;
       anchor[2] = pz + tz;
@@ -1043,7 +1070,9 @@ export class BatchedSdfTextMesh
   }
 
   /** The material's orientation/rotation, backfilled into a new batch slot. */
-  private _orientationDefaults(): Required<BatchAttributeDefaults> {
+  private _orientationDefaults(): Required<
+    Omit<BatchAttributeDefaults, "anchor" | "offset">
+  > {
     return {
       rotation: (this._material.rotation ?? 0) * MathUtils.DEG2RAD,
       ...textOrientation(this._material),
@@ -1066,10 +1095,53 @@ export class BatchedSdfTextMesh
       record.slot,
       LabelRow.BOX,
       record.widthEm,
-      record.heightEm,
+      0,
       record.minYEm,
       record.maxYEm,
     );
+  }
+
+  /** Recompute where the anchor and offset move the block, from its current
+   *  layout, and write it to the position rows' `w`. */
+  private _writeShift(record: LabelRecord): void {
+    record.shiftEm = anchorShiftEm(
+      record.placeAnchor,
+      record.offsetEm[0],
+      record.offsetEm[1],
+      record.widthEm,
+      record.topEm,
+      record.bottomEm,
+    );
+    this._labelData.setComponent(
+      record.slot,
+      LabelRow.POSITION_HIGH,
+      3,
+      record.shiftEm[0],
+    );
+    this._labelData.setComponent(
+      record.slot,
+      LabelRow.POSITION_LOW,
+      3,
+      record.shiftEm[1],
+    );
+  }
+
+  /** The label's resolved justification factor (see `resolveTextAlign`). */
+  private _alignOf(record: LabelRecord): number {
+    return resolveTextAlign(record.textAlign, record.placeAnchor);
+  }
+
+  /**
+   * Re-place a label whose anchor, offset or `textAlign` changed: a new
+   * justification is baked into the glyph quads and needs a re-layout,
+   * anything else only moves the block.
+   */
+  private _replace(record: LabelRecord, prevAlign: number): void {
+    if (record.text && this._alignOf(record) !== prevAlign) {
+      this._applyText(record, record.text);
+    } else {
+      this._writeShift(record);
+    }
   }
 
   private _writeState(record: LabelRecord): void {
@@ -1115,7 +1187,7 @@ export class BatchedSdfTextMesh
     return {
       maxWidth: this._maxWidth,
       lineHeight: this._lineHeight,
-      textAlign: this._textAlign,
+      textAlign: this._alignOf(record),
       spreadGlyphs: this._resolveOrientation(record.batchIndex).spreadGlyphs,
       letterSpacing: record.letterSpacing,
     };
@@ -1135,7 +1207,6 @@ export class BatchedSdfTextMesh
     if (!text) {
       this._releaseRun(record);
       record.widthEm = 0;
-      record.heightEm = 0;
       this._writeBox(record);
       this._setGlyphKeys(record, []);
       this._recomputeShow(record);
@@ -1159,7 +1230,8 @@ export class BatchedSdfTextMesh
     const layout = buildLabelLayout(shapeResult, this._layoutOptions(record));
 
     record.widthEm = layout.widthEm;
-    record.heightEm = layout.heightEm;
+    record.topEm = layout.topEm;
+    record.bottomEm = layout.bottomEm;
     record.minYEm = layout.minYEm;
     record.maxYEm = layout.maxYEm;
     record.minXEm = layout.minXEm;
@@ -1167,6 +1239,7 @@ export class BatchedSdfTextMesh
     record.maxWordHalfEm = layout.maxWordHalfEm;
     record.maxGlyphHalfEm = layout.maxGlyphHalfEm;
     this._writeBox(record);
+    this._writeShift(record);
 
     if (layout.quads.length === 0) {
       this._releaseRun(record);
@@ -1353,13 +1426,11 @@ export class BatchedSdfTextMesh
   /**
    * Build each shown label's collision box. The local box mirrors the vertex
    * shader's layout: glyphs span [0, textWidth] x [bgMinY, bgMaxY] in em
-   * units, shifted by the `center` anchor and scaled by the font size.
+   * units, moved by the label's `shiftEm` and scaled by the font size.
    */
   collectDeclutterCandidates(out: DeclutterCandidate[]): void {
     if (!this.visible || !this._declutter) return;
     const state = this._enhancer.states();
-    const cx = Math.min(Math.max(state.center[0], -0.5), 0.5);
-    const cy = Math.min(Math.max(state.center[1], -0.5), 0.5);
 
     const boxes = this._lineBoxes;
     const defaults = this._orientationDefaults();
@@ -1372,7 +1443,7 @@ export class BatchedSdfTextMesh
       if (this._lineRejected?.[record.slot]) continue;
 
       const w = record.widthEm;
-      const h = record.heightEm;
+      const [shiftX, shiftY] = record.shiftEm;
       // Line labels are turned to follow their road, so the placement pass
       // hands back the box they actually cover; everything else is its block
       // around the anchor, which the kernel turns as the shader does.
@@ -1393,10 +1464,10 @@ export class BatchedSdfTextMesh
         anchorY: record.anchor[1],
         anchorZ: record.anchor[2],
         addHeight: record.addHeight,
-        minX: hasBox ? boxes[b] : (0 - cx * w) * size,
-        maxX: hasBox ? boxes[b + 1] : (w - cx * w) * size,
-        minY: hasBox ? boxes[b + 2] : (record.minYEm - cy * h) * size,
-        maxY: hasBox ? boxes[b + 3] : (record.maxYEm - cy * h) * size,
+        minX: hasBox ? boxes[b] : shiftX * size,
+        maxX: hasBox ? boxes[b + 1] : (w + shiftX) * size,
+        minY: hasBox ? boxes[b + 2] : (record.minYEm + shiftY) * size,
+        maxY: hasBox ? boxes[b + 3] : (record.maxYEm + shiftY) * size,
         sizeInMeters: state.sizeInMeters,
         rank: this._declutterRank,
         priority: record.priorityOverride ?? this._declutterPriority,
@@ -1714,16 +1785,13 @@ export class BatchedSdfTextMesh
     // a re-layout even when the text itself is unchanged.
     const nextMaxWidth = material.maxWidth ?? 0;
     const nextLineHeight = material.lineHeight ?? 1.0;
-    const nextTextAlign = ALIGN_FACTORS[material.textAlign ?? "center"] ?? 0.5;
     const nextSpreadGlyphs = material.spreadGlyphs ?? false;
     const layoutChanged =
       nextMaxWidth !== this._maxWidth ||
       nextLineHeight !== this._lineHeight ||
-      nextTextAlign !== this._textAlign ||
       nextSpreadGlyphs !== this._spreadGlyphs;
     this._maxWidth = nextMaxWidth;
     this._lineHeight = nextLineHeight;
-    this._textAlign = nextTextAlign;
     this._spreadGlyphs = nextSpreadGlyphs;
 
     // Read before applying visibility: the declutter pass consults these even
@@ -1755,9 +1823,6 @@ export class BatchedSdfTextMesh
         // `props.x ?? currentState.x`.
         lineOffset: material.lineOffset ?? 0,
         spreadGlyphs: this._spreadGlyphs,
-        center: material.center
-          ? [material.center.x, material.center.y]
-          : [0.5, 0.0],
         ...textOrientation(material),
         rotation: material.rotation ?? 0,
         sizeInMeters: material.sizeInMeters ?? true,
@@ -1801,6 +1866,15 @@ export class BatchedSdfTextMesh
     const letterSpacingChanged =
       letterSpacing !== (prevMaterial.letterSpacing ?? 0);
     const addHeightChanged = addHeight !== (prevMaterial.height ?? 0);
+    const anchor = materialAnchor(material);
+    const anchorChanged = anchor !== materialAnchor(prevMaterial);
+    const prevOffset = this._materialOffset;
+    const offset = vec2Tuple(material.offset);
+    this._materialOffset = offset;
+    const offsetChanged =
+      offset[0] !== prevOffset[0] || offset[1] !== prevOffset[1];
+    const textAlignChanged =
+      (material.textAlign ?? "center") !== (prevMaterial.textAlign ?? "center");
     const mat = this.material as ShaderMaterial;
     const rotationDeg = material.rotation ?? 0;
     const orientation = textOrientation(material);
@@ -1874,6 +1948,10 @@ export class BatchedSdfTextMesh
         this._writeAddHeight(record);
       }
       if (showChanged) record.requestedShow = materialShow;
+      const prevAlign = this._alignOf(record);
+      if (anchorChanged) record.placeAnchor = anchor;
+      if (offsetChanged) record.offsetEm = [...offset];
+      if (textAlignChanged) record.textAlign = material.textAlign;
       if (materialText !== undefined && materialText !== "") {
         // The material text overrides whatever the evaluator asked for —
         // including a prepare that is in flight or parked on visibility.
@@ -1883,6 +1961,8 @@ export class BatchedSdfTextMesh
       } else if (forceUpdate || layoutChanged || letterSpacingChanged) {
         // Font or layout changed — re-lay-out existing text.
         this._applyText(record, record.text);
+      } else if (anchorChanged || offsetChanged || textAlignChanged) {
+        this._replace(record, prevAlign);
       }
       this._recomputeShow(record);
     }
@@ -2156,6 +2236,64 @@ export class BatchedSdfTextMesh
     }
   }
 
+  /**
+   * Part of the block placed at the anchor point for one feature, overriding
+   * the material's. Only moves the label, unless `textAlign: "auto"` makes
+   * its justification follow and the lines need laying out again.
+   */
+  setFeatureAnchorByBatchIndex(batchIndex: number, anchor: Anchor) {
+    let changed = false;
+    for (const instanceIndex of this._instancesOfBatchIndex(batchIndex)) {
+      const record = this._ensureLabel(instanceIndex);
+      if (!record || record.placeAnchor === anchor) continue;
+      const prevAlign = this._alignOf(record);
+      record.placeAnchor = anchor;
+      this._replace(record, prevAlign);
+      changed = true;
+    }
+    if (changed) {
+      this._markDeclutterDirty();
+      this._needRender?.();
+    }
+  }
+
+  /** Shift from the anchor point for one feature, in ems, x right and y
+   *  down, overriding the material's. */
+  setFeatureOffsetByBatchIndex(batchIndex: number, x: number, y: number) {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    let changed = false;
+    for (const instanceIndex of this._instancesOfBatchIndex(batchIndex)) {
+      const record = this._ensureLabel(instanceIndex);
+      if (!record) continue;
+      if (record.offsetEm[0] === x && record.offsetEm[1] === y) continue;
+      record.offsetEm = [x, y];
+      this._writeShift(record);
+      changed = true;
+    }
+    if (changed) {
+      this._markDeclutterDirty();
+      this._needRender?.();
+    }
+  }
+
+  /** Line justification for one feature, overriding the material's
+   *  `textAlign`. */
+  setFeatureTextAlignByBatchIndex(batchIndex: number, textAlign: TextAlign) {
+    let changed = false;
+    for (const instanceIndex of this._instancesOfBatchIndex(batchIndex)) {
+      const record = this._ensureLabel(instanceIndex);
+      if (!record || record.textAlign === textAlign) continue;
+      const prevAlign = this._alignOf(record);
+      record.textAlign = textAlign;
+      this._replace(record, prevAlign);
+      changed = true;
+    }
+    if (changed) {
+      this._markDeclutterDirty();
+      this._needRender?.();
+    }
+  }
+
   setFeatureOpacityByBatchIndex(batchIndex: number, opacity: number) {
     for (const instanceIndex of this._instancesOfBatchIndex(batchIndex)) {
       const record = this._ensureLabel(instanceIndex);
@@ -2254,6 +2392,16 @@ function textOrientation(material: NavaraTextMaterial): ResolvedOrientation {
     material.rotateWithCamera,
     material.placement,
   );
+}
+
+/** The material's anchor. The engine sends a name it parsed, so it is always
+ *  one of the {@link Anchor} values. */
+function materialAnchor(material: NavaraTextMaterial): Anchor {
+  return (material.anchor ?? "center") as Anchor;
+}
+
+function vec2Tuple(v: { x: number; y: number } | undefined): [number, number] {
+  return [v?.x ?? 0, v?.y ?? 0];
 }
 
 function clamp01(value: number): number {

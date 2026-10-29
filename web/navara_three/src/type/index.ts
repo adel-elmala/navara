@@ -110,6 +110,29 @@ export type TextFacing = Facing;
 export type Overlap = "never" | "always" | "cooperative";
 
 /**
+ * Part of a label or sprite placed at its anchor point — MapLibre's
+ * `text-anchor` / `icon-anchor`. The value of `anchor` on text, billboard and
+ * point materials.
+ */
+export type Anchor =
+  | "center"
+  | "left"
+  | "right"
+  | "top"
+  | "bottom"
+  | "top-left"
+  | "top-right"
+  | "bottom-left"
+  | "bottom-right";
+
+/**
+ * Horizontal alignment of the lines of a multi-line label — MapLibre's
+ * `text-justify`. `"auto"` aligns towards the horizontal side of the text's
+ * `anchor`.
+ */
+export type TextAlign = "left" | "center" | "right" | "auto";
+
+/**
  * Helper type to narrow the material fields that wasm-bindgen generates as
  * bare `string`s to their literal unions, and its typed arrays to the plain
  * arrays the layer description accepts. One recursive pass covers them all.
@@ -123,11 +146,15 @@ type ConvertStringUnionFields<T> = {
         ? LineCap | Extract<T[K], undefined>
         : K extends "overlap"
           ? Overlap | Extract<T[K], undefined>
-          : K extends "dashArray" | "declutterPadding"
-            ? number[] | Extract<T[K], undefined>
-            : T[K] extends object | undefined
-              ? ConvertStringUnionFields<T[K]> | Extract<T[K], undefined>
-              : T[K];
+          : K extends "anchor"
+            ? Anchor | Extract<T[K], undefined>
+            : K extends "textAlign"
+              ? TextAlign | Extract<T[K], undefined>
+              : K extends "dashArray" | "declutterPadding"
+                ? number[] | Extract<T[K], undefined>
+                : T[K] extends object | undefined
+                  ? ConvertStringUnionFields<T[K]> | Extract<T[K], undefined>
+                  : T[K];
 };
 
 /**

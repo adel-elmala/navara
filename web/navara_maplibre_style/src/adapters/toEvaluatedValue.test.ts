@@ -787,3 +787,72 @@ describe("text-rotate and icon-rotate", () => {
     );
   });
 });
+
+describe("anchor, offset and justify", () => {
+  const engine = new JsStyleEngine();
+  const symbol = (layout: StyleLayer["layout"]): StyleLayer =>
+    ({ id: "test", type: "symbol", source: "test", layout }) as StyleLayer;
+
+  it("evaluates spec defaults when omitted", () => {
+    const evaluators = createLayoutEvaluators(symbol({}), engine, "Point");
+    const ctx = { properties: {}, zoom: 10 };
+    expect(evaluators["text-anchor"](ctx)).toBe("center");
+    expect(evaluators["icon-anchor"](ctx)).toBe("center");
+    expect(evaluators["text-justify"](ctx)).toBe("center");
+    expect(evaluators["text-offset"](ctx)).toEqual([0, 0]);
+    expect(evaluators["icon-offset"](ctx)).toEqual([0, 0]);
+  });
+
+  it("evaluates a data-driven anchor per feature", () => {
+    const anchor = createLayoutEvaluators(
+      symbol({ "text-anchor": ["get", "side"] }),
+      engine,
+      "Point",
+    )["text-anchor"];
+    expect(anchor({ properties: { side: "left" }, zoom: 10 })).toBe("left");
+  });
+
+  it("maps text placement in ems", () => {
+    const result = toEvaluatedValue(
+      symbol({}),
+      {},
+      {
+        "text-field": "Label",
+        "text-anchor": "top",
+        "text-offset": [0, 1.5],
+        "text-justify": "auto",
+      },
+      "text",
+    );
+    expect(result.anchor).toBe("top");
+    expect(result.offset).toEqual({ x: 0, y: 1.5 });
+    expect(result.textAlign).toBe("auto");
+  });
+
+  it("scales the icon offset by icon-size into pixels", () => {
+    const result = toEvaluatedValue(
+      symbol({}),
+      {},
+      {
+        "icon-image": "/icons/marker.svg",
+        "icon-anchor": "bottom",
+        "icon-offset": [2, -3],
+        "icon-size": 2,
+      },
+      "billboard",
+    );
+    expect(result.anchor).toBe("bottom");
+    expect(result.offset).toEqual({ x: 4, y: -6 });
+  });
+
+  it("drops values outside the spec's enums", () => {
+    const result = toEvaluatedValue(
+      symbol({}),
+      {},
+      { "text-field": "Label", "text-anchor": "middle", "text-justify": "x" },
+      "text",
+    );
+    expect(result).not.toHaveProperty("anchor");
+    expect(result).not.toHaveProperty("textAlign");
+  });
+});

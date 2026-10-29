@@ -966,6 +966,8 @@ export class MapLibreStylePlugin extends Plugin<ThreeView, ViewContext> {
           "icon-image",
           "icon-size",
           "icon-rotate",
+          "icon-anchor",
+          "icon-offset",
           "symbol-sort-key",
         ];
         for (const key of iconProps) {
@@ -984,6 +986,9 @@ export class MapLibreStylePlugin extends Plugin<ThreeView, ViewContext> {
           "text-letter-spacing",
           "text-rotate",
           "text-transform",
+          "text-anchor",
+          "text-offset",
+          "text-justify",
           "symbol-sort-key",
         ];
         for (const key of textProps) {
