@@ -56,6 +56,8 @@ uniform float uScale;
 uniform vec3 uColor;
 uniform float uOpacity;
 uniform bool uSizeInMeters;
+// `uScale` multiplies the image's pixel height instead of being the quad's.
+uniform bool uSizeRelativeToImage;
 // Material-level orientation defaults. Per-feature overrides arrive through
 // the batch data texture (USE_BATCH_ORIENTATION / USE_BATCH_ROTATION), so
 // these are what a sprite uses until something writes its own value.
@@ -150,11 +152,16 @@ void main() {
     // Use per-feature size when set (>= 0.0). A negative value means "use uScale".
     float scale = batchSize >= 0.0 ? batchSize : uScale;
     float clampedScale = max(0.0, scale); // Prevent negative scaling
+    // Height of the quad in the unit of the size.
+    float quadHeight = clampedScale;
     // World units per unit of size: the offset shares the size's unit.
     float sizeUnit = 1.0;
 #ifdef BILLBOARD
     // Per-instance image aspect from the atlas rect (guard empty rects).
     float aspect = instanceUvRect.w > 0.0 ? instanceUvRect.z / instanceUvRect.w : 1.0;
+    if (uSizeRelativeToImage) {
+        quadHeight *= instanceUvRect.w;
+    }
 #else
     float aspect = 1.0;
 #endif
@@ -181,7 +188,7 @@ void main() {
         axisUp
     );
 
-    vec2 localPos = ((position.xy - nvr_batchAnchor) * vec2(aspect, 1.0) * clampedScale
+    vec2 localPos = ((position.xy - nvr_batchAnchor) * vec2(aspect, 1.0) * quadHeight
         + vec2(nvr_batchOffset.x, -nvr_batchOffset.y)) * sizeUnit;
     mvPosition.xyz += nvr_quadOffset(
         localPos,

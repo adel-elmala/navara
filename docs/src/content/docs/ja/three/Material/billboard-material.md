@@ -432,6 +432,27 @@ import { Color } from "@navaramap/three";
 }
 ```
 
+### sizeRelativeToImage
+
+**Type:** `boolean | undefined`
+
+**Description:** [`size`](#size) をビルボードの高さではなく、画像そのもののピクセル高さに対する倍率として扱うかどうか。MapLibre の `icon-size` と同じ扱いです。`true` の場合、`size` が `1` のとき画像は本来の大きさで描画されます。[`sizeInMeters`](#sizeinmeters) が `false` ならピクセル単位、`true` なら画像の 1 ピクセルを 1 メートルとして描画します。幅はどちらの場合も画像の縦横比に従います。[`offset`](#offset) は画像の大きさでは拡大されず、ピクセルまたはメートル単位のままです。
+
+**Default:** `false`
+
+**Example:**
+
+```typescript
+{
+  billboard: {
+    url: "https://example.com/pin.png", // 32 x 40 px の画像
+    sizeInMeters: false,
+    sizeRelativeToImage: true,
+    size: 1.5 // 48 x 60 px で描画
+  }
+}
+```
+
 ### billboardFacing
 
 **Type:** `"upright" | "flat" | undefined`

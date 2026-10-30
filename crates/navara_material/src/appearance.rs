@@ -546,6 +546,11 @@ pub struct BillboardMaterial {
     pub height: f32,
     pub url: String,
     pub size_in_meters: bool,
+    /// `size` scales the image's own pixel height instead of being the quad's
+    /// height (MapLibre's `icon-size`): `1.0` draws the image at its natural
+    /// size, in pixels, or a meter per image pixel with `size_in_meters`.
+    /// `offset` stays in the unit of `size_in_meters`. Default `false`.
+    pub size_relative_to_image: bool,
     pub clamp_to_ground: bool,
     pub depth_test: bool,
     /// Cull faces seen from behind. Off by default. Only a flat quad has a
@@ -615,6 +620,7 @@ impl Default for BillboardMaterial {
             height: 1.,
             url: "".to_string(),
             size_in_meters: true,
+            size_relative_to_image: false,
             depth_test: true,
             backface_culling: false,
             offset_depth: true,

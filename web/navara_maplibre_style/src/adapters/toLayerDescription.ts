@@ -603,7 +603,9 @@ function createSymbolLayer(
 
   if (hasIconImage) {
     layerDesc.billboard = {
+      // `icon-size`, evaluated per feature, scales the image's own size.
       size: 1.0,
+      sizeRelativeToImage: true,
       height: 1,
       sizeInMeters: false,
       clampToGround: true,

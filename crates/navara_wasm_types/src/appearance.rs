@@ -516,6 +516,13 @@ pub struct BillboardMaterial {
     #[serde(rename = "sizeInMeters")]
     /// Whether the size is specified in meters. If false, the size is in pixels. Default is true.
     pub size_in_meters: Option<bool>,
+    /// Whether `size` scales the image's own pixel height instead of being the
+    /// quad's height, like MapLibre's `icon-size`: `1` draws the image at its
+    /// natural size. `offset` keeps the unit `sizeInMeters` gives it. Default
+    /// is false.
+    #[wasm_bindgen(js_name = sizeRelativeToImage)]
+    #[serde(rename = "sizeRelativeToImage")]
+    pub size_relative_to_image: Option<bool>,
     #[wasm_bindgen(js_name = clampToGround)]
     #[serde(rename = "clampToGround")]
     pub clamp_to_ground: Option<bool>,
@@ -621,6 +628,9 @@ impl From<BillboardMaterial> for navara_material::BillboardMaterial {
             height: val.height.unwrap_or(default.height),
             url: val.url.unwrap_or(default.url),
             size_in_meters: val.size_in_meters.unwrap_or(default.size_in_meters),
+            size_relative_to_image: val
+                .size_relative_to_image
+                .unwrap_or(default.size_relative_to_image),
             clamp_to_ground: val.clamp_to_ground.unwrap_or(default.clamp_to_ground),
             depth_test: val.depth_test.unwrap_or(default.depth_test),
             backface_culling: val.backface_culling.unwrap_or(default.backface_culling),
@@ -663,6 +673,7 @@ impl<'a> From<&'a navara_material::BillboardMaterial> for BillboardMaterial {
             height: Some(value.height),
             url: Some(value.url.clone()),
             size_in_meters: Some(value.size_in_meters),
+            size_relative_to_image: Some(value.size_relative_to_image),
             clamp_to_ground: Some(value.clamp_to_ground),
             depth_test: Some(value.depth_test),
             backface_culling: Some(value.backface_culling),
@@ -709,6 +720,9 @@ impl BillboardMaterial {
             height: self.height.unwrap_or(other.height),
             url: self.url.clone().unwrap_or(other.url.clone()),
             size_in_meters: self.size_in_meters.unwrap_or(other.size_in_meters),
+            size_relative_to_image: self
+                .size_relative_to_image
+                .unwrap_or(other.size_relative_to_image),
             clamp_to_ground: self.clamp_to_ground.unwrap_or(other.clamp_to_ground),
             depth_test: self.depth_test.unwrap_or(other.depth_test),
             backface_culling: self.backface_culling.unwrap_or(other.backface_culling),

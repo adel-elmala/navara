@@ -677,6 +677,10 @@ describe("toLayerDescription", () => {
       expect(layerWithBillboard.billboard).toMatchObject({
         url: "marker-icon",
         clampToGround: true,
+        // `icon-size` scales the image, so 1 is its natural size.
+        size: 1,
+        sizeRelativeToImage: true,
+        sizeInMeters: false,
       });
 
       expect(result).not.toHaveProperty("text");

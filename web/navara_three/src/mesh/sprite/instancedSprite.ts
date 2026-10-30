@@ -414,6 +414,7 @@ export class InstancedSpriteMesh
         batchIndex,
         aspect,
         size,
+        rectH,
       );
       input[o + 7] = box[0];
       input[o + 8] = box[1];
@@ -517,7 +518,15 @@ export class InstancedSpriteMesh
             state.rotation) + (bearings ? bearings[i] : 0);
       const box = placed
         ? placedQuadBox(placed, p)
-        : this._quadBox(material, state, slots, batchIndex, aspect, size);
+        : this._quadBox(
+            material,
+            state,
+            slots,
+            batchIndex,
+            aspect,
+            size,
+            rectH,
+          );
       out.push({
         anchorX: anchors[i * 3],
         anchorY: anchors[i * 3 + 1],
@@ -565,7 +574,8 @@ export class InstancedSpriteMesh
   /**
    * The unrotated quad around its anchor, `[minX, maxX, minY, maxY]` in the
    * unit of `size`, y up — mirror of instancedSprite.vert.glsl: the batch
-   * texture's anchor and offset, falling back to the material's.
+   * texture's anchor and offset, falling back to the material's. `rectH` is
+   * the image's pixel height, which `sizeRelativeToImage` scales by `size`.
    */
   private _quadBox(
     material: ShaderMaterial,
@@ -574,6 +584,7 @@ export class InstancedSpriteMesh
     batchIndex: number,
     aspect: number,
     size: number,
+    rectH: number,
   ): Float64Array {
     const code = slots.anchor
       ? readBatchScalar(material, batchIndex, "anchor")
@@ -585,11 +596,12 @@ export class InstancedSpriteMesh
       ox = readBatchScalar(material, batchIndex, "offsetX") ?? ox;
       oy = readBatchScalar(material, batchIndex, "offsetY") ?? oy;
     }
+    const height = state.sizeRelativeToImage ? size * rectH : size;
     const box = _tmpQuadBox;
-    box[0] = (-0.5 - cx) * aspect * size + ox;
-    box[1] = (0.5 - cx) * aspect * size + ox;
-    box[2] = (-0.5 - cy) * size - oy;
-    box[3] = (0.5 - cy) * size - oy;
+    box[0] = (-0.5 - cx) * aspect * height + ox;
+    box[1] = (0.5 - cx) * aspect * height + ox;
+    box[2] = (-0.5 - cy) * height - oy;
+    box[3] = (0.5 - cy) * height - oy;
     return box;
   }
 
@@ -738,6 +750,10 @@ export class InstancedSpriteMesh
         rotateWithCamera: orientation.follow,
         rotation: m.material.rotation ?? 0,
         sizeInMeters: m.material.sizeInMeters ?? true,
+        sizeRelativeToImage:
+          "sizeRelativeToImage" in m.material
+            ? (m.material.sizeRelativeToImage ?? false)
+            : false,
         offsetDepth: m.material.offsetDepth ?? true,
         transparent: m.material.transparent ?? true,
         depthTest: m.material.depthTest ?? true,
@@ -947,6 +963,10 @@ export class InstancedSpriteMesh
         rotateWithCamera: orientation.follow,
         rotation: m.material.rotation ?? 0,
         sizeInMeters: m.material.sizeInMeters ?? true,
+        sizeRelativeToImage:
+          "sizeRelativeToImage" in m.material
+            ? (m.material.sizeRelativeToImage ?? false)
+            : false,
         offsetDepth: m.material.offsetDepth ?? true,
         alphaTest: isBillboard ? (m.material.alphaTest ?? 0.0) : 0.0,
         pickable: false,

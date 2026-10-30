@@ -43,6 +43,15 @@ describe("instancedSpriteBaseEnhancer / state", () => {
       expect(state.sizeInMeters).toBe(false);
     });
 
+    it("updates sizeRelativeToImage", () => {
+      expect(DEFAULT_BASE_STATE.sizeRelativeToImage).toBe(false);
+      const state = updateState(
+        { sizeRelativeToImage: true },
+        DEFAULT_BASE_STATE,
+      );
+      expect(state.sizeRelativeToImage).toBe(true);
+    });
+
     it("updates offsetDepth", () => {
       const state = updateState({ offsetDepth: false }, DEFAULT_BASE_STATE);
       expect(state.offsetDepth).toBe(false);

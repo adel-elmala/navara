@@ -432,6 +432,27 @@ This option applies when the layer's geometry is built: set it at layer creation
 }
 ```
 
+### sizeRelativeToImage
+
+**Type:** `boolean | undefined`
+
+**Description:** Whether [`size`](#size) scales the image's own pixel height instead of setting the billboard's height, as MapLibre's `icon-size` does. With `true`, a `size` of `1` draws the image at its natural size: in pixels when [`sizeInMeters`](#sizeinmeters) is `false`, or one meter per image pixel otherwise. The width follows the image's aspect ratio either way. [`offset`](#offset) is not scaled by the image and stays in pixels or meters.
+
+**Default:** `false`
+
+**Example:**
+
+```typescript
+{
+  billboard: {
+    url: "https://example.com/pin.png", // a 32 x 40 px image
+    sizeInMeters: false,
+    sizeRelativeToImage: true,
+    size: 1.5 // drawn 48 x 60 px
+  }
+}
+```
+
 ### billboardFacing
 
 **Type:** `"upright" | "flat" | undefined`

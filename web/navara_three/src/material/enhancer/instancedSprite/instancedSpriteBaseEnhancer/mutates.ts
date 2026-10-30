@@ -52,6 +52,7 @@ export const createBaseMutates = (
     uRotateWithCamera: { value: true },
     uRotation: { value: 0 },
     uSizeInMeters: { value: true },
+    uSizeRelativeToImage: { value: false },
     uOffsetDepth: { value: true },
     uAlphaTest: { value: 0.0 },
     uFarPlane: { value: 0.0 },
@@ -88,6 +89,7 @@ export const createBaseMutates = (
       refs.uRotateWithCamera.value = state.rotateWithCamera;
       refs.uRotation.value = state.rotation;
       refs.uSizeInMeters.value = state.sizeInMeters;
+      refs.uSizeRelativeToImage.value = state.sizeRelativeToImage;
       refs.uOffsetDepth.value = state.offsetDepth;
       refs.uAlphaTest.value = state.alphaTest;
       refs.uAtlasSize.value.set(state.atlasSize[0], state.atlasSize[1]);
@@ -115,6 +117,7 @@ export const createBaseMutates = (
       uniforms.uRotateWithCamera = refs.uRotateWithCamera;
       uniforms.uRotation = refs.uRotation;
       uniforms.uSizeInMeters = refs.uSizeInMeters;
+      uniforms.uSizeRelativeToImage = refs.uSizeRelativeToImage;
       uniforms.uOffsetDepth = refs.uOffsetDepth;
       uniforms.uAlphaTest = refs.uAlphaTest;
       uniforms.uFarPlane = refs.uFarPlane;

@@ -20,6 +20,7 @@ export const DEFAULT_BASE_PROPS: Required<
   rotateWithCamera: true,
   rotation: 0,
   sizeInMeters: true,
+  sizeRelativeToImage: false,
   offsetDepth: true,
   alphaTest: 0.0,
   pickable: false,
@@ -51,6 +52,7 @@ export const DEFAULT_BASE_STATE: InstancedSpriteBaseState = {
   rotateWithCamera: DEFAULT_BASE_PROPS.rotateWithCamera,
   rotation: DEFAULT_BASE_PROPS.rotation * MathUtils.DEG2RAD,
   sizeInMeters: DEFAULT_BASE_PROPS.sizeInMeters,
+  sizeRelativeToImage: DEFAULT_BASE_PROPS.sizeRelativeToImage,
   offsetDepth: DEFAULT_BASE_PROPS.offsetDepth,
   alphaTest: DEFAULT_BASE_PROPS.alphaTest,
   pickable: DEFAULT_BASE_PROPS.pickable,
@@ -99,6 +101,8 @@ export const updateState = (
         ? props.rotation * MathUtils.DEG2RAD
         : currentState.rotation,
     sizeInMeters: props.sizeInMeters ?? currentState.sizeInMeters,
+    sizeRelativeToImage:
+      props.sizeRelativeToImage ?? currentState.sizeRelativeToImage,
     offsetDepth: props.offsetDepth ?? currentState.offsetDepth,
     alphaTest: props.alphaTest ?? currentState.alphaTest,
     pickable: props.pickable ?? currentState.pickable,

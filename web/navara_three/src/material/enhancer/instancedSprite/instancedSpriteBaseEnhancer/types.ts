@@ -40,6 +40,8 @@ export type InstancedSpriteBaseProps = {
    *  clockwise seen from the front. Converted to radians in state. */
   rotation?: number;
   sizeInMeters?: boolean;
+  /** `scale` multiplies the image's pixel height (billboards only). */
+  sizeRelativeToImage?: boolean;
   offsetDepth?: boolean;
   alphaTest?: number;
   pickable?: boolean;
@@ -93,6 +95,7 @@ export type InstancedSpriteBaseState = Readonly<{
   rotateWithCamera: boolean;
   rotation: number; // pre-converted: degrees -> radians
   sizeInMeters: boolean;
+  sizeRelativeToImage: boolean;
   offsetDepth: boolean;
   alphaTest: number;
   pickable: boolean;
@@ -138,6 +141,7 @@ export type InstancedSpriteBaseRefs = {
   uRotateWithCamera: UniformValue<boolean>;
   uRotation: UniformValue<number>;
   uSizeInMeters: UniformValue<boolean>;
+  uSizeRelativeToImage: UniformValue<boolean>;
   uOffsetDepth: UniformValue<boolean>;
   uAlphaTest: UniformValue<number>;
   uFarPlane: UniformValue<number>;

@@ -31,6 +31,7 @@ describe("instancedSpriteBaseEnhancer/mutates", () => {
         translate: [5, 6],
         translateViewport: true,
         sizeInMeters: false,
+        sizeRelativeToImage: true,
         offsetDepth: false,
         alphaTest: 0.3,
         pickable: true,
@@ -51,6 +52,7 @@ describe("instancedSpriteBaseEnhancer/mutates", () => {
       expect(uniforms.uTranslate?.value.y).toBe(6);
       expect(uniforms.uTranslateViewport?.value).toBe(true);
       expect(uniforms.uSizeInMeters?.value).toBe(false);
+      expect(uniforms.uSizeRelativeToImage?.value).toBe(true);
       expect(uniforms.uOffsetDepth?.value).toBe(false);
       expect(uniforms.uAlphaTest?.value).toBe(0.3);
       expect(uniforms.nvr_uPickable?.value).toBe(1.0);
